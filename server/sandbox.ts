@@ -1,17 +1,32 @@
 import {
+  NetworkPolicy,
   Sandbox,
   SandboxNotFoundError,
+  resolveRuntime,
   type JobLogEntry,
+  type JobState,
   type SandboxHandle,
   type SandboxStatus,
 } from "microsandbox";
+import { execFileSync } from "node:child_process";
+import net from "node:net";
 import { z } from "zod";
 import {
+  CHILD,
+  FIXED_RESOURCES,
+  GUEST_PATH,
+  IMAGE,
+  INIT,
   LABELS,
   LOG_SOURCE_LIMIT,
   MANAGED_LABEL_KEYS,
 } from "../shared/constants";
-import { ManagedLabelsSchema, type ManagedLabels } from "../shared/contracts";
+import {
+  ManagedLabelsSchema,
+  type ManagedLabels,
+  type ManagedPhase,
+} from "../shared/contracts";
+import type { HeaderSecretBinding } from "./secrets";
 
 const sandboxConfigSchema = z
   .object({
@@ -47,6 +62,247 @@ export interface RawLogs {
 export type ManagedSandboxLookup =
   | { readonly status: "found"; readonly sandbox: ManagedSandbox }
   | { readonly status: "not_found" };
+
+export interface CreateSandboxOptions {
+  readonly name: string;
+  readonly parentServerId: string;
+  readonly hostPort: number;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly secrets: readonly HeaderSecretBinding[];
+}
+
+export interface ExecOptions {
+  readonly args?: readonly string[];
+  readonly user?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly cwd?: string;
+  readonly timeoutMs?: number;
+}
+
+export interface ExecResult {
+  readonly success: boolean;
+  readonly code: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+export interface DetachedJobInfo {
+  readonly state: JobState;
+  readonly exitCode: number | null;
+}
+
+export interface DetachedJob {
+  readonly id: string;
+  inspect(): Promise<DetachedJobInfo>;
+}
+
+export interface CreatedSandbox {
+  readonly id: string;
+  readonly name: string;
+  config(): Promise<unknown>;
+  discoverPort(guestPort: number): Promise<PublishedPort | null>;
+  modify(options: { readonly labels?: Readonly<Record<string, string>> }): Promise<void>;
+  exec(command: string, options?: ExecOptions): Promise<ExecResult>;
+  execDetached(command: string, options?: ExecOptions): Promise<DetachedJob>;
+  destroy(): Promise<void>;
+}
+
+export interface SandboxRuntime {
+  create(options: CreateSandboxOptions): Promise<CreatedSandbox>;
+  probeLoopbackPort(): Promise<number>;
+}
+
+export interface PublishedPort {
+  readonly hostPort: number;
+  readonly guestPort: number;
+  readonly hostBind: string | null;
+}
+
+export function managedCreateLabels(
+  parentServerId: string,
+  phase: ManagedPhase,
+  extra: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  return {
+    [LABELS.managed]: LABELS.version,
+    [LABELS.parent]: parentServerId,
+    [LABELS.phase]: phase,
+    ...extra,
+  };
+}
+
+export function buildSandboxBuilder(options: CreateSandboxOptions) {
+  let builder = Sandbox.builder(options.name)
+    .image(IMAGE.ref)
+    .cpus(FIXED_RESOURCES.cpus)
+    .memory(FIXED_RESOURCES.memoryMiB)
+    .detached(true)
+    .workdir("/workspace")
+    .env("PATH", GUEST_PATH)
+    .env("PASEO_LISTEN", CHILD.listen)
+    .labels({ ...options.labels })
+    .init(INIT.fallback.cmd, [...INIT.fallback.args])
+    .portBind("127.0.0.1", options.hostPort, FIXED_RESOURCES.guestPort)
+    .network((network) =>
+      network.policy(NetworkPolicy.fromProfiles(["public"])),
+    );
+
+  for (const secret of options.secrets) {
+    builder = builder.secret((configure) => {
+      let next = configure
+        .env(secret.env)
+        .value(secret.value)
+        .requireTlsIdentity(true)
+        .substituteInHeaders(true)
+        .substituteInQuery(false)
+        .substituteInBody(false);
+      for (const host of secret.hosts) {
+        next = next.allow(host);
+      }
+      return next;
+    });
+  }
+
+  return builder;
+}
+
+interface ExecBuilder {
+  args(values: string[]): ExecBuilder;
+  user(value: string): ExecBuilder;
+  envs(values: Record<string, string>): ExecBuilder;
+  cwd(value: string): ExecBuilder;
+  timeout(ms: number): ExecBuilder;
+}
+
+function configureExec<T extends ExecBuilder>(
+  builder: T,
+  options: ExecOptions | undefined,
+): T {
+  let next: T = builder;
+  if (options?.args) next = next.args([...options.args]) as T;
+  if (options?.user) next = next.user(options.user) as T;
+  if (options?.env) next = next.envs({ ...options.env }) as T;
+  if (options?.cwd) next = next.cwd(options.cwd) as T;
+  if (options?.timeoutMs) next = next.timeout(options.timeoutMs) as T;
+  return next;
+}
+
+function discoverPortFromRuntime(name: string, guestPort: number): PublishedPort | null {
+  try {
+    const runtime = resolveRuntime();
+    const raw = execFileSync(
+      runtime.msbPath,
+      ["sandbox", "inspect", name, "--format", "json"],
+      { encoding: "utf8", timeout: 30_000, maxBuffer: 32 * 1024 * 1024 },
+    );
+    return findPublishedPort(JSON.parse(raw), guestPort);
+  } catch {
+    return null;
+  }
+}
+
+function wrapSandbox(sandbox: Sandbox): CreatedSandbox {
+  return {
+    id: sandbox.id,
+    name: sandbox.name,
+    config: () => sandbox.config(),
+    async discoverPort(guestPort) {
+      const fromConfig = findPublishedPort(await sandbox.config(), guestPort);
+      return fromConfig ?? discoverPortFromRuntime(sandbox.name, guestPort);
+    },
+    async modify(options) {
+      if (!options.labels) return;
+      await sandbox.modify({
+        labels: { ...options.labels },
+        policy: "no_restart",
+      });
+    },
+    async exec(command, options) {
+      const output = await sandbox.execWith(command, (builder) =>
+        configureExec(builder, options),
+      );
+      return {
+        success: output.success,
+        code: output.code,
+        stdout: output.stdout(),
+        stderr: output.stderr(),
+      };
+    },
+    async execDetached(command, options) {
+      const job = await sandbox.execDetachedWith(command, (builder) =>
+        configureExec(builder, options),
+      );
+      return {
+        id: job.id,
+        async inspect() {
+          const info = await job.inspect();
+          return { state: info.state, exitCode: info.exitCode };
+        },
+      };
+    },
+    destroy: () => sandbox.destroy(),
+  };
+}
+
+export function createMicrosandboxRuntime(): SandboxRuntime {
+  return {
+    async create(options) {
+      return wrapSandbox(await buildSandboxBuilder(options).create());
+    },
+    probeLoopbackPort,
+  };
+}
+
+export function findPublishedPort(
+  value: unknown,
+  guestPort: number,
+): PublishedPort | null {
+  if (!value || typeof value !== "object") return null;
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findPublishedPort(entry, guestPort);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    record.guestPort === guestPort &&
+    typeof record.hostPort === "number" &&
+    record.hostPort > 0
+  ) {
+    return {
+      hostPort: record.hostPort,
+      guestPort,
+      hostBind: typeof record.hostBind === "string" ? record.hostBind : null,
+    };
+  }
+
+  for (const entry of Object.values(record)) {
+    const found = findPublishedPort(entry, guestPort);
+    if (found) return found;
+  }
+  return null;
+}
+
+export function probeLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("loopback port probe failed")));
+        return;
+      }
+      const port = address.port;
+      server.close(() => resolve(port));
+    });
+  });
+}
 
 export interface SandboxInventory {
   listManaged(parentServerId: string): Promise<ManagedSandboxList>;

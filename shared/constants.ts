@@ -35,7 +35,32 @@ export const FIXED_RESOURCES = {
 export const CHILD = {
   listen: "0.0.0.0:6767",
   healthPath: "/api/health",
+  user: "paseo",
+  home: "/home/paseo",
 } as const;
+
+// The spike found no init candidates in the official image. This is the
+// recorded narrow fallback for the pinned image.
+export const INIT = {
+  fallback: {
+    cmd: "/usr/bin/tini",
+    args: ["--", "/usr/local/bin/paseo-docker-entrypoint"],
+  },
+} as const;
+
+export const GUEST_PATH = [
+  PI.pathEntry,
+  "/usr/local/sbin",
+  "/usr/local/bin",
+  "/usr/sbin",
+  "/usr/bin",
+  "/sbin",
+  "/bin",
+].join(":");
+
+export const PORT_RETRY_LIMIT = 3;
+export const JOB_POLL_MS = 500;
+export const PI_INSTALL_TIMEOUT_MS = 10 * 60_000;
 
 export const LABELS = {
   managed: "paseo-msb",
