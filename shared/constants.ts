@@ -1,4 +1,5 @@
-// Pins proven by the vertical slice spike. Change these only with a new spike run.
+// Pins statically verified by the vertical slice spike. Live runtime checks remain blocked.
+// Change these only with a new spike run.
 
 export const PARENT_DAEMON_VERSION = "0.15.0";
 

@@ -19,7 +19,8 @@ import {
   VM_RPCS,
   vmList,
 } from "../../shared/contracts";
-import { decodeManagedLabels } from "../../server/sandbox";
+import { decodeManagedLabels, decodeSandboxHandle } from "../../server/sandbox";
+import type { SandboxHandleView } from "../../server/sandbox";
 import { availableCredentialNames } from "../../server/status";
 
 const parentServerId = "srv_test_parent";
@@ -38,7 +39,7 @@ function managedConfig(overrides: Record<string, string> = {}) {
   };
 }
 
-test("pins match the verified vertical slice", () => {
+test("pins match the statically verified vertical slice", () => {
   assert.equal(PARENT_DAEMON_VERSION, "0.15.0");
   assert.equal(IMAGE.tag, PARENT_DAEMON_VERSION);
   assert.equal(IMAGE.ref, `${IMAGE.repository}@${IMAGE.indexDigest}`);
@@ -69,6 +70,68 @@ test("labels and fixed resources decode from persisted configuration only", () =
   );
   assert.equal(decodeManagedLabels(managedConfig(), sandboxId, "srv_other_parent"), null);
   assert.equal(decodeManagedLabels({ env: [] }, sandboxId, parentServerId), null);
+});
+
+test("label-matched handles with invalid config stay visible as degraded", () => {
+  const invalidIdLabels: SandboxHandleView = {
+    id: sandboxId,
+    name: "paseo-invalid-labels",
+    status: "running",
+    config: () => ({
+      labels: {
+        [LABELS.managed]: LABELS.version,
+        [LABELS.parent]: parentServerId,
+        [LABELS.id]: "sandbox_test_other",
+        [LABELS.phase]: "unknown-phase",
+      },
+    }),
+  };
+  const invalidId = decodeSandboxHandle(invalidIdLabels, parentServerId);
+  assert.equal(invalidId.status, "degraded");
+  if (invalidId.status === "degraded") {
+    assert.equal(invalidId.sandbox.id, sandboxId);
+    assert.equal(invalidId.sandbox.labels, null);
+  }
+
+  const unreadableConfig: SandboxHandleView = {
+    id: sandboxId,
+    name: "paseo-unreadable-config",
+    status: "crashed",
+    config: () => {
+      throw new Error("config unavailable");
+    },
+  };
+  const degraded = decodeSandboxHandle(unreadableConfig, parentServerId);
+  assert.equal(degraded.status, "degraded");
+  if (degraded.status === "degraded") {
+    assert.equal(degraded.sandbox.runtimeStatus, "crashed");
+    assert.equal(degraded.sandbox.labels, null);
+  }
+
+  const foreign: SandboxHandleView = {
+    id: sandboxId,
+    name: "paseo-foreign",
+    status: "running",
+    config: () => ({
+      labels: {
+        [LABELS.managed]: LABELS.version,
+        [LABELS.parent]: "srv_other_parent",
+      },
+    }),
+  };
+  assert.equal(decodeSandboxHandle(foreign, parentServerId).status, "foreign");
+
+  const emptyLabels: SandboxHandleView = {
+    id: sandboxId,
+    name: "paseo-empty-labels",
+    status: "running",
+    config: () => ({ labels: {} }),
+  };
+  assert.equal(decodeSandboxHandle(emptyLabels, parentServerId).status, "foreign");
+  assert.equal(
+    decodeSandboxHandle(emptyLabels, parentServerId, { assumeManaged: true }).status,
+    "degraded",
+  );
 });
 
 test("the five credential mappings stay fixed and header-host scoped", () => {

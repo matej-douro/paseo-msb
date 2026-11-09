@@ -5,6 +5,7 @@ import { CREDENTIALS, LOG_ENTRY_LIMIT } from "./constants";
 export const SAFE_ERROR_CODES = [
   "parent_unavailable",
   "inventory_unavailable",
+  "inventory_partial",
   "sandbox_not_found",
   "sandbox_replaced",
   "config_invalid",
@@ -19,6 +20,7 @@ export type SafeErrorCode = (typeof SAFE_ERROR_CODES)[number];
 const SAFE_ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   parent_unavailable: "Parent host registration is unavailable.",
   inventory_unavailable: "Sandbox inventory is unavailable.",
+  inventory_partial: "Some sandbox configurations are not readable.",
   sandbox_not_found: "Sandbox not found.",
   sandbox_replaced: "Sandbox identity changed.",
   config_invalid: "Sandbox configuration is not readable.",
@@ -125,7 +127,7 @@ export const ChildSchema = z
   .object({
     id: z.string().min(1).max(128),
     name: z.string().min(1).max(128),
-    labels: ManagedLabelsSchema,
+    labels: ManagedLabelsSchema.nullable(),
     runtimeStatus: RuntimeStatusSchema,
     registration: RegistrationSchema.nullable(),
     error: SafeErrorSchema.nullable(),
@@ -136,7 +138,7 @@ export type Child = z.infer<typeof ChildSchema>;
 
 export const InventoryStateSchema = z
   .object({
-    status: z.enum(["available", "unavailable"]),
+    status: z.enum(["available", "partial", "unavailable"]),
     error: SafeErrorSchema.nullable(),
   })
   .strict();

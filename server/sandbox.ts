@@ -23,7 +23,12 @@ export interface ManagedSandbox {
   readonly id: string;
   readonly name: string;
   readonly runtimeStatus: SandboxStatus;
-  readonly labels: ManagedLabels;
+  readonly labels: ManagedLabels | null;
+}
+
+export interface ManagedSandboxList {
+  readonly sandboxes: readonly ManagedSandbox[];
+  readonly degraded: number;
 }
 
 export interface RawLogEntry {
@@ -41,14 +46,25 @@ export interface RawLogs {
 
 export type ManagedSandboxLookup =
   | { readonly status: "found"; readonly sandbox: ManagedSandbox }
-  | { readonly status: "not_found" }
-  | { readonly status: "invalid" };
+  | { readonly status: "not_found" };
 
 export interface SandboxInventory {
-  listManaged(parentServerId: string): Promise<readonly ManagedSandbox[]>;
+  listManaged(parentServerId: string): Promise<ManagedSandboxList>;
   getManaged(name: string, parentServerId: string): Promise<ManagedSandboxLookup>;
   readLogs(sandbox: ManagedSandbox): Promise<RawLogs>;
 }
+
+export interface SandboxHandleView {
+  readonly id: string;
+  readonly name: string;
+  readonly status: SandboxStatus;
+  config(): unknown;
+}
+
+export type DecodedSandboxHandle =
+  | { readonly status: "managed"; readonly sandbox: ManagedSandbox }
+  | { readonly status: "degraded"; readonly sandbox: ManagedSandbox }
+  | { readonly status: "foreign" };
 
 export function decodeManagedLabels(
   config: unknown,
@@ -74,22 +90,67 @@ export function decodeManagedLabels(
   return parsedLabels.data;
 }
 
-function decodeHandle(
-  handle: SandboxHandle,
+export function decodeSandboxHandle(
+  handle: SandboxHandleView,
   parentServerId: string,
-): ManagedSandbox | null {
+  options: { readonly assumeManaged?: boolean } = {},
+): DecodedSandboxHandle {
+  let config: unknown;
   try {
-    const labels = decodeManagedLabels(handle.config(), handle.id, parentServerId);
-    if (!labels) return null;
+    config = handle.config();
+  } catch {
     return {
+      status: "degraded",
+      sandbox: {
+        id: handle.id,
+        name: handle.name,
+        runtimeStatus: handle.status,
+        labels: null,
+      },
+    };
+  }
+
+  const labels = decodeManagedLabels(config, handle.id, parentServerId);
+  if (labels) {
+    return {
+      status: "managed",
+      sandbox: {
+        id: handle.id,
+        name: handle.name,
+        runtimeStatus: handle.status,
+        labels,
+      },
+    };
+  }
+
+  const parsedConfig = sandboxConfigSchema.safeParse(config);
+  const sourceLabels = parsedConfig.success ? parsedConfig.data.labels : undefined;
+  if (!sourceLabels) {
+    return {
+      status: "degraded",
+      sandbox: {
+        id: handle.id,
+        name: handle.name,
+        runtimeStatus: handle.status,
+        labels: null,
+      },
+    };
+  }
+
+  if (!options.assumeManaged) {
+    if (sourceLabels[LABELS.managed] !== LABELS.version) return { status: "foreign" };
+    if (sourceLabels[LABELS.parent] !== parentServerId) return { status: "foreign" };
+  }
+
+  return {
+    status: "degraded",
+    sandbox: {
       id: handle.id,
       name: handle.name,
       runtimeStatus: handle.status,
-      labels,
-    };
-  } catch {
-    return null;
-  }
+      labels: null,
+    },
+  };
 }
 
 function sandboxLogEntry(entry: {
@@ -127,6 +188,7 @@ export function createSandboxInventory(): SandboxInventory {
   return {
     async listManaged(parentServerId) {
       const sandboxes: ManagedSandbox[] = [];
+      let degraded = 0;
       let cursor: string | undefined;
 
       do {
@@ -141,22 +203,26 @@ export function createSandboxInventory(): SandboxInventory {
         });
 
         for (const handle of page.sandboxes) {
-          const sandbox = decodeHandle(handle, parentServerId);
-          if (sandbox) sandboxes.push(sandbox);
+          const decoded = decodeSandboxHandle(handle, parentServerId, {
+            assumeManaged: true,
+          });
+          if (decoded.status === "foreign") continue;
+          sandboxes.push(decoded.sandbox);
+          if (decoded.status === "degraded") degraded += 1;
         }
         cursor = page.nextCursor;
       } while (cursor);
 
-      return sandboxes;
+      return { sandboxes, degraded };
     },
 
     async getManaged(name, parentServerId) {
       const handle = await getManagedHandle(name);
       if (!handle) return { status: "not_found" };
 
-      const sandbox = decodeHandle(handle, parentServerId);
-      if (!sandbox) return { status: "invalid" };
-      return { status: "found", sandbox };
+      const decoded = decodeSandboxHandle(handle, parentServerId);
+      if (decoded.status === "foreign") return { status: "not_found" };
+      return { status: "found", sandbox: decoded.sandbox };
     },
 
     async readLogs(sandbox) {
@@ -173,13 +239,13 @@ export function createSandboxInventory(): SandboxInventory {
 
       let jobLogs: RawLogEntry[] = [];
       let jobUnavailable = false;
-      const jobId = sandbox.labels[LABELS.job];
+      const jobId = sandbox.labels?.[LABELS.job];
       if (jobId) {
         try {
           const job = await handle.getJob(jobId);
           const entries = await job.logs({
             tail: LOG_SOURCE_LIMIT,
-            sources: ["stdout", "stderr"],
+            sources: ["stdout", "stderr", "output"],
           });
           jobLogs = entries.map(jobLogEntry);
         } catch {

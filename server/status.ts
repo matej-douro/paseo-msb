@@ -56,6 +56,10 @@ export function availableInventory(): InventoryState {
   return { status: "available", error: null };
 }
 
+export function partialInventory(code: SafeErrorCode): InventoryState {
+  return { status: "partial", error: safeError(code) };
+}
+
 export function unavailableInventory(code: SafeErrorCode): InventoryState {
   return { status: "unavailable", error: safeError(code) };
 }
@@ -92,6 +96,7 @@ export function registrationsBySourceKey(
 }
 
 function childError(sandbox: ManagedSandbox): SafeError | null {
+  if (!sandbox.labels) return safeError("config_invalid");
   if (sandbox.labels[LABELS.phase] !== "failed") return null;
   const code = sandbox.labels[LABELS.error];
   if (code && (SAFE_ERROR_CODES as readonly string[]).includes(code)) {

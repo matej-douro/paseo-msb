@@ -72,10 +72,10 @@ function context(list: () => Promise<unknown>): PluginHandlerContext {
 
 function fakeInventory(options: {
   listed?: readonly ManagedSandbox[];
+  degraded?: number;
   lookup?:
     | { status: "found"; sandbox: ManagedSandbox }
-    | { status: "not_found" }
-    | { status: "invalid" };
+    | { status: "not_found" };
   logs?: RawLogs;
   listError?: boolean;
   lookupError?: boolean;
@@ -83,7 +83,10 @@ function fakeInventory(options: {
   return {
     async listManaged() {
       if (options.listError) throw new Error("inventory unavailable");
-      return options.listed ?? [];
+      return {
+        sandboxes: options.listed ?? [],
+        degraded: options.degraded ?? 0,
+      };
     },
     async getManaged() {
       if (options.lookupError) throw new Error("inventory unavailable");
@@ -134,6 +137,34 @@ test("vm.list joins managed sandboxes with parent registrations", async () => {
   assert.equal(serialized.includes(fakeAnthropic), false);
   assert.equal(serialized.includes(fakeGitHub), false);
   assert.equal(serialized.includes("fake-config-value"), false);
+});
+
+test("vm.list keeps degraded label-matched sandboxes visible with partial inventory", async () => {
+  const degradedId = "sandbox_test_degraded";
+  const degradedName = "paseo-11111111-1111-4111-8111-111111111111";
+  const inventory = fakeInventory({
+    listed: [
+      sandbox(),
+      sandbox({ id: degradedId, name: degradedName, labels: null }),
+    ],
+    degraded: 1,
+  });
+  const handlers = createReadHandlers({
+    inventory,
+    pendingCreates: new Map(),
+    env: {},
+  });
+
+  const output = await handlers.list({}, context(async () => parentDirectory));
+  vmList.output.parse(output);
+
+  assert.equal(output.children.length, 2);
+  const degraded = output.children.find((child) => child.id === degradedId);
+  assert.equal(degraded?.name, degradedName);
+  assert.equal(degraded?.labels, null);
+  assert.equal(degraded?.error?.code, "config_invalid");
+  assert.equal(output.inventory.status, "partial");
+  assert.equal(output.inventory.error?.code, "inventory_partial");
 });
 
 test("vm.list keeps pending creates visible", async () => {
@@ -294,7 +325,7 @@ test("vm.detail bounds log entries and text", async () => {
   );
 });
 
-test("vm.detail distinguishes missing, invalid, and replaced sandboxes", async () => {
+test("vm.detail distinguishes missing, degraded, and replaced sandboxes", async () => {
   const missing = createReadHandlers({
     inventory: fakeInventory({ lookup: { status: "not_found" } }),
     pendingCreates: new Map(),
@@ -309,18 +340,22 @@ test("vm.detail distinguishes missing, invalid, and replaced sandboxes", async (
   assert.equal(missingOutput.inventory.status, "available");
   assert.equal(missingOutput.logs.status, "available");
 
-  const invalid = createReadHandlers({
-    inventory: fakeInventory({ lookup: { status: "invalid" } }),
+  const degraded = createReadHandlers({
+    inventory: fakeInventory({
+      lookup: { status: "found", sandbox: sandbox({ labels: null }) },
+    }),
     pendingCreates: new Map(),
     env: {},
   });
-  const invalidOutput = await invalid.detail(
+  const degradedOutput = await degraded.detail(
     { name: sandboxName },
     context(async () => parentDirectory),
   );
-  vmDetail.output.parse(invalidOutput);
-  assert.equal(invalidOutput.error?.code, "config_invalid");
-  assert.equal(invalidOutput.logs.status, "unavailable");
+  vmDetail.output.parse(degradedOutput);
+  assert.equal(degradedOutput.error?.code, "config_invalid");
+  assert.equal(degradedOutput.child?.id, sandboxId);
+  assert.equal(degradedOutput.child?.labels, null);
+  assert.equal(degradedOutput.inventory.status, "partial");
 
   const replaced = createReadHandlers({
     inventory: fakeInventory({
@@ -338,11 +373,77 @@ test("vm.detail distinguishes missing, invalid, and replaced sandboxes", async (
   assert.equal(replacedOutput.child, null);
 });
 
+test("vm.detail reports unavailable parent and inventory", async () => {
+  const parentUnavailable = createReadHandlers({
+    inventory: fakeInventory({ lookup: { status: "found", sandbox: sandbox() } }),
+    pendingCreates: new Map(),
+    env: {},
+  });
+  const parentOutput = await parentUnavailable.detail(
+    { name: sandboxName },
+    context(async () => {
+      throw new Error("parent unavailable");
+    }),
+  );
+  vmDetail.output.parse(parentOutput);
+  assert.equal(parentOutput.error?.code, "parent_unavailable");
+  assert.equal(parentOutput.inventory.status, "unavailable");
+  assert.equal(parentOutput.registrations.status, "unavailable");
+  assert.equal(parentOutput.logs.status, "unavailable");
+
+  const inventoryUnavailable = createReadHandlers({
+    inventory: fakeInventory({ lookupError: true }),
+    pendingCreates: new Map(),
+    env: {},
+  });
+  const inventoryOutput = await inventoryUnavailable.detail(
+    { name: sandboxName },
+    context(async () => parentDirectory),
+  );
+  vmDetail.output.parse(inventoryOutput);
+  assert.equal(inventoryOutput.error?.code, "inventory_unavailable");
+  assert.equal(inventoryOutput.inventory.status, "unavailable");
+  assert.equal(inventoryOutput.logs.status, "unavailable");
+});
+
+test("vm.detail reports partial job logs", async () => {
+  const handlers = createReadHandlers({
+    inventory: fakeInventory({
+      lookup: { status: "found", sandbox: sandbox({ labels: labels({ [LABELS.job]: "job_test_1" }) }) },
+      logs: {
+        sandbox: [
+          {
+            origin: "sandbox",
+            stream: "stdout",
+            timestamp: "2026-01-01T00:00:00.000Z",
+            text: "sandbox output",
+          },
+        ],
+        job: [],
+        jobUnavailable: true,
+      },
+    }),
+    pendingCreates: new Map(),
+    env: {},
+  });
+
+  const output = await handlers.detail(
+    { name: sandboxName },
+    context(async () => parentDirectory),
+  );
+  vmDetail.output.parse(output);
+
+  assert.equal(output.child?.id, sandboxId);
+  assert.equal(output.logs.status, "partial");
+  assert.equal(output.logs.error?.code, "job_unavailable");
+  assert.equal(output.logs.entries.length, 1);
+});
+
 test("vm.detail keeps a sandbox visible when logs are unavailable", async () => {
   const handlers = createReadHandlers({
     inventory: {
       async listManaged() {
-        return [];
+        return { sandboxes: [], degraded: 0 };
       },
       async getManaged() {
         return { status: "found", sandbox: sandbox() };

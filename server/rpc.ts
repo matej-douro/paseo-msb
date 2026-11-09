@@ -18,6 +18,7 @@ import {
   availableInventory,
   decodeHostDirectory,
   parentFromDirectory,
+  partialInventory,
   projectChild,
   registrationsBySourceKey,
   registrationsFromDirectory,
@@ -56,9 +57,9 @@ export function createReadHandlers(deps: ReadDependencies) {
     const registrations = registrationsFromDirectory(directory);
     const bySourceKey = registrationsBySourceKey(registrations);
 
-    let sandboxes;
+    let listed;
     try {
-      sandboxes = await deps.inventory.listManaged(parent.serverId);
+      listed = await deps.inventory.listManaged(parent.serverId);
     } catch {
       return {
         parent,
@@ -70,7 +71,7 @@ export function createReadHandlers(deps: ReadDependencies) {
       };
     }
 
-    const children = sandboxes
+    const children = listed.sandboxes
       .map((sandbox) => projectChild(sandbox, bySourceKey.get(sandbox.id) ?? null))
       .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -79,7 +80,10 @@ export function createReadHandlers(deps: ReadDependencies) {
       pending,
       children,
       credentials,
-      inventory: availableInventory(),
+      inventory:
+        listed.degraded > 0
+          ? partialInventory("inventory_partial")
+          : availableInventory(),
       registrations: availableInventory(),
     };
   }
@@ -145,17 +149,6 @@ export function createReadHandlers(deps: ReadDependencies) {
       };
     }
 
-    if (lookup.status === "invalid") {
-      return {
-        pending: null,
-        child: null,
-        logs: logsUnavailable("config_invalid"),
-        inventory: availableInventory(),
-        registrations: availableInventory(),
-        error: safeError("config_invalid"),
-      };
-    }
-
     const sandbox = lookup.sandbox;
     if (input.id && input.id !== sandbox.id) {
       return {
@@ -185,9 +178,11 @@ export function createReadHandlers(deps: ReadDependencies) {
       pending: null,
       child,
       logs,
-      inventory: availableInventory(),
+      inventory: sandbox.labels
+        ? availableInventory()
+        : partialInventory("config_invalid"),
       registrations: availableInventory(),
-      error: null,
+      error: sandbox.labels ? null : safeError("config_invalid"),
     };
   }
 
