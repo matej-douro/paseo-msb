@@ -12,6 +12,17 @@ export const SAFE_ERROR_CODES = [
   "logs_unavailable",
   "job_unavailable",
   "sandbox_failed",
+  "credentials_missing",
+  "credentials_invalid",
+  "create_name_conflict",
+  "image_pull_failed",
+  "sandbox_boot_failed",
+  "port_unavailable",
+  "label_update_failed",
+  "pi_install_failed",
+  "pi_install_timeout",
+  "pi_path_unverified",
+  "create_failed",
   "not_implemented",
 ] as const;
 
@@ -27,6 +38,17 @@ const SAFE_ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   logs_unavailable: "Logs are unavailable.",
   job_unavailable: "Job logs are unavailable.",
   sandbox_failed: "Sandbox setup failed.",
+  credentials_missing: "A selected credential is not available.",
+  credentials_invalid: "A selected credential is not supported.",
+  create_name_conflict: "A sandbox with this name already exists.",
+  image_pull_failed: "The fixed image could not be prepared.",
+  sandbox_boot_failed: "The sandbox did not boot.",
+  port_unavailable: "No loopback port could be published.",
+  label_update_failed: "Sandbox progress could not be persisted.",
+  pi_install_failed: "Pi installation failed.",
+  pi_install_timeout: "Pi installation timed out.",
+  pi_path_unverified: "Pi is not available on the daemon user PATH.",
+  create_failed: "Child creation failed.",
   not_implemented: "This operation is not implemented yet.",
 };
 
@@ -90,6 +112,8 @@ export const CredentialNameSchema = z.enum(
     ...(typeof CREDENTIALS)[number]["env"][],
   ],
 );
+
+export type CredentialName = z.infer<typeof CredentialNameSchema>;
 
 export const ParentSchema = z
   .object({
