@@ -68,7 +68,7 @@ function generateCertificates(directory) {
 }
 
 async function closeServer(server) {
-  if (!server.listening) return;
+  if (!server?.listening) return;
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(() => resolve()));
 }

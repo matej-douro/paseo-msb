@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { startControlledHttps } from "./controlled-https.mjs";
 import { startIsolatedParent, stopIsolatedParent } from "./paseo-daemon.mjs";
@@ -12,6 +14,14 @@ import { buildSandboxConfig, inspectConfig } from "./sandbox-config.mjs";
 function hasPaseoCli() {
   const result = spawnSync(process.env.PASEO_BIN ?? "paseo", ["--version"], { encoding: "utf8" });
   return result.status === 0;
+}
+
+function temporaryTlsDirectories() {
+  return new Set(
+    fs
+      .readdirSync(os.tmpdir())
+      .filter((entry) => entry.startsWith("paseo-msb-spike-tls-")),
+  );
 }
 
 test("static init evidence does not make a runtime acceptance group pass", () => {
@@ -59,6 +69,25 @@ test("controlled HTTPS uses a distinct disallowed host and cleans its certificat
     await controlled.close();
   }
   assert.equal(fs.existsSync(controlled.directory), false);
+});
+
+test("controlled HTTPS startup failure preserves the original error and removes cert temp state", async () => {
+  const before = temporaryTlsDirectories();
+  const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), "paseo-msb-spike-no-tools-"));
+  const originalPath = process.env.PATH;
+  try {
+    process.env.PATH = emptyPath;
+    await assert.rejects(startControlledHttps(), (error) => {
+      assert.equal(error?.code, "ENOENT");
+      assert.doesNotMatch(String(error?.message), /Cannot read properties of null/);
+      return true;
+    });
+  } finally {
+    process.env.PATH = originalPath;
+    fs.rmSync(emptyPath, { recursive: true, force: true });
+  }
+  const leftover = [...temporaryTlsDirectories()].filter((entry) => !before.has(entry));
+  assert.deepEqual(leftover, []);
 });
 
 test("stopping an isolated parent removes its temporary home", async (t) => {

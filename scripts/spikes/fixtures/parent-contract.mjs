@@ -49,14 +49,30 @@ export async function runParentContract(pins, report) {
       },
     });
     registrationId = added.registrationId;
-    report.contractPass("contract.parent.add", "hosts.add persists sourceKey and metadata", {
-      detail: "registration created",
-      evidence: {
-        status: added.status,
-        sourceKey: added.source.key,
-        hasMetadata: Object.keys(added.metadata).length > 0,
-      },
-    });
+    const expectedMetadata = {
+      source: "paseo-msb-spike",
+      vm: sourceKey,
+      name: "contract-child",
+    };
+    const returnedMetadata = added.metadata ?? {};
+    const sourceKeyMatches = added.source?.key === sourceKey;
+    const metadataMatches = Object.entries(expectedMetadata).every(
+      ([key, value]) => returnedMetadata[key] === value,
+    );
+    if (sourceKeyMatches && metadataMatches) {
+      report.contractPass("contract.parent.add", "hosts.add persists sourceKey and metadata", {
+        detail: "registration created with the expected identity",
+        evidence: {
+          status: added.status,
+          sourceKeyMatches: true,
+          metadataMatches: true,
+        },
+      });
+    } else {
+      report.fail("contract.parent.add", "hosts.add persists sourceKey and metadata", {
+        detail: "hosts.add did not return the expected sourceKey and metadata",
+      });
+    }
 
     const online = await waitForHost(parentClient.api, registrationId, "online", 30_000);
     report.contractPass("contract.parent.online", "Routed child reaches online", {
