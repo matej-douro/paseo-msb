@@ -82,11 +82,13 @@ Detached VMs normally remain running across plugin and parent-daemon restarts. V
 
 V1 supports only these parent environment credentials:
 
-| Guest environment variable | Allowed upstream host |
+| Guest environment variable | Allowed upstream hosts |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | `api.anthropic.com` |
 | `OPENAI_API_KEY` | `api.openai.com` |
 | `GEMINI_API_KEY` | `generativelanguage.googleapis.com` |
+| `NEURALWATT_API_KEY` | `api.neuralwatt.com` |
+| `GH_TOKEN` | `api.github.com`, `github.com`, `uploads.github.com` |
 
 `vm.list` reports which of these names are available. The create confirmation offers checkboxes for those names and requires at least one. It never displays or accepts values.
 
@@ -133,6 +135,6 @@ Before feature code, one vertical spike must prove the exact pinned combination 
 - Guest Node >= 22.19, npm, non-root Pi install, and daemon-user PATH.
 - `.init("auto")`, loopback port publish/release, detached survival, stable IDs, config, logs, and job recovery.
 - Child registration, routed online, registration removal, and Pi provider refresh.
-- Header-only substitution for the three fixed credentials without exposing values.
+- Header-only substitution for the five fixed credentials without exposing values.
 
 The release test drives the five RPCs through create, background progress, Pi readiness, reload during install, Repair, and Delete. It verifies one sandbox/job/registration per request ID and no credential in RPC output, logs, or persisted plugin state outside microsandbox and protected parent registration state.
