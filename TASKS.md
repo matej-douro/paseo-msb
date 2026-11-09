@@ -19,7 +19,7 @@ Acceptance:
 - [ ] Verify loopback publishing with host port `0`; if unsupported, prove a minimal bind-probe/retry alternative and prompt release after stop.
 - [ ] Verify detached survival, stable-ID replacement checks, persisted labels/config/logs, and detached-job inspection after plugin and parent-daemon restart.
 - [ ] Verify a loopback child without `PASEO_PASSWORD`, or the minimal internal-password fallback, plus routed online, `hosts.remove`, and Pi detection after `providers.refresh()`.
-- [ ] Verify header-only secret substitution and blocked-destination behavior with a controlled HTTPS endpoint and fake values. Verify all three fixed guest variables contain placeholders rather than raw values.
+- [ ] Verify header-only secret substitution and blocked-destination behavior with a controlled HTTPS endpoint and fake values. Verify all five fixed guest variables contain placeholders rather than raw values.
 - [ ] Record results and any required narrow fallback in `docs/spikes/vertical-slice.md`; do not expand the product scope.
 
 Files: `package.json`, `package-lock.json`, `scripts/spikes/verify-vertical-slice.mjs`, `scripts/spikes/fixtures/`, `docs/spikes/vertical-slice.md`
@@ -31,7 +31,7 @@ Create the parent plugin, fixed constants, five RPC contracts, and read-side pro
 Acceptance:
 
 - [ ] Manifest matches the verified parent floor and client/server/shared import boundaries.
-- [ ] `shared/constants.ts` contains the image/Pi pins, 2 CPUs, 2048 MiB, guest port, labels, and three fixed credential-to-host mappings.
+- [ ] `shared/constants.ts` contains the image/Pi pins, 2 CPUs, 2048 MiB, guest port, labels, and five fixed credential-to-host mappings.
 - [ ] Zod contracts implement exactly `vm.list`, `vm.detail`, `vm.create`, `vm.delete`, and `vm.reconcile` with safe errors and no secret values.
 - [ ] Server lists label-filtered sandboxes for the current parent and joins them with parent registrations and an initially empty pending-create map.
 - [ ] Strict config decoding returns only stable ID, name, labels, runtime status, registration identity/status, and available credential names. Raw config and env never cross RPC.
@@ -96,6 +96,6 @@ Acceptance:
 - [ ] A fake fixed credential reaches only the allowed substitution path and never appears in RPC output, logs, pending state, or test artifacts.
 - [ ] Delete cleans the exact sandbox and registration; repeated delete and Repair are safe.
 - [ ] Test runs in the release check on the verified parent/runtime/image/Pi pins.
-- [ ] README records requirements, pins, the three parent env credentials, Create/Repair/Delete behavior, loopback trust boundary, reload limitations, and release-test command.
+- [ ] README records requirements, pins, the five parent env credentials, Create/Repair/Delete behavior, loopback trust boundary, reload limitations, and release-test command.
 
 Files: `tests/integration/vertical.test.ts`, `tests/integration/fixtures/`, `README.md`
