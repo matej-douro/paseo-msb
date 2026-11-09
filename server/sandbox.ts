@@ -99,6 +99,7 @@ export function decodeSandboxHandle(
   try {
     config = handle.config();
   } catch {
+    if (!options.assumeManaged) return { status: "foreign" };
     return {
       status: "degraded",
       sandbox: {
@@ -123,24 +124,7 @@ export function decodeSandboxHandle(
     };
   }
 
-  const parsedConfig = sandboxConfigSchema.safeParse(config);
-  const sourceLabels = parsedConfig.success ? parsedConfig.data.labels : undefined;
-  if (!sourceLabels) {
-    return {
-      status: "degraded",
-      sandbox: {
-        id: handle.id,
-        name: handle.name,
-        runtimeStatus: handle.status,
-        labels: null,
-      },
-    };
-  }
-
-  if (!options.assumeManaged) {
-    if (sourceLabels[LABELS.managed] !== LABELS.version) return { status: "foreign" };
-    if (sourceLabels[LABELS.parent] !== parentServerId) return { status: "foreign" };
-  }
+  if (!options.assumeManaged) return { status: "foreign" };
 
   return {
     status: "degraded",
@@ -151,6 +135,17 @@ export function decodeSandboxHandle(
       labels: null,
     },
   };
+}
+
+export function lookupManagedSandbox(
+  handle: SandboxHandleView | null,
+  parentServerId: string,
+): ManagedSandboxLookup {
+  if (!handle) return { status: "not_found" };
+
+  const decoded = decodeSandboxHandle(handle, parentServerId);
+  if (decoded.status !== "managed") return { status: "not_found" };
+  return { status: "found", sandbox: decoded.sandbox };
 }
 
 function sandboxLogEntry(entry: {
@@ -217,12 +212,7 @@ export function createSandboxInventory(): SandboxInventory {
     },
 
     async getManaged(name, parentServerId) {
-      const handle = await getManagedHandle(name);
-      if (!handle) return { status: "not_found" };
-
-      const decoded = decodeSandboxHandle(handle, parentServerId);
-      if (decoded.status === "foreign") return { status: "not_found" };
-      return { status: "found", sandbox: decoded.sandbox };
+      return lookupManagedSandbox(await getManagedHandle(name), parentServerId);
     },
 
     async readLogs(sandbox) {

@@ -138,7 +138,7 @@ export function createReadHandlers(deps: ReadDependencies) {
       };
     }
 
-    if (lookup.status === "not_found") {
+    if (lookup.status === "not_found" || !lookup.sandbox.labels) {
       return {
         pending: null,
         child: null,
@@ -178,11 +178,9 @@ export function createReadHandlers(deps: ReadDependencies) {
       pending: null,
       child,
       logs,
-      inventory: sandbox.labels
-        ? availableInventory()
-        : partialInventory("config_invalid"),
+      inventory: availableInventory(),
       registrations: availableInventory(),
-      error: sandbox.labels ? null : safeError("config_invalid"),
+      error: null,
     };
   }
 

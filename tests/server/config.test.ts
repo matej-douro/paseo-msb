@@ -87,10 +87,14 @@ test("label-matched handles with invalid config stay visible as degraded", () =>
     }),
   };
   const invalidId = decodeSandboxHandle(invalidIdLabels, parentServerId);
-  assert.equal(invalidId.status, "degraded");
-  if (invalidId.status === "degraded") {
-    assert.equal(invalidId.sandbox.id, sandboxId);
-    assert.equal(invalidId.sandbox.labels, null);
+  assert.equal(invalidId.status, "foreign");
+  const degradedId = decodeSandboxHandle(invalidIdLabels, parentServerId, {
+    assumeManaged: true,
+  });
+  assert.equal(degradedId.status, "degraded");
+  if (degradedId.status === "degraded") {
+    assert.equal(degradedId.sandbox.id, sandboxId);
+    assert.equal(degradedId.sandbox.labels, null);
   }
 
   const unreadableConfig: SandboxHandleView = {
@@ -101,7 +105,10 @@ test("label-matched handles with invalid config stay visible as degraded", () =>
       throw new Error("config unavailable");
     },
   };
-  const degraded = decodeSandboxHandle(unreadableConfig, parentServerId);
+  assert.equal(decodeSandboxHandle(unreadableConfig, parentServerId).status, "foreign");
+  const degraded = decodeSandboxHandle(unreadableConfig, parentServerId, {
+    assumeManaged: true,
+  });
   assert.equal(degraded.status, "degraded");
   if (degraded.status === "degraded") {
     assert.equal(degraded.sandbox.runtimeStatus, "crashed");

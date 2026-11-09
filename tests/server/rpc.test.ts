@@ -14,10 +14,12 @@ import {
   vmList,
 } from "../../shared/contracts";
 import { createReadHandlers } from "../../server/rpc";
-import type {
-  ManagedSandbox,
-  RawLogs,
-  SandboxInventory,
+import {
+  lookupManagedSandbox,
+  type ManagedSandbox,
+  type RawLogs,
+  type SandboxHandleView,
+  type SandboxInventory,
 } from "../../server/sandbox";
 
 const parentServerId = "srv_test_parent";
@@ -325,7 +327,7 @@ test("vm.detail bounds log entries and text", async () => {
   );
 });
 
-test("vm.detail distinguishes missing, degraded, and replaced sandboxes", async () => {
+test("vm.detail distinguishes missing, unproven, and replaced sandboxes", async () => {
   const missing = createReadHandlers({
     inventory: fakeInventory({ lookup: { status: "not_found" } }),
     pendingCreates: new Map(),
@@ -340,22 +342,21 @@ test("vm.detail distinguishes missing, degraded, and replaced sandboxes", async 
   assert.equal(missingOutput.inventory.status, "available");
   assert.equal(missingOutput.logs.status, "available");
 
-  const degraded = createReadHandlers({
+  const unproven = createReadHandlers({
     inventory: fakeInventory({
       lookup: { status: "found", sandbox: sandbox({ labels: null }) },
     }),
     pendingCreates: new Map(),
     env: {},
   });
-  const degradedOutput = await degraded.detail(
+  const unprovenOutput = await unproven.detail(
     { name: sandboxName },
     context(async () => parentDirectory),
   );
-  vmDetail.output.parse(degradedOutput);
-  assert.equal(degradedOutput.error?.code, "config_invalid");
-  assert.equal(degradedOutput.child?.id, sandboxId);
-  assert.equal(degradedOutput.child?.labels, null);
-  assert.equal(degradedOutput.inventory.status, "partial");
+  vmDetail.output.parse(unprovenOutput);
+  assert.equal(unprovenOutput.error?.code, "sandbox_not_found");
+  assert.equal(unprovenOutput.child, null);
+  assert.equal(unprovenOutput.inventory.status, "available");
 
   const replaced = createReadHandlers({
     inventory: fakeInventory({
@@ -371,6 +372,57 @@ test("vm.detail distinguishes missing, degraded, and replaced sandboxes", async 
   vmDetail.output.parse(replacedOutput);
   assert.equal(replacedOutput.error?.code, "sandbox_replaced");
   assert.equal(replacedOutput.child, null);
+});
+
+test("vm.detail direct lookup rejects unreadable and missing managed labels", async () => {
+  const handles: SandboxHandleView[] = [
+    {
+      id: sandboxId,
+      name: "paseo-unreadable-config",
+      status: "running",
+      config: () => {
+        throw new Error("config unavailable");
+      },
+    },
+    {
+      id: sandboxId,
+      name: "paseo-missing-managed-labels",
+      status: "running",
+      config: () => ({ labels: {} }),
+    },
+    {
+      id: sandboxId,
+      name: "paseo-foreign-parent",
+      status: "running",
+      config: () => ({
+        labels: {
+          [LABELS.managed]: LABELS.version,
+          [LABELS.parent]: "srv_other_parent",
+          [LABELS.id]: sandboxId,
+          [LABELS.phase]: "ready",
+        },
+      }),
+    },
+  ];
+
+  for (const handle of handles) {
+    const lookup = lookupManagedSandbox(handle, parentServerId);
+    assert.equal(lookup.status, "not_found");
+
+    const handlers = createReadHandlers({
+      inventory: fakeInventory({ lookup }),
+      pendingCreates: new Map(),
+      env: {},
+    });
+    const output = await handlers.detail(
+      { name: handle.name },
+      context(async () => parentDirectory),
+    );
+    vmDetail.output.parse(output);
+    assert.equal(output.error?.code, "sandbox_not_found");
+    assert.equal(output.child, null);
+    assert.equal(output.logs.status, "available");
+  }
 });
 
 test("vm.detail reports unavailable parent and inventory", async () => {
