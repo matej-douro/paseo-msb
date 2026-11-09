@@ -72,6 +72,8 @@ export const CREDENTIALS = [
 
 export const CONTROLLED_SECRET_ENV = "SPIKE_CONTROLLED_SECRET";
 export const CONTROLLED_HOST = "host.microsandbox.internal";
+// Resolves to the host gateway at runtime via a guest /etc/hosts alias.
+export const BLOCKED_HOST = "blocked.paseo-msb.invalid";
 
 export function platformKey() {
   const arch = process.arch === "x64" ? "amd64" : process.arch;

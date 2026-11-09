@@ -19,7 +19,7 @@ import { FAKE_SECRETS } from "./fixtures/fake-secrets.mjs";
 import { inspectImage } from "./fixtures/image-registry.mjs";
 import { connectParent, restartIsolatedParent, startIsolatedParent, stopIsolatedParent, waitForHost, waitForProvider } from "./fixtures/paseo-daemon.mjs";
 import { runParentContract } from "./fixtures/parent-contract.mjs";
-import { CONTROLLED_HOST, CONTROLLED_SECRET_ENV, CREDENTIALS, PINS, expectedImageDigest, platformKey } from "./fixtures/pins.mjs";
+import { BLOCKED_HOST, CONTROLLED_SECRET_ENV, CREDENTIALS, PINS, expectedImageDigest, platformKey } from "./fixtures/pins.mjs";
 import { Report } from "./fixtures/report.mjs";
 import {
   GUEST_PATH,
@@ -95,7 +95,7 @@ function compareVersions(left, right) {
 }
 
 async function main() {
-  const image = await runStaticChecks();
+  await runStaticChecks();
   const parentContractOk = args.parentContract || !args.staticOnly;
 
   if (parentContractOk) {
@@ -133,7 +133,7 @@ async function main() {
     return;
   }
 
-  await runSandboxSuite(image);
+  await runSandboxSuite();
   finish(report.runtimeVerified() ? 0 : 1);
 }
 
@@ -245,6 +245,9 @@ async function runStaticChecks() {
       report.staticPass("init.auto-config", "Builder accepts init auto for comparison", {
         evidence: { autoConfigBuilt: true },
       });
+      report.staticPass("init.auto-unavailable", "Image has no init auto candidates, so the fallback is selected", {
+        evidence: { autoCandidates: initCandidates.filter(Boolean).length, fallback: true },
+      });
     } else {
       report.fail("pins.image-init", "Image requires the pinned tini fallback", {
         detail: "image init layout differs from the fallback pin",
@@ -260,7 +263,6 @@ async function runStaticChecks() {
   await checkRuntimePins();
   await checkParentCli();
   await checkConfigContract();
-  return image;
 }
 
 async function checkPiMetadata() {
@@ -552,7 +554,7 @@ function inspectDetachedSandbox(name, jobId) {
   return JSON.parse(output.trim().split("\n").pop());
 }
 
-async function runSandboxSuite(image) {
+async function runSandboxSuite() {
   const runId = `${process.pid}-${Date.now().toString(36)}`;
   const name = `paseo-msb-spike-${runId}`.slice(0, 128);
   const labels = {
@@ -579,11 +581,6 @@ async function runSandboxSuite(image) {
     report.pass("init.fallback-config", "Pinned fallback init builds with the fixed resources", {
       evidence: { fallbackInit: true, fixedResources: true },
     });
-    if (image) {
-      report.pass("init.auto-unavailable", "Image has no init auto candidates, so the fallback is selected", {
-        evidence: { autoCandidates: Object.values(image.initCandidates).filter(Boolean).length, fallback: true },
-      });
-    }
 
     sandbox = await buildSandboxBuilder({
       name,
@@ -593,9 +590,15 @@ async function runSandboxSuite(image) {
       includeControlledSecret: true,
       controlledCaPath: controlled.caCertPath,
     }).create();
-    report.pass("persist.create", "Detached sandbox created with managed labels", {
-      evidence: { stableIdAssigned: Boolean(sandbox.id), labels: Object.keys(labels).length },
-    });
+    if (sandbox.id) {
+      report.pass("persist.create", "Detached sandbox created with managed labels", {
+        evidence: { stableIdAssigned: true, labels: Object.keys(labels).length },
+      });
+    } else {
+      report.fail("persist.create", "Detached sandbox created with managed labels", {
+        detail: "sandbox creation did not assign a stable ID",
+      });
+    }
 
     const storedConfig = await sandbox.config();
     assertConfigContract(storedConfig, { includeControlledSecret: true });
@@ -603,12 +606,21 @@ async function runSandboxSuite(image) {
       evidence: { configReadable: true, fixedResources: true, headerOnly: true },
     });
     const summary = inspectConfig(storedConfig);
-    report.pass("persist.labels", "Managed labels survive in persisted config", {
-      evidence: {
-        managedLabel: summary.labels[PINS.labels.managed] === PINS.labels.version,
-        labelCount: Object.keys(summary.labels).length,
-      },
-    });
+    const managedLabelsPersisted = Object.entries(labels).every(
+      ([key, value]) => summary.labels[key] === value,
+    );
+    if (managedLabelsPersisted) {
+      report.pass("persist.labels", "Managed labels survive in persisted config", {
+        evidence: {
+          managedLabel: summary.labels[PINS.labels.managed] === PINS.labels.version,
+          labelCount: Object.keys(summary.labels).length,
+        },
+      });
+    } else {
+      report.fail("persist.labels", "Managed labels survive in persisted config", {
+        detail: "one or more managed labels were missing from the persisted config",
+      });
+    }
 
     const nodeVersion = (await execGuest(sandbox, "node", ["-p", "process.versions.node"])).stdout().trim();
     if (compareVersions(nodeVersion, "22.19.0") >= 0) {
@@ -622,9 +634,15 @@ async function runSandboxSuite(image) {
     }
 
     const npmVersion = (await execGuest(sandbox, "npm", ["--version"])).stdout().trim();
-    report.pass("guest.npm", "Guest npm is present", {
-      evidence: { versionMatches: npmVersion === PINS.image.npmVersion, npm: npmVersion },
-    });
+    if (npmVersion === PINS.image.npmVersion) {
+      report.pass("guest.npm", "Guest npm matches the pinned version", {
+        evidence: { versionMatches: true, npm: npmVersion },
+      });
+    } else {
+      report.fail("guest.npm", "Guest npm matches the pinned version", {
+        detail: "guest npm version differs from the pin",
+      });
+    }
 
     const uid = (await execGuest(sandbox, "id", ["-u"], { user: "paseo" })).stdout().trim();
     if (uid !== "0") {
@@ -668,9 +686,16 @@ async function runSandboxSuite(image) {
         .env("PATH", GUEST_PATH)
         .env("NPM_CONFIG_PREFIX", PINS.pi.installPrefix),
     );
-    report.pass("guest.pi-job", "Pi install started as a detached job", {
-      evidence: { jobIdAssigned: Boolean(job.id), detached: true },
-    });
+    if (job.id) {
+      report.pass("guest.pi-job", "Pi install started as a detached job", {
+        evidence: { jobIdAssigned: true, detached: true },
+      });
+    } else {
+      report.fail("guest.pi-job", "Pi install started as a detached job", {
+        detail: "detached install did not return a job ID",
+      });
+      return;
+    }
 
     const jobInfo = await waitForJob(job, 10 * 60_000);
     if (jobInfo.state === "exited" && jobInfo.exitCode === 0) {
@@ -702,9 +727,17 @@ async function runSandboxSuite(image) {
         detail: "pi did not resolve from the pinned prefix",
       });
     }
-    report.pass("guest.daemon-path", "Child daemon inherits the daemon-user PATH", {
-      evidence: { pathConfigured: GUEST_PATH.includes(PINS.pi.pathEntry) },
-    });
+    const daemonPath = (await execGuest(sandbox, "printenv", ["PATH"], { user: "paseo" })).stdout().trim();
+    const pathEntries = daemonPath.split(":");
+    if (pathEntries.includes(PINS.pi.pathEntry)) {
+      report.pass("guest.daemon-path", "Daemon user PATH contains the pinned Pi prefix", {
+        evidence: { pathEntryPresent: true },
+      });
+    } else {
+      report.fail("guest.daemon-path", "Daemon user PATH contains the pinned Pi prefix", {
+        detail: "the daemon user PATH did not contain the pinned Pi prefix",
+      });
+    }
 
     const logs = await sandbox.logs({ tail: 40 });
     report.pass("persist.logs", "Bounded sandbox logs are readable", {
@@ -712,13 +745,21 @@ async function runSandboxSuite(image) {
     });
 
     const detached = inspectDetachedSandbox(name, job.id);
-    report.pass("persist.detached-process", "A second process observes the same detached sandbox and job", {
-      evidence: {
-        stableIdMatches: detached.id === sandbox.id,
-        sameSandbox: detached.id === sandbox.id,
-        jobObserved: detached.state === "exited" || detached.state === "failed" || detached.state === "running",
-      },
-    });
+    const detachedStateObserved =
+      detached.state === "exited" || detached.state === "failed" || detached.state === "running";
+    if (detached.id === sandbox.id && detachedStateObserved) {
+      report.pass("persist.detached-process", "A second process observes the same detached sandbox and job", {
+        evidence: {
+          stableIdMatches: true,
+          sameSandbox: true,
+          jobObserved: true,
+        },
+      });
+    } else {
+      report.fail("persist.detached-process", "A second process observes the same detached sandbox and job", {
+        detail: "the second process did not observe the same stable ID and job state",
+      });
+    }
 
     await runSandboxParentRegistration(report, sandbox, hostPort, job);
     await runSecretChecks(report, sandbox, controlled);
@@ -847,13 +888,21 @@ async function runSandboxParentRegistration(sandboxReport, sandbox, published, j
       },
     });
     registrationId = added.registrationId;
-    sandboxReport.pass("parent.add", "hosts.add uses the stable sandbox ID as sourceKey", {
-      evidence: {
-        registrationCreated: true,
-        sourceKeyMatchesSandboxId: added.source.key === sandbox.id,
-        metadataFields: Object.keys(added.metadata).length,
-      },
-    });
+    const sourceKeyMatches = added.source?.key === sandbox.id;
+    const metadataFields = Object.keys(added.metadata ?? {}).length;
+    if (sourceKeyMatches && metadataFields > 0) {
+      sandboxReport.pass("parent.add", "hosts.add uses the stable sandbox ID as sourceKey", {
+        evidence: {
+          registrationCreated: true,
+          sourceKeyMatchesSandboxId: true,
+          metadataFields,
+        },
+      });
+    } else {
+      sandboxReport.fail("parent.add", "hosts.add uses the stable sandbox ID as sourceKey", {
+        detail: "hosts.add did not persist the sandbox ID as sourceKey with metadata",
+      });
+    }
 
     const online = await waitForHost(parentClient.api, registrationId, "online", 60_000);
     sandboxReport.pass("parent.online", "Routed child reaches online", {
@@ -885,9 +934,17 @@ async function runSandboxParentRegistration(sandboxReport, sandbox, published, j
     });
 
     const afterRestart = inspectDetachedSandbox(sandbox.name, job.id);
-    sandboxReport.pass("persist.job-after-parent-restart", "Detached job remains inspectable after parent restart", {
-      evidence: { jobObserved: Boolean(afterRestart.state), sameSandbox: afterRestart.id === sandbox.id },
-    });
+    const jobStateObserved =
+      typeof afterRestart.state === "string" && afterRestart.state.length > 0;
+    if (afterRestart.id === sandbox.id && jobStateObserved) {
+      sandboxReport.pass("persist.job-after-parent-restart", "Detached job remains inspectable after parent restart", {
+        evidence: { jobObserved: true, sameSandbox: true },
+      });
+    } else {
+      sandboxReport.fail("persist.job-after-parent-restart", "Detached job remains inspectable after parent restart", {
+        detail: "the detached job or stable sandbox ID was not observed after the parent restart",
+      });
+    }
 
     await parentClient.api.hosts.remove(registrationId);
     registrationId = null;
@@ -917,6 +974,20 @@ async function runSandboxParentRegistration(sandboxReport, sandbox, published, j
   }
 }
 
+async function ensureBlockedHostAlias(sandbox) {
+  const script = [
+    "set -eu",
+    "gateway=$(getent hosts host.microsandbox.internal | awk 'NR == 1 { print $1 }')",
+    'test -n "$gateway"',
+    `grep -q " ${BLOCKED_HOST}$" /etc/hosts || printf "%s ${BLOCKED_HOST}\\n" "$gateway" >> /etc/hosts`,
+    `getent hosts ${BLOCKED_HOST} >/dev/null`,
+  ].join("\n");
+  const output = await execGuest(sandbox, "sh", ["-c", script], { timeoutMs: 30_000 });
+  if (!output.success) {
+    throw new Error("could not map the blocked destination to the host gateway");
+  }
+}
+
 async function runSecretChecks(secretReport, sandbox, controlled) {
   let placeholderCount = 0;
   for (const { env } of CREDENTIALS) {
@@ -935,7 +1006,7 @@ async function runSecretChecks(secretReport, sandbox, controlled) {
   }
 
   const before = controlled.requests.length;
-  const allowed = await runGuestHttpsRequest(sandbox, controlled.url, CONTROLLED_SECRET_ENV, "allowed");
+  const allowed = await runGuestHttpsRequest(sandbox, controlled.url, CONTROLLED_SECRET_ENV);
   const request = controlled.requests[before];
   const header = request?.headers?.["x-paseo-spike-secret"];
   const headerValue = Array.isArray(header) ? header[0] : header;
@@ -960,38 +1031,54 @@ async function runSecretChecks(secretReport, sandbox, controlled) {
     });
   }
 
+  try {
+    await ensureBlockedHostAlias(sandbox);
+  } catch (error) {
+    secretReport.fail("secrets.blocked-destination", "A disallowed destination is blocked by secret policy", {
+      detail: safeError(error),
+    });
+    return;
+  }
+
   const requestsBeforeBlocked = controlled.requests.length;
-  const blocked = await runGuestHttpsRequest(sandbox, controlled.url, CONTROLLED_SECRET_ENV, "blocked");
+  const blocked = await runGuestHttpsRequest(sandbox, controlled.blockedUrl, CONTROLLED_SECRET_ENV);
   const blockedReachedUpstream = controlled.requests.length !== requestsBeforeBlocked;
-  if ((blocked.status === null || blocked.status >= 400) && !blockedReachedUpstream) {
-    secretReport.pass("secrets.blocked-destination", "A mismatched destination is blocked before the controlled upstream", {
-      evidence: { blocked: true, blockedStatus: blocked.status ?? "error", upstreamRequests: controlled.requests.length },
+  const blockedBySecretPolicy =
+    blocked.status === 403 && typeof blocked.body === "string" && /secret policy/i.test(blocked.body);
+  if (!blockedReachedUpstream && blockedBySecretPolicy) {
+    secretReport.pass("secrets.blocked-destination", "A disallowed destination is blocked by secret policy", {
+      evidence: {
+        blocked: true,
+        blockedStatus: blocked.status,
+        secretPolicyDenial: true,
+        upstreamRequests: controlled.requests.length,
+      },
     });
   } else {
-    secretReport.fail("secrets.blocked-destination", "A mismatched destination is blocked before the controlled upstream", {
-      detail: "the controlled upstream observed a request that should have been denied",
+    secretReport.fail("secrets.blocked-destination", "A disallowed destination is blocked by secret policy", {
+      detail: blockedReachedUpstream
+        ? "the controlled upstream observed a request that should have been denied"
+        : "the disallowed destination did not return a secret-policy denial",
     });
   }
 }
 
-async function runGuestHttpsRequest(sandbox, url, secretEnv, mode) {
+async function runGuestHttpsRequest(sandbox, url, secretEnv) {
   const code = [
     'import https from "node:https";',
     "const target = new URL(process.argv[1]);",
     "const secret = process.env[process.argv[2]];",
-    "const mode = process.argv[3];",
     "const body = JSON.stringify({ probe: secret });",
     "const headers = { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'x-paseo-spike-secret': secret };",
-    "if (mode === 'blocked') headers.host = `blocked.paseo-msb.invalid:${target.port}`;",
     "const request = https.request({ hostname: target.hostname, port: target.port, path: `${target.pathname}?probe=${encodeURIComponent(secret)}`, method: 'POST', headers }, (response) => {",
     "  const chunks = [];",
     "  response.on('data', (chunk) => chunks.push(chunk));",
-    "  response.on('end', () => console.log(JSON.stringify({ status: response.statusCode, bodyLength: Buffer.concat(chunks).length })));",
+    "  response.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); console.log(JSON.stringify({ status: response.statusCode, bodyLength: text.length, body: text.slice(0, 512) })); });",
     "});",
     "request.on('error', (error) => console.log(JSON.stringify({ status: null, error: error.code || 'request-failed' })));",
     "request.end(body);",
   ].join("\n");
-  const output = await execGuest(sandbox, "node", ["--input-type=module", "--eval", code, url, secretEnv, mode], {
+  const output = await execGuest(sandbox, "node", ["--input-type=module", "--eval", code, url, secretEnv], {
     user: "paseo",
     env: { HOME: "/home/paseo", PATH: GUEST_PATH },
     timeoutMs: 60_000,

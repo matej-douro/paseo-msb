@@ -1,5 +1,6 @@
 import { NetworkPolicy, Sandbox } from "microsandbox";
 import {
+  BLOCKED_HOST,
   CONTROLLED_HOST,
   CONTROLLED_SECRET_ENV,
   CREDENTIALS,
@@ -73,7 +74,11 @@ export function buildSandboxBuilder(options) {
     builder = builder.network((network) =>
       network
         .policy(NetworkPolicy.fromProfiles(["public", "host"]))
-        .tls((tls) => tls.upstreamCaCertFor(CONTROLLED_HOST, options.controlledCaPath)),
+        .tls((tls) =>
+          tls
+            .upstreamCaCertFor(CONTROLLED_HOST, options.controlledCaPath)
+            .upstreamCaCertFor(BLOCKED_HOST, options.controlledCaPath),
+        ),
     );
   } else {
     builder = builder.network((network) => network.policy(NetworkPolicy.fromProfiles(["public"])));

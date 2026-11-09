@@ -13,15 +13,19 @@ function safeError(error) {
 }
 
 export async function runParentContract(pins, report) {
-  const parent = await startIsolatedParent();
-  const child = await startIsolatedParent();
+  let parent = null;
+  let child = null;
   let parentClient = null;
+  let childClient = null;
   let registrationId = null;
   try {
+    parent = await startIsolatedParent();
+    child = await startIsolatedParent();
     parentClient = await connectParent(parent.url, { clientId: "spike-contract-parent" });
-    const childClient = await connectParent(child.url, { clientId: "spike-contract-child" });
+    childClient = await connectParent(child.url, { clientId: "spike-contract-child" });
     const childPi = await waitForProvider(childClient.api, "pi", 30_000);
     await childClient.close();
+    childClient = null;
     report.contractPass("contract.child.provider", "Standalone child daemon reports Pi", {
       detail: childPi?.available ? "pi available" : "pi unavailable",
     });
@@ -60,9 +64,13 @@ export async function runParentContract(pins, report) {
     });
 
     const routed = await parentClient.api.hosts.client(online.serverId);
-    await routed.providers.refresh();
-    const routedPi = await waitForProvider(routed, "pi", 30_000);
-    await routed.dispose();
+    let routedPi = null;
+    try {
+      await routed.providers.refresh();
+      routedPi = await waitForProvider(routed, "pi", 30_000);
+    } finally {
+      await routed.dispose();
+    }
     report.contractPass("contract.parent.refresh", "providers.refresh through routed client sees Pi", {
       detail: routedPi?.available ? "pi available through routed client" : "pi unavailable through routed client",
     });
@@ -104,6 +112,9 @@ export async function runParentContract(pins, report) {
       }
     }
   } finally {
+    if (childClient) {
+      await childClient.close();
+    }
     if (parentClient) {
       await parentClient.close();
     }

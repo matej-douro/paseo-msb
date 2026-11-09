@@ -15,11 +15,16 @@ this host cannot boot a microsandbox VM.
 npm ci
 npm run spike:vertical:static
 npm run spike:vertical:contract
+npm run spike:vertical:regression
 npm run spike:vertical
 ```
 
 `--static-only` verifies pins, image layers, package metadata, and the built sandbox contract.
 It exits zero only when no static check fails. Runtime groups remain blocked.
+
+`spike:vertical:regression` checks report classification, isolated-daemon temp-home cleanup,
+controlled-HTTPS certificate cleanup, and the configured disallowed destination. It does not
+boot a guest.
 
 `npm run spike:vertical` runs the parent-daemon contract and then attempts the VM-backed suite.
 It exits nonzero whenever any acceptance group is blocked or failed.
@@ -49,7 +54,7 @@ with a sanitized environment and does not read or forward host credentials.
 
 ## Static results
 
-`npm run spike:vertical:static` on 2026-11-09 reported 11 static passes, no failures, and five
+`npm run spike:vertical:static` on 2026-11-09 reported 12 static passes, no failures, and five
 blocked runtime groups.
 
 | Check | Result | Evidence |
@@ -65,6 +70,7 @@ blocked runtime groups.
 | `pins.config-contract` | pass | 2 CPUs, 2048 MiB, guest port 6767, loopback bind, five header-only credential entries, no password environment entry, fallback init |
 | `init.auto-accepted` | pass | the builder records the auto init strategy |
 | `init.auto-config` | pass | the image comparison config builds |
+| `init.auto-unavailable` | pass | the image scan found no init auto candidates |
 
 The official image contains none of the init binaries probed by `init("auto")` on this platform.
 It has tini and the Paseo entrypoint, so the narrowed fallback is:
@@ -89,7 +95,9 @@ This is a boot strategy fallback only. It does not add product scope.
 | `hosts.remove` removes the registration | pass |
 
 These use isolated host daemons, not a microsandbox guest. They verify the parent API contract
-and routing behavior that the VM-backed runner will consume.
+and routing behavior that the VM-backed runner will consume. Each isolated daemon owns a
+temporary home, and the contract removes those homes and the controlled HTTPS certificate
+directory after both successful and failed startup.
 
 ## Acceptance status
 
@@ -127,7 +135,9 @@ Pi package as the non-root daemon user, starts a detached install job, observes 
 process, registers the child with an isolated parent, refreshes Pi through the routed client,
 restarts the parent, removes the registration, checks secret placeholders and header-only request
 handling against a controlled HTTPS endpoint, stops the sandbox to verify port release, and tests
-stable-ID replacement protection. It then removes its sandbox.
+stable-ID replacement protection. It then removes its sandbox. The blocked-destination probe
+resolves a host outside the secret allowlist to the same controlled upstream through a guest
+hosts alias, so only a secret-policy denial can keep the request from being observed.
 
 A successful run must report every acceptance group as `pass`. Until then, the runtime bar in
 TASKS.md remains open.

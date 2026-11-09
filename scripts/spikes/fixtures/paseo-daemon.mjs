@@ -62,6 +62,7 @@ async function waitForHealth(port, timeoutMs) {
 }
 
 export async function startIsolatedParent(options = {}) {
+  const temporaryHome = !options.home;
   const home = options.home ?? fs.mkdtempSync(path.join(os.tmpdir(), "paseo-msb-spike-parent-"));
   const port = options.port ?? (await getFreePort());
   const logPath = path.join(home, "daemon.log");
@@ -86,6 +87,7 @@ export async function startIsolatedParent(options = {}) {
   fs.closeSync(log);
   const handle = {
     home,
+    temporaryHome,
     port,
     url: `http://127.0.0.1:${port}`,
     logPath,
@@ -125,40 +127,52 @@ async function waitForWebSocket(url, timeoutMs) {
   throw new Error(`parent daemon websocket did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
-export async function stopIsolatedParent(handle) {
-  if (!handle?.child?.pid) return;
-  const pid = handle.child.pid;
-  if (handle.child.exitCode !== null) return;
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
+export async function stopIsolatedParent(handle, options = {}) {
+  if (!handle) return;
+  const removeHome = options.removeHome ?? handle.temporaryHome === true;
+  const pid = handle.child?.pid;
+  if (pid && handle.child.exitCode === null) {
     try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      return;
-    }
-  }
-  const exited = await Promise.race([
-    new Promise((resolve) => handle.child.once("exit", () => resolve(true))),
-    new Promise((resolve) => setTimeout(() => resolve(false), 10_000)),
-  ]);
-  if (!exited) {
-    try {
-      process.kill(-pid, "SIGKILL");
+      process.kill(-pid, "SIGTERM");
     } catch {
       try {
-        process.kill(pid, "SIGKILL");
+        process.kill(pid, "SIGTERM");
       } catch {
         // Already gone.
       }
     }
+    const exited = await Promise.race([
+      new Promise((resolve) => handle.child.once("exit", () => resolve(true))),
+      new Promise((resolve) => setTimeout(() => resolve(false), 10_000)),
+    ]);
+    if (!exited) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  }
+  if (removeHome) {
+    fs.rmSync(handle.home, { recursive: true, force: true });
   }
 }
 
 export async function restartIsolatedParent(handle) {
-  await stopIsolatedParent(handle);
-  const restarted = await startIsolatedParent({ home: handle.home, port: handle.port });
-  Object.assign(handle, restarted);
+  const temporaryHome = handle.temporaryHome === true;
+  await stopIsolatedParent(handle, { removeHome: false });
+  try {
+    const restarted = await startIsolatedParent({ home: handle.home, port: handle.port });
+    restarted.temporaryHome = temporaryHome;
+    Object.assign(handle, restarted);
+  } catch (error) {
+    if (temporaryHome) fs.rmSync(handle.home, { recursive: true, force: true });
+    throw error;
+  }
   return handle;
 }
 
