@@ -3,10 +3,21 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "files": [
+    "paseo-plugin.json",
+    "index.client.tsx",
+    "index.server.ts",
+    "client/",
+    "server/",
+    "shared/"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "test": "node --import tsx --test tests/server/*.test.ts",
     "spike:vertical": "node scripts/spikes/verify-vertical-slice.mjs",
     "spike:vertical:static": "node scripts/spikes/verify-vertical-slice.mjs --static-only",
     "spike:vertical:contract": "node scripts/spikes/verify-vertical-slice.mjs --static-only --parent-contract",
@@ -15,5 +26,15 @@
   "dependencies": {
     "@getpaseo/client": "0.15.0",
     "microsandbox": "0.7.14"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.15.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "~19.2.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "zod": "^4.4.3"
   }
 }
