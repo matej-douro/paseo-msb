@@ -19,7 +19,8 @@
     "lint:fix": "biome check --write .",
     "test": "vitest run",
     "test:release": "PASEO_MSB_RELEASE_TEST=1 vitest run tests/integration",
-    "spike:vertical": "node scripts/spikes/verify-vertical-slice.mjs"
+    "spike:vertical": "node scripts/spikes/verify-vertical-slice.mjs",
+    "spike:identity": "PASEO_HOME=$PWD/.scratch/paseo-home PASEO_PARENT_URL=ws://127.0.0.1:6793/ws node scripts/spikes/verify-identity-lifecycle.mjs"
   },
   "dependencies": {
     "@getpaseo/client": "0.15.4",

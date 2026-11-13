@@ -1,0 +1,8 @@
+{
+  "id": "paseo-msb-identity-spike",
+  "name": "paseo-msb identity spike",
+  "description": "Scratch plugin used to prove real-plugin host registration semantics.",
+  "requirements": {
+    "paseo": ">=0.15.4"
+  }
+}
