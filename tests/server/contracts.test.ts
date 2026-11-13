@@ -114,7 +114,6 @@ describe("RPC contracts", () => {
           labels: {
             "paseo-msb": "v1",
             "paseo-msb-parent": "srv_parent",
-            "paseo-msb-id": "sandbox_1",
             "paseo-msb-phase": "ready",
           },
           runtimeStatus: "running",

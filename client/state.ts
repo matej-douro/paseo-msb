@@ -63,6 +63,8 @@ export function phaseText(phase: Phase): string {
       return "Registering";
     case "ready":
       return "Ready";
+    case "deleting":
+      return "Deleting";
     case "failed":
       return "Failed";
   }
@@ -93,19 +95,27 @@ export function registrationTone(registration: Registration | null): Tone {
 }
 
 export function childPhase(child: VmChild): Phase {
-  return child.kind === "pending" ? child.phase : child.labels[PHASE_LABEL];
+  if (child.kind === "sandbox") return child.labels[PHASE_LABEL];
+  return child.phase;
 }
 
 export function childTone(child: VmChild): Tone {
   const phase = childPhase(child);
   if (phase === "failed") return "danger";
-  if (phase === "ready") return "success";
+  if (phase === "deleting") return "warning";
+  if (phase === "ready" && child.kind !== "registration") return "success";
+  if (child.kind === "registration") return "warning";
   return "accent";
 }
 
 /** Safe text plus bounded, redacted detail when the server has one. */
 export function childErrorText(child: VmChild): string | null {
   if (child.kind === "pending") {
+    if (!child.error) return child.errorDetail ?? null;
+    return withDetail(child.error.message, child.error.detail ?? child.errorDetail);
+  }
+
+  if (child.kind === "registration") {
     if (!child.error) return child.errorDetail ?? null;
     return withDetail(child.error.message, child.error.detail ?? child.errorDetail);
   }

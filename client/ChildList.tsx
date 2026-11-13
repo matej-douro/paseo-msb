@@ -162,6 +162,15 @@ function ChildRow({
               theme={theme}
             />
           </>
+        ) : child.kind === "registration" ? (
+          <>
+            <StatusPill label="Registration only" tone="warning" theme={theme} />
+            <StatusPill
+              label={registrationText(child.registration)}
+              tone={registrationTone(child.registration)}
+              theme={theme}
+            />
+          </>
         ) : (
           <StatusPill label="Pending create" tone="accent" theme={theme} />
         )}

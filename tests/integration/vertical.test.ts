@@ -8,13 +8,12 @@ import {
   ERROR_LABEL,
   GUEST_IMAGE,
   GUEST_PATH,
-  JOB_LABEL,
   PARENT_DAEMON_VERSION,
   PHASE_LABEL,
   PI_VERSION,
   PLUGIN_ID,
+  REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
-  SANDBOX_ID_LABEL,
   sandboxName,
   type CredentialName,
   type Phase,
@@ -37,6 +36,7 @@ import {
   type VmReconcileResult,
 } from "../../shared/contracts";
 import { safeError } from "../../shared/errors";
+import { piInstallArgv } from "../../server/pi-install";
 import {
   allowedHostNames,
   connectDaemon,
@@ -97,7 +97,7 @@ function expectNoStoredValue(label: string, value: unknown): void {
 
 function childPhase(child: VmChild | undefined): Phase | null {
   if (!child) return null;
-  return child.kind === "pending" ? child.phase : child.labels[PHASE_LABEL];
+  return child.kind === "sandbox" ? child.labels[PHASE_LABEL] : child.phase;
 }
 
 function sandboxLabels(config: unknown): Record<string, string> {
@@ -114,9 +114,28 @@ async function managedRegistrations(sandboxId: string): Promise<HostSummary[]> {
   const directory = await paseo.hosts.list();
   return directory.hosts.filter(
     (registration) =>
-      registration.metadata.source === REGISTRATION_SOURCE &&
-      registration.metadata.vm === sandboxId,
+      registration.source?.id === REGISTRATION_PRODUCER_ID &&
+      registration.source?.key === sandboxId,
   );
+}
+
+async function installJobs(name: string) {
+  const handles = await sandboxesNamed(name);
+  if (handles.length !== 1) return [];
+
+  const jobs: { command: readonly string[]; state: string; exitCode: number | null }[] = [];
+  let cursor: string | undefined;
+  while (true) {
+    const page = await handles[0].listJobsWith((builder) => {
+      const configured = builder.all(true).limit(100);
+      return cursor ? configured.cursor(cursor) : configured;
+    });
+    jobs.push(...page.items);
+    if (!page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+
+  return jobs.filter((job) => job.command.join(" ") === piInstallArgv().join(" "));
 }
 
 describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
@@ -318,19 +337,20 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
 
       const config = handles[0].config();
       const labels = sandboxLabels(config);
-      expect(labels[SANDBOX_ID_LABEL]).toBe(createdSandboxId);
+      expect(labels["paseo-msb-id"]).toBeUndefined();
+      expect(labels["paseo-msb-job"]).toBeUndefined();
+      expect(labels[PHASE_LABEL]).toBe("ready");
       expect(
         JSON.stringify(config).includes(GUEST_IMAGE),
         "the pinned guest image was not applied",
       ).toBe(true);
 
-      const jobId = labels[JOB_LABEL];
-      expect(jobId, "the detached Pi install job ID was persisted").toBeTruthy();
-      if (jobId) {
-        const job = await handles[0].getJob(jobId);
-        const info = await job.inspect();
-        expect(info).toMatchObject({ state: "exited", exitCode: 0 });
-      }
+      const jobs = await installJobs(name);
+      expect(jobs.length).toBeGreaterThanOrEqual(1);
+      expect(
+        jobs.every((job) => job.state === "exited" && job.exitCode === 0),
+        "the pinned Pi install did not complete successfully",
+      ).toBe(true);
 
       const registrations = await managedRegistrations(createdSandboxId);
       expect(registrations).toHaveLength(1);
@@ -426,39 +446,62 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         },
         { timeoutMs: 180_000, secrets: [fakeCredentialValue] },
       );
-      expect(restored.metadata.vm).toBe(createdSandboxId);
+      expect(restored.metadata.name).toBe(name);
+      expect(restored.source?.key).toBe(createdSandboxId);
 
       const afterRepair = await sandboxesNamed(name);
       expect(afterRepair).toHaveLength(1);
       expect(afterRepair[0].id).toBe(createdSandboxId);
 
       // Repair removes a stale plugin-owned registration whose VM is gone.
-      const suffix = randomUUID().slice(0, 8);
-      const staleName = `paseo-missing-${suffix}`;
-      const staleSandboxId = `sandbox-missing-${suffix}`;
-      const stale = await paseo.hosts.add({
-        connection: "127.0.0.1:1",
-        label: `${parentId}/${staleName}`,
-        metadata: {
-          source: REGISTRATION_SOURCE,
-          vm: staleSandboxId,
-          name: staleName,
-        },
-        sourceKey: staleSandboxId,
+      // The plugin must create the registration so its producer identity is
+      // the real `plugin:paseo-msb`; a plain client would register as `owner`.
+      const staleRequestId = randomUUID();
+      const staleName = sandboxName(staleRequestId);
+      await rpc<VmCreateResult>(vmCreateRpc.name, {
+        requestId: staleRequestId,
+        secretEnvVars: [credentialName],
       });
-      staleRegistrationId = stale.registrationId;
+
+      const staleChild = await waitFor(
+        "a second plugin-owned registration to reach online",
+        async () => {
+          const list = await rpc<VmListResult>(vmListRpc.name, {});
+          const entry = list.children.find((candidate) => candidate.name === staleName);
+          return entry?.kind === "sandbox" &&
+            entry.labels[PHASE_LABEL] === "ready" &&
+            entry.registration?.status === "online" &&
+            entry.registration.serverId
+            ? entry
+            : null;
+        },
+        { timeoutMs: CREATE_TIMEOUT_MS, secrets: [fakeCredentialValue] },
+      );
+      const staleSandboxId = staleChild.id;
+
+      const staleRegistrations = await managedRegistrations(staleSandboxId);
+      expect(staleRegistrations).toHaveLength(1);
+      staleRegistrationId = staleRegistrations[0].registrationId;
+
+      // Destroy the VM behind the plugin, leaving only its registration.
+      const staleHandle = await msb.Sandbox.get(staleName);
+      await staleHandle.destroy({ force: true, timeoutMs: 15_000 });
+      await waitFor(
+        "the orphaned sandbox to disappear from inventory",
+        async () => {
+          const remaining = await sandboxesNamed(staleName);
+          return remaining.length === 0 ? true : null;
+        },
+        { timeoutMs: 60_000, secrets: [fakeCredentialValue] },
+      );
 
       const staleRepair = await rpc<VmReconcileResult>(vmReconcileRpc.name, {});
       expect(staleRepair.repaired).toContain(staleName);
       await waitFor(
         "the stale registration to be removed",
         async () => {
-          const directory = await paseo.hosts.list();
-          return directory.hosts.some(
-            (entry) => entry.registrationId === stale.registrationId,
-          )
-            ? null
-            : true;
+          const remaining = await managedRegistrations(staleSandboxId);
+          return remaining.length === 0 ? true : null;
         },
         { timeoutMs: 30_000, secrets: [fakeCredentialValue] },
       );

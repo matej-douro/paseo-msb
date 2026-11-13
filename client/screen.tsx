@@ -162,6 +162,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       onBack={() => setSelectedName(null)}
       onRetry={() => void detail.refresh()}
       onRepair={handleRepair}
+      onRetryCreate={handleCreate}
       onDelete={handleDelete}
       onDeleted={() => {
         setSelectedName(null);

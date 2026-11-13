@@ -10,6 +10,7 @@ import {
 import {
   decodeManagedSandbox,
   loadManagedSandboxes,
+  SandboxDecodeError,
 } from "../../server/sandbox";
 import {
   fakeRuntime,
@@ -20,7 +21,7 @@ import {
 
 describe("decodeManagedSandbox", () => {
   it("returns only stable id, name, labels, and runtime status", () => {
-    const handle = fakeSandbox({ id: "sbx_1", name: "paseo-1", job: "job_7" });
+    const handle = fakeSandbox({ id: "sbx_1", name: "paseo-1" });
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
 
     expect(decoded).not.toBeNull();
@@ -28,6 +29,8 @@ describe("decodeManagedSandbox", () => {
       "errorDetail",
       "id",
       "labels",
+      "legacyId",
+      "legacyJobId",
       "name",
       "runtimeStatus",
     ]);
@@ -35,12 +38,12 @@ describe("decodeManagedSandbox", () => {
     expect(decoded!.id).toBe("sbx_1");
     expect(decoded!.name).toBe("paseo-1");
     expect(decoded!.runtimeStatus).toBe("running");
+    expect(decoded!.legacyId).toBeNull();
+    expect(decoded!.legacyJobId).toBeNull();
     expect(decoded!.labels).toEqual({
       [MANAGED_LABEL]: PLUGIN_VERSION,
       [PARENT_LABEL]: PARENT_ID,
-      [SANDBOX_ID_LABEL]: "sbx_1",
       [PHASE_LABEL]: "ready",
-      "paseo-msb-job": "job_7",
     });
     expect(JSON.stringify(decoded)).not.toContain(SECRET_VALUE);
   });
@@ -92,18 +95,27 @@ describe("decodeManagedSandbox", () => {
     expect(decoded!.labels[ERROR_LABEL]).toBe("invalid_config");
   });
 
-  it("marks a stable-id label mismatch as failed without trusting the label", () => {
+  it("quarantines a mismatched legacy stable-id label", () => {
     const handle = fakeSandbox({
       id: "sbx_replacement",
       name: "paseo-1",
       labels: { [SANDBOX_ID_LABEL]: "sbx_original" },
     });
+
+    expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
+  });
+
+  it("accepts a matching legacy stable-id label and reads legacy job ids only as hints", () => {
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      extraLabels: { [SANDBOX_ID_LABEL]: "sbx_1", "paseo-msb-job": "job_7" },
+    });
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
 
-    expect(decoded!.id).toBe("sbx_replacement");
-    expect(decoded!.labels[SANDBOX_ID_LABEL]).toBe("sbx_replacement");
-    expect(decoded!.labels[PHASE_LABEL]).toBe("failed");
-    expect(decoded!.labels[ERROR_LABEL]).toBe("id_mismatch");
+    expect(decoded!.labels).not.toHaveProperty(SANDBOX_ID_LABEL);
+    expect(decoded!.legacyId).toBe("sbx_1");
+    expect(decoded!.legacyJobId).toBe("job_7");
   });
 
   it("does not project an arbitrary error label", () => {

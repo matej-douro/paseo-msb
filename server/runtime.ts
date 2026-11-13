@@ -12,11 +12,12 @@ import {
 import {
   buildSandboxCreatePlan,
   type ExecSpec,
+  type SandboxConnectHandleLike,
   type SandboxCreateHandleLike,
   type SandboxHandleLike,
   type SandboxHost,
   type SandboxJobHandleLike,
-  type SandboxResumeHandleLike,
+  type SandboxJobInfoLike,
   type SandboxRuntime,
 } from "./sandbox";
 
@@ -85,7 +86,10 @@ export function createMicrosandboxRuntime(paseo: PaseoApi): SandboxRuntime {
         handles.push(...(page.sandboxes as unknown as SandboxHandleLike[]));
 
         const next = page.nextCursor;
-        if (!next || seenCursors.has(next)) break;
+        if (!next) break;
+        if (seenCursors.has(next)) {
+          throw new Error("sandbox inventory repeated a cursor");
+        }
         seenCursors.add(next);
         cursor = next;
       }
@@ -115,13 +119,16 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
 
     probePort: probeLoopbackPort,
 
-    async resume(name) {
-      const { Sandbox } = await loadMicrosandbox(paseo);
-      const handle = await Sandbox.get(name);
-      // connect() fails for a stopped sandbox instead of starting it.
-      const sandbox = await handle.connect();
-      const wrapped = wrapCreateHandle(sandbox);
-      return { modify: wrapped.modify, exec: wrapped.exec } satisfies SandboxResumeHandleLike;
+    async connect(handle) {
+      const sandbox = await handle.connect().catch((error) => {
+        throw error;
+      });
+      return wrapConnectHandle(handle.id, sandbox as unknown as SdkSandboxLike);
+    },
+
+    async startInstall(handle, spec) {
+      const sandbox = (await handle.connect()) as unknown as SdkSandboxLike;
+      return sandbox.execDetachedWith(spec.command, (builder) => applyExecSpec(builder, spec));
     },
 
     async destroy(handle) {
@@ -171,7 +178,8 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
         return configured;
       });
 
-      return wrapCreateHandle(await builder.create());
+      const sandbox = await builder.create();
+      return { id: sandbox.id, name: sandbox.name } satisfies SandboxCreateHandleLike;
     },
   };
 }
@@ -199,11 +207,10 @@ interface ExecOptionsBuilderLike {
   stdinNull(): ExecOptionsBuilderLike;
 }
 
-/** Structural view of the SDK sandbox returned by a strict create. */
+/** The subset of `connect()`'s sandbox used for guest execution and installs. */
 interface SdkSandboxLike {
   readonly id: string;
   readonly name: string;
-  modify(options: { labels: Record<string, string> }): Promise<unknown>;
   execDetachedWith(
     command: string,
     configure: (builder: ExecOptionsBuilderLike) => ExecOptionsBuilderLike,
@@ -237,23 +244,18 @@ function applyExecSpec(builder: ExecOptionsBuilderLike, spec: ExecSpec): ExecOpt
   return spec.stdinNull ? configured.stdinNull() : configured;
 }
 
-function wrapCreateHandle(sandbox: SdkSandboxLike): SandboxCreateHandleLike {
+function wrapConnectHandle(
+  expectedId: string,
+  sandbox: SdkSandboxLike,
+): SandboxConnectHandleLike {
+  if (sandbox.id !== expectedId) {
+    throw new Error("sandbox identity changed before connect");
+  }
+
   return {
-    id: sandbox.id,
-    name: sandbox.name,
-
-    async modify(options) {
-      await sandbox.modify({ labels: { ...options.labels } });
-    },
-
-    async execDetached(spec) {
-      return sandbox.execDetachedWith(spec.command, (builder) => applyExecSpec(builder, spec));
-    },
-
     async exec(spec) {
       const output = await sandbox.execWith(spec.command, (builder) => applyExecSpec(builder, spec));
-      if (output.code !== 0) throw new Error("guest command failed");
-      return output.stdout();
+      return { code: output.code, stdout: String(output.stdout()) };
     },
   };
 }
@@ -271,3 +273,5 @@ function probeLoopbackPort(): Promise<number> {
     });
   });
 }
+
+export type { SandboxJobInfoLike };

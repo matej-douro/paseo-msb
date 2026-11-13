@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   CPUS,
+  CREDENTIAL_NAMES,
   ERROR_DETAIL_LABEL,
   ERROR_LABEL,
   GUEST_IMAGE,
@@ -29,7 +30,9 @@ import type { ResolvedSecret } from "./secrets";
 
 /**
  * Structural handles keep the decoder testable with fake sandboxes. The real
- * microsandbox adapter below satisfies the same interface.
+ * microsandbox adapter below satisfies the same interface. Every mutation goes
+ * through `guardedModify`, because the pinned SDK's `modify()` does not reject a
+ * same-name replacement (verified by the task 7 spike).
  */
 export interface SandboxLogEntryLike {
   readonly timestamp: Date | number;
@@ -43,10 +46,40 @@ export interface SandboxJobLogEntryLike {
   readonly data: Uint8Array;
 }
 
+export interface SandboxJobInfoLike {
+  readonly id: string;
+  readonly command: readonly string[];
+  readonly state: string;
+  readonly exitCode: number | null;
+  readonly timedOut?: boolean;
+  readonly createdAt?: number;
+  readonly failure?: { readonly kind: string; readonly message: string } | null;
+}
+
+export interface SandboxJobPageLike {
+  readonly items: readonly SandboxJobInfoLike[];
+  readonly nextCursor: string | null;
+}
+
+export interface SandboxJobListBuilderLike {
+  all(value?: boolean): SandboxJobListBuilderLike;
+  limit(value: number): SandboxJobListBuilderLike;
+  cursor(value: string): SandboxJobListBuilderLike;
+}
+
 export interface SandboxJobLike {
-  inspect(): Promise<{ readonly state: string; readonly exitCode: number | null }>;
+  inspect(): Promise<SandboxJobInfoLike>;
   wait(): Promise<{ readonly code: number }>;
   logs(options: { tail?: number }): Promise<readonly SandboxJobLogEntryLike[]>;
+}
+
+export interface SandboxConnectResultLike {
+  readonly code: number;
+  readonly stdout: string;
+}
+
+export interface SandboxConnectHandleLike {
+  exec(spec: ExecSpec): Promise<SandboxConnectResultLike>;
 }
 
 export interface SandboxHandleLike {
@@ -55,6 +88,11 @@ export interface SandboxHandleLike {
   readonly status: string;
   config(): unknown;
   modify(options: { readonly labels: Readonly<Record<string, string>> }): Promise<unknown>;
+  refresh(): Promise<SandboxHandleLike>;
+  connect(): Promise<SandboxConnectHandleLike>;
+  listJobsWith(
+    configure: (builder: SandboxJobListBuilderLike) => SandboxJobListBuilderLike,
+  ): Promise<SandboxJobPageLike>;
   logs(options: {
     tail?: number;
     sources?: readonly string[];
@@ -66,7 +104,7 @@ export interface SandboxRuntime {
   list(parentId: string): Promise<readonly SandboxHandleLike[]>;
 }
 
-/** One guest command the create runner needs to run with an explicit user. */
+/** One guest command the reconciler runs with an explicit user. */
 export interface ExecSpec {
   readonly command: string;
   readonly args: readonly string[];
@@ -75,20 +113,17 @@ export interface ExecSpec {
   readonly stdinNull?: boolean;
 }
 
-/** A detached guest job, reduced to what the create runner observes. */
+/** A detached guest job, reduced to what the reconciler observes. */
 export interface SandboxJobHandleLike {
   readonly id: string;
   wait(): Promise<{ readonly code: number }>;
-  inspect(): Promise<{ readonly state: string; readonly exitCode: number | null }>;
+  inspect(): Promise<SandboxJobInfoLike>;
 }
 
-/** The handle returned by a strict create, with the guest operations it needs. */
+/** The identity returned by a strict create. */
 export interface SandboxCreateHandleLike {
   readonly id: string;
   readonly name: string;
-  modify(options: { readonly labels: Readonly<Record<string, string>> }): Promise<void>;
-  execDetached(spec: ExecSpec): Promise<SandboxJobHandleLike>;
-  exec(spec: ExecSpec): Promise<string>;
 }
 
 export interface SandboxCreateRequest {
@@ -136,22 +171,16 @@ export interface SandboxCreator {
   create(request: SandboxCreateRequest): Promise<SandboxCreateHandleLike>;
 }
 
-/** The write-side slice shared by create and recovery. */
-export interface SandboxLabelHandleLike {
-  modify(options: { readonly labels: Readonly<Record<string, string>> }): Promise<unknown>;
-}
-
-/** Reconnects to a sandbox so recovery can run read-only guest checks. */
-export interface SandboxResumeHandleLike extends SandboxLabelHandleLike {
-  exec(spec: ExecSpec): Promise<string>;
-}
-
 /**
- * Host-side sandbox operations used by task 4. `resume` never starts a stopped
- * sandbox; `destroy` refuses a same-name replacement through its stable handle.
+ * Host-side sandbox operations. `connect` and `destroy` use the exact captured
+ * handle; `startInstall` launches the single pinned detached Pi install.
  */
 export interface SandboxHost extends SandboxCreator {
-  resume(name: string): Promise<SandboxResumeHandleLike>;
+  connect(handle: SandboxHandleLike): Promise<SandboxConnectHandleLike>;
+  startInstall(
+    handle: SandboxHandleLike,
+    spec: ExecSpec,
+  ): Promise<SandboxJobHandleLike>;
   destroy(handle: SandboxHandleLike): Promise<void>;
 }
 
@@ -185,8 +214,12 @@ export interface DecodedSandbox {
   readonly name: string;
   readonly runtimeStatus: RuntimeStatus;
   readonly labels: ManagedLabels;
-  /** Bounded, redacted diagnostic for a failed sandbox. */
+  /** Bounded, redacted diagnostic for a failed or retrying sandbox. */
   readonly errorDetail: string | null;
+  /** Legacy stable-ID label, read only for migration. */
+  readonly legacyId: string | null;
+  /** Legacy job label, read only for migration. */
+  readonly legacyJobId: string | null;
 }
 
 export interface LoadedSandbox {
@@ -219,63 +252,51 @@ export class SandboxDecodeError extends Error {
   }
 }
 
+/** A guarded label write failed because the generation changed or is unknown. */
+export class SandboxGenerationError extends Error {
+  constructor(readonly code: Extract<SafeErrorCode, "id_mismatch" | "runtime_unavailable">) {
+    super(code);
+    this.name = "SandboxGenerationError";
+  }
+}
+
 /**
- * The runtime config is a wide SDK object. Only labels are read here, and no
- * part of it is returned to callers.
+ * The runtime config is a wide SDK object. Only labels and the fixed credential
+ * names are read here, and no part of it is returned to callers.
  */
 const RawConfigSchema = z.looseObject({
   labels: z.record(z.string(), z.string()).optional(),
+  env: z.unknown().optional(),
+  network: z.unknown().optional(),
 });
 
 const PhaseSchema = z.enum(PHASES);
 const RuntimeStatusSchema = z.enum(RUNTIME_STATUSES);
-const SAFE_LABEL_TOKEN = /^[A-Za-z0-9._:-]{1,128}$/;
+const CREDENTIAL_SET: ReadonlySet<string> = new Set(CREDENTIAL_NAMES);
 
 function normalizeRuntimeStatus(value: string): RuntimeStatus {
   const parsed = RuntimeStatusSchema.safeParse(value);
   return parsed.success ? parsed.data : "unknown";
 }
 
-function decodeLabels(
-  labels: Readonly<Record<string, string>>,
-  handle: SandboxHandleLike,
-  parentId: string,
-): DecodedSandbox {
-  const phase: Phase = (() => {
-    const parsed = PhaseSchema.safeParse(labels[PHASE_LABEL]);
-    return parsed.success ? parsed.data : "failed";
-  })();
-
-  const job = labels[JOB_LABEL];
-  const validJob = job && SAFE_LABEL_TOKEN.test(job) ? job : undefined;
+function decodeLabels(labels: Readonly<Record<string, string>>, handle: SandboxHandleLike): DecodedSandbox {
+  const phaseParsed = PhaseSchema.safeParse(labels[PHASE_LABEL]);
+  const phase: Phase = phaseParsed.success ? phaseParsed.data : "failed";
 
   const rawError = labels[ERROR_LABEL];
-  const error: SafeErrorCode | undefined =
-    rawError && isSafeErrorCode(rawError)
-      ? rawError
-      : phase === "failed"
-        ? "invalid_config"
-        : undefined;
+  let error: SafeErrorCode | undefined =
+    rawError && isSafeErrorCode(rawError) ? rawError : undefined;
 
-  const idMatches = labels[SANDBOX_ID_LABEL] === handle.id;
-  const normalizedPhase: Phase = idMatches ? phase : "failed";
-  const normalizedError: SafeErrorCode | undefined = idMatches
-    ? phase === "failed"
-      ? error
-      : undefined
-    : "id_mismatch";
-  const detail =
-    idMatches && phase === "failed"
-      ? failureDetail(labels[ERROR_DETAIL_LABEL])
-      : null;
+  if (!phaseParsed.success) error = "invalid_config";
+  if (phase === "failed" && !error) error = "invalid_config";
+
+  const detail = error ? failureDetail(labels[ERROR_DETAIL_LABEL]) : null;
 
   const projected: ManagedLabels = {
     [MANAGED_LABEL]: PLUGIN_VERSION,
-    [PARENT_LABEL]: parentId,
-    [SANDBOX_ID_LABEL]: handle.id,
-    [PHASE_LABEL]: normalizedPhase,
-    ...(validJob ? { [JOB_LABEL]: validJob } : {}),
-    ...(normalizedError ? { [ERROR_LABEL]: normalizedError } : {}),
+    [PARENT_LABEL]: labels[PARENT_LABEL] ?? "",
+    [PHASE_LABEL]: phase,
+    ...(error ? { [ERROR_LABEL]: error } : {}),
   };
 
   return {
@@ -284,13 +305,15 @@ function decodeLabels(
     runtimeStatus: normalizeRuntimeStatus(handle.status),
     labels: projected,
     errorDetail: detail,
+    legacyId: labels[SANDBOX_ID_LABEL] ?? null,
+    legacyJobId: labels[JOB_LABEL] ?? null,
   };
 }
 
 /**
  * Returns null for a sandbox that is not managed by this plugin and parent.
- * A managed-looking sandbox whose labels are malformed or whose stable ID does
- * not match its label is projected as failed instead of being hidden.
+ * A legacy ID label that does not match the live handle quarantines the sandbox
+ * as `id_mismatch` instead of adopting or silently ignoring it.
  */
 export function decodeManagedSandbox(
   handle: SandboxHandleLike,
@@ -310,12 +333,18 @@ export function decodeManagedSandbox(
   if (labels[MANAGED_LABEL] !== PLUGIN_VERSION) return null;
   if (labels[PARENT_LABEL] !== parentId) return null;
 
-  return decodeLabels(labels, handle, parentId);
+  const legacyId = labels[SANDBOX_ID_LABEL];
+  if (legacyId !== undefined && legacyId !== handle.id) {
+    throw new SandboxDecodeError("id_mismatch");
+  }
+
+  return decodeLabels(labels, handle);
 }
 
 export async function loadManagedSandboxes(
   runtime: SandboxRuntime,
   parentId: string,
+  redaction: readonly string[] = [],
 ): Promise<SandboxInventory> {
   let handles: readonly SandboxHandleLike[];
   try {
@@ -323,7 +352,7 @@ export async function loadManagedSandboxes(
   } catch (error) {
     return {
       status: "unavailable",
-      error: safeError("inventory_unavailable", failureDetail(error)),
+      error: safeError("inventory_unavailable", failureDetail(error, redaction)),
     };
   }
 
@@ -350,12 +379,12 @@ export async function loadManagedSandboxes(
   return { status: "available", sandboxes, failures };
 }
 
-/** Guard used by tests and later create/recovery code. */
+/** Guard used by tests and later lifecycle code. */
 export function isManagedSandboxName(name: string): boolean {
   return name.startsWith(MANAGED_NAME_PREFIX) && name.length > MANAGED_NAME_PREFIX.length;
 }
 
-function rawManagedLabels(handle: SandboxHandleLike): Record<string, string> | null {
+function rawLabels(handle: SandboxHandleLike): Record<string, string> | null {
   try {
     const parsed = RawConfigSchema.safeParse(handle.config());
     return parsed.success ? (parsed.data.labels ?? {}) : null;
@@ -364,19 +393,145 @@ function rawManagedLabels(handle: SandboxHandleLike): Record<string, string> | n
   }
 }
 
+export type SandboxOwnership = "owned" | "foreign" | "quarantine" | "unknown";
+
 /**
- * Ownership requires the managed label, this parent, and a stable-ID label that
- * matches the live handle. A same-name replacement therefore never inherits an
- * earlier attempt.
+ * Ownership requires the managed and parent labels. A present legacy ID that
+ * differs from the live handle is quarantined. Absence of a legacy ID is valid
+ * for new sandboxes; the name owns the current generation.
  */
+export function ownershipOf(handle: SandboxHandleLike, parentId: string): SandboxOwnership {
+  const labels = rawLabels(handle);
+  if (labels === null) return "unknown";
+  if (labels[MANAGED_LABEL] !== PLUGIN_VERSION) return "foreign";
+  if (labels[PARENT_LABEL] !== parentId) return "foreign";
+
+  const legacyId = labels[SANDBOX_ID_LABEL];
+  if (legacyId !== undefined && legacyId !== handle.id) return "quarantine";
+  return "owned";
+}
+
 export function ownsSandbox(handle: SandboxHandleLike, parentId: string): boolean {
-  const labels = rawManagedLabels(handle);
+  return ownershipOf(handle, parentId) === "owned";
+}
+
+/**
+ * Reads the credential names a sandbox was created with. Values are ignored so
+ * this is safe to use for repeated-create validation and redaction.
+ */
+export function sandboxCredentialNames(handle: SandboxHandleLike): CredentialName[] {
+  let raw: unknown;
+  try {
+    raw = handle.config();
+  } catch {
+    return [];
+  }
+
+  const parsed = RawConfigSchema.safeParse(raw);
+  if (!parsed.success) return [];
+
+  const names = new Set<CredentialName>();
+
+  const env = parsed.data.env;
+  if (Array.isArray(env)) {
+    for (const entry of env) {
+      const name = asRecord(entry)?.name;
+      if (typeof name === "string" && CREDENTIAL_SET.has(name)) {
+        names.add(name as CredentialName);
+      }
+    }
+  } else {
+    const record = asRecord(env);
+    if (record) {
+      for (const name of Object.keys(record)) {
+        if (CREDENTIAL_SET.has(name)) names.add(name as CredentialName);
+      }
+    }
+  }
+
+  const entries = asRecord(asRecord(parsed.data.network)?.secrets)?.secrets;
+  if (Array.isArray(entries)) {
+    for (const entry of entries) {
+      const envVar = asRecord(entry)?.envVar;
+      if (typeof envVar === "string" && CREDENTIAL_SET.has(envVar)) {
+        names.add(envVar as CredentialName);
+      }
+    }
+  }
+
+  return CREDENTIAL_NAMES.filter((name) => names.has(name));
+}
+
+/**
+ * Writes labels only after re-reading the exact generation. The pinned SDK's
+ * `modify()` applies to a same-name replacement, so this guard is mandatory.
+ */
+export async function guardedModify(
+  handle: SandboxHandleLike,
+  labels: Readonly<Record<string, string>>,
+): Promise<void> {
+  let current: SandboxHandleLike;
+  try {
+    current = await handle.refresh();
+  } catch (error) {
+    throw new SandboxGenerationError(
+      isSandboxReplacedError(error) ? "id_mismatch" : "runtime_unavailable",
+    );
+  }
+
+  if (current.id !== handle.id) throw new SandboxGenerationError("id_mismatch");
+
+  try {
+    await current.modify({ labels });
+  } catch (error) {
+    if (isSandboxReplacedError(error)) throw new SandboxGenerationError("id_mismatch");
+    throw error;
+  }
+}
+
+export function isSandboxReplacedError(error: unknown): boolean {
   return (
-    labels !== null &&
-    labels[MANAGED_LABEL] === PLUGIN_VERSION &&
-    labels[PARENT_LABEL] === parentId &&
-    labels[SANDBOX_ID_LABEL] === handle.id
+    typeof error === "object" &&
+    error !== null &&
+    ((error as { code?: unknown }).code === "sandboxReplaced" ||
+      (error as { code?: unknown }).code === "sandbox_replaced")
   );
+}
+
+/** Advances the progress hint and optionally records a safe error. */
+export async function markSandboxPhase(
+  handle: SandboxHandleLike,
+  phase: Phase,
+  options: { readonly code?: SafeErrorCode; readonly detail?: string | null } = {},
+): Promise<void> {
+  const labels: Record<string, string> = { [PHASE_LABEL]: phase };
+
+  if (options.code) {
+    labels[ERROR_LABEL] = options.code;
+    labels[ERROR_DETAIL_LABEL] = options.detail ?? "";
+  } else if (phase === "ready" || phase === "registering") {
+    // Clear an earlier retryable error without writing `failed`.
+    labels[ERROR_LABEL] = "";
+    labels[ERROR_DETAIL_LABEL] = "";
+  }
+
+  await guardedModify(handle, labels);
+}
+
+/**
+ * Persists a retryable or terminal setup error while keeping the actionable
+ * phase. A legacy `failed` phase is never written by new code.
+ */
+export async function markSandboxError(
+  handle: SandboxHandleLike,
+  phase: Phase,
+  code: SafeErrorCode,
+  detail: string | null = null,
+): Promise<void> {
+  await markSandboxPhase(handle, phase === "failed" ? "installing" : phase, {
+    code,
+    detail,
+  });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -435,23 +590,4 @@ export function readSandboxHostPort(handle: SandboxHandleLike): number | null {
   }
 
   return null;
-}
-
-/** Writes only a fixed safe code and bounded, redacted detail. */
-export async function markSandboxFailed(
-  handle: SandboxLabelHandleLike,
-  code: SafeErrorCode,
-  detail: string | null = null,
-): Promise<void> {
-  try {
-    await handle.modify({
-      labels: {
-        [PHASE_LABEL]: "failed",
-        [ERROR_LABEL]: code,
-        ...(detail ? { [ERROR_DETAIL_LABEL]: detail } : {}),
-      },
-    });
-  } catch {
-    // The sandbox stays visible as failed/incomplete through its stable ID.
-  }
 }

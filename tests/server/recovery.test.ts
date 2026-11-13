@@ -1,17 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { ERROR_LABEL, PHASE_LABEL } from "../../shared/constants";
+import { PHASE_LABEL, REGISTRATION_PRODUCER_ID } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
+import { createLifecycleLanes } from "../../server/lanes";
+import { createPendingCreateStore } from "../../server/pending";
 import { recoverManagedSandboxes, type RecoveryContext } from "../../server/recovery";
 import {
   failingRuntime,
+  fakeHostDirectory,
+  fakeRegistration,
   fakeRuntime,
   fakeSandbox,
   FakePaseoHosts,
   FakeSandboxCreator,
+  memorySecretsStore,
   PARENT_ID,
 } from "./fake-runtime";
 
 const NAME = "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
+const PI_ARGV = [
+  "npm",
+  "install",
+  "-g",
+  "--ignore-scripts",
+  "--prefix",
+  "/home/paseo/.local",
+  "@earendil-works/pi-coding-agent@1.1.0",
+] as const;
 
 function recoveryContext(
   runtime: RecoveryContext["runtime"],
@@ -22,11 +36,24 @@ function recoveryContext(
     hosts,
     runtime,
     sandboxHost: new FakeSandboxCreator(),
+    env: {},
+    pending: createPendingCreateStore(),
+    secretsStore: memorySecretsStore(),
+    lanes: createLifecycleLanes(),
     timeoutMs: 100,
     pollMs: 1,
     installTimeoutMs: 100,
     ...overrides,
   };
+}
+
+function ownedRegistration() {
+  return fakeRegistration({
+    registrationId: "reg_owned",
+    label: `${PARENT_ID}/${NAME}`,
+    source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_1" },
+    metadata: { source: "paseo-msb", name: NAME },
+  });
 }
 
 describe("recoverManagedSandboxes", () => {
@@ -40,34 +67,37 @@ describe("recoverManagedSandboxes", () => {
       labelUpdates: labels,
     });
     const hosts = new FakePaseoHosts();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
 
-    await recoverManagedSandboxes(recoveryContext(fakeRuntime([sandbox]), hosts));
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
+    );
 
     expect(hosts.added).toEqual([
       {
         connection: "127.0.0.1:42000",
         label: `${PARENT_ID}/${NAME}`,
-        metadata: { source: "paseo-msb", vm: "sandbox_1", name: NAME },
+        metadata: { source: "paseo-msb", name: NAME },
         sourceKey: "sandbox_1",
       },
     ]);
     expect(hosts.disposed).toBe(1);
-    expect(labels).toContainEqual({ [PHASE_LABEL]: "ready" });
+    expect(sandbox.config()).toMatchObject({ labels: { [PHASE_LABEL]: "ready" } });
   });
 
-  it("waits for the existing detached job instead of starting a second install", async () => {
+  it("waits for an existing detached install instead of starting another", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
-      job: "job_7",
-      jobState: "running",
+      piInstalled: "from-jobs",
+      jobs: [{ id: "job_7", command: PI_ARGV, state: "running" }],
       jobStateAfterWait: "exited",
-      jobExitCode: 0,
+      jobWaitCode: 0,
       labelUpdates: labels,
     });
-    const creator = new FakeSandboxCreator();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
     const hosts = new FakePaseoHosts();
 
     await recoverManagedSandboxes(
@@ -75,41 +105,21 @@ describe("recoverManagedSandboxes", () => {
     );
 
     expect(creator.createCount).toBe(0);
-    expect(creator.resumeCount).toBe(1);
-    expect(creator.execSpecs.map((spec) => spec.command)).toEqual(["sh"]);
+    expect(creator.execSpecs).toEqual([]);
     expect(hosts.added).toHaveLength(1);
-    expect(labels[0]).toEqual({ [PHASE_LABEL]: "registering" });
+    expect(sandbox.config()).toMatchObject({ labels: { [PHASE_LABEL]: "ready" } });
   });
 
-  it("continues an install whose job already exited cleanly", async () => {
-    const sandbox = fakeSandbox({
-      id: "sandbox_1",
-      name: NAME,
-      phase: "installing",
-      job: "job_7",
-      jobState: "exited",
-      jobExitCode: 0,
-    });
-    const creator = new FakeSandboxCreator();
-    const hosts = new FakePaseoHosts();
-
-    await recoverManagedSandboxes(
-      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
-    );
-
-    expect(hosts.added).toHaveLength(1);
-    expect(creator.execSpecs.map((spec) => spec.command)).toEqual(["sh"]);
-  });
-
-  it("fails an install with no persisted job instead of replaying it", async () => {
+  it("starts an install when complete inventory has no matching job", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
+      piInstalled: "from-jobs",
       labelUpdates: labels,
     });
-    const creator = new FakeSandboxCreator();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
     const hosts = new FakePaseoHosts();
 
     await recoverManagedSandboxes(
@@ -117,104 +127,107 @@ describe("recoverManagedSandboxes", () => {
     );
 
     expect(creator.createCount).toBe(0);
-    expect(creator.resumeCount).toBe(0);
-    expect(hosts.added).toEqual([]);
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "install_failed",
-    });
+    expect(creator.execSpecs).toHaveLength(1);
+    expect(creator.execSpecs[0].command).toBe("npm");
+    expect(hosts.added).toHaveLength(1);
+    expect(sandbox.config()).toMatchObject({ labels: { [PHASE_LABEL]: "ready" } });
   });
 
-  it("fails an install whose job is missing from the runtime", async () => {
+  it("does not start an install when job inventory is unavailable", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
-      job: "job_7",
-      getJobError: new Error("job missing"),
+      piInstalled: false,
+      listJobsError: new Error("job inventory failed"),
       labelUpdates: labels,
     });
-
-    await recoverManagedSandboxes(
-      recoveryContext(fakeRuntime([sandbox]), new FakePaseoHosts()),
-    );
-
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "install_failed",
-    });
-  });
-
-  it("fails an install whose job exited non-zero", async () => {
-    const labels: Record<string, string>[] = [];
-    const sandbox = fakeSandbox({
-      id: "sandbox_1",
-      name: NAME,
-      phase: "installing",
-      job: "job_7",
-      jobState: "exited",
-      jobExitCode: 1,
-      labelUpdates: labels,
-    });
-    const hosts = new FakePaseoHosts();
-
-    await recoverManagedSandboxes(recoveryContext(fakeRuntime([sandbox]), hosts));
-
-    expect(hosts.added).toEqual([]);
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "install_failed",
-    });
-  });
-
-  it("fails an install whose sandbox cannot be reconnected", async () => {
-    const labels: Record<string, string>[] = [];
-    const sandbox = fakeSandbox({
-      id: "sandbox_1",
-      name: NAME,
-      phase: "installing",
-      job: "job_7",
-      labelUpdates: labels,
-    });
-    const creator = new FakeSandboxCreator({ resumeError: new Error("stopped") });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
     const hosts = new FakePaseoHosts();
 
     await recoverManagedSandboxes(
       recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
     );
 
+    expect(creator.execSpecs).toEqual([]);
     expect(hosts.added).toEqual([]);
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "install_failed",
+    expect(sandbox.config()).toMatchObject({
+      labels: { [PHASE_LABEL]: "installing", "paseo-msb-error": "job_inventory_unavailable" },
     });
   });
 
-  it("fails an install whose PATH check does not resolve Pi", async () => {
+  it("records install_failed for a confirmed non-zero install", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
-      job: "job_7",
+      piInstalled: false,
+      jobs: [{ id: "job_7", command: PI_ARGV, state: "exited", exitCode: 1 }],
       labelUpdates: labels,
     });
-    const creator = new FakeSandboxCreator({ execOutput: "/usr/bin/pi\n1.1.0\n" });
     const hosts = new FakePaseoHosts();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
 
     await recoverManagedSandboxes(
       recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
     );
 
     expect(hosts.added).toEqual([]);
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "path_unverified",
+    expect(creator.execSpecs).toEqual([]);
+    expect(sandbox.config()).toMatchObject({
+      labels: { [PHASE_LABEL]: "installing", "paseo-msb-error": "install_failed" },
     });
   });
 
-  it("fails a registering sandbox whose registration cannot be added", async () => {
+  it("records runtime_unavailable when the sandbox cannot be reconnected", async () => {
+    const labels: Record<string, string>[] = [];
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "installing",
+      piInstalled: false,
+      connectError: new Error("stopped"),
+      labelUpdates: labels,
+    });
+    const hosts = new FakePaseoHosts();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
+    );
+
+    expect(hosts.added).toEqual([]);
+    expect(sandbox.config()).toMatchObject({
+      labels: { [PHASE_LABEL]: "installing", "paseo-msb-error": "runtime_unavailable" },
+    });
+  });
+
+  it("records path_unverified when Pi is not at the pinned path", async () => {
+    const labels: Record<string, string>[] = [];
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "installing",
+      piInstalled: true,
+      execOutput: "/usr/bin/pi\n1.1.0\n",
+      labelUpdates: labels,
+    });
+    const hosts = new FakePaseoHosts();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
+    );
+
+    expect(hosts.added).toEqual([]);
+    expect(sandbox.config()).toMatchObject({
+      labels: { [PHASE_LABEL]: "installing", "paseo-msb-error": "path_unverified" },
+    });
+  });
+
+  it("records registration_failed when the registration cannot be added", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
@@ -223,16 +236,18 @@ describe("recoverManagedSandboxes", () => {
       labelUpdates: labels,
     });
     const hosts = new FakePaseoHosts({ addError: new Error("hosts.add failed") });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
 
-    await recoverManagedSandboxes(recoveryContext(fakeRuntime([sandbox]), hosts));
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
+    );
 
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "registration_failed",
+    expect(sandbox.config()).toMatchObject({
+      labels: { [PHASE_LABEL]: "registering", "paseo-msb-error": "registration_failed" },
     });
   });
 
-  it("fails a registering sandbox when Pi is not ready", async () => {
+  it("records provider_unavailable when Pi is not ready", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
@@ -241,84 +256,80 @@ describe("recoverManagedSandboxes", () => {
       labelUpdates: labels,
     });
     const hosts = new FakePaseoHosts({ providerStatus: "loading" });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
 
-    await recoverManagedSandboxes(recoveryContext(fakeRuntime([sandbox]), hosts));
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
+    );
 
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "provider_unavailable",
+    expect(sandbox.config()).toMatchObject({
+      labels: { [PHASE_LABEL]: "registering", "paseo-msb-error": "provider_unavailable" },
     });
   });
 
-  it("marks a sandbox stuck in creating as failed", async () => {
+  it("recovers a sandbox left in creating instead of marking it failed", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "creating",
+      piInstalled: "from-jobs",
       labelUpdates: labels,
     });
     const hosts = new FakePaseoHosts();
-
-    await recoverManagedSandboxes(recoveryContext(fakeRuntime([sandbox]), hosts));
-
-    expect(labels).toContainEqual({
-      [PHASE_LABEL]: "failed",
-      [ERROR_LABEL]: "create_failed",
-    });
-    expect(hosts.added).toEqual([]);
-  });
-
-  it("leaves ready and failed sandboxes untouched", async () => {
-    const readyLabels: Record<string, string>[] = [];
-    const failedLabels: Record<string, string>[] = [];
-    const hosts = new FakePaseoHosts();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
 
     await recoverManagedSandboxes(
-      recoveryContext(
-        fakeRuntime([
-          fakeSandbox({ id: "sandbox_1", name: "paseo-ready", phase: "ready", labelUpdates: readyLabels }),
-          fakeSandbox({
-            id: "sandbox_2",
-            name: "paseo-failed",
-            phase: "failed",
-            error: "install_failed",
-            labelUpdates: failedLabels,
-          }),
-        ]),
-        hosts,
-      ),
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
     );
 
-    expect(readyLabels).toEqual([]);
-    expect(failedLabels).toEqual([]);
-    expect(hosts.added).toEqual([]);
+    expect(creator.execSpecs).toHaveLength(1);
+    expect(hosts.added).toHaveLength(1);
+    expect(sandbox.config()).toMatchObject({ labels: { [PHASE_LABEL]: "ready" } });
   });
 
-  it("does nothing when registrations are unavailable", async () => {
+  it("leaves a healthy ready sandbox untouched", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
-      phase: "registering",
+      phase: "ready",
       labelUpdates: labels,
     });
     const hosts = new FakePaseoHosts({
-      listError: new Error("registrations unavailable: leaked detail"),
+      directory: fakeHostDirectory([ownedRegistration()]),
     });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
 
-    await recoverManagedSandboxes(recoveryContext(fakeRuntime([sandbox]), hosts));
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
+    );
 
     expect(labels).toEqual([]);
     expect(hosts.added).toEqual([]);
   });
 
-  it("does nothing when inventory is unavailable", async () => {
+  it("throws when registrations are unavailable so the caller can retry", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
+    const hosts = new FakePaseoHosts({
+      listError: new Error("registrations unavailable: leaked detail"),
+    });
+
+    await expect(
+      recoverManagedSandboxes(
+        recoveryContext(fakeRuntime([sandbox]), hosts, {
+          sandboxHost: new FakeSandboxCreator({ existing: sandbox }),
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("throws when inventory is unavailable so the caller can retry", async () => {
     const hosts = new FakePaseoHosts();
 
     await expect(
       recoverManagedSandboxes(recoveryContext(failingRuntime(), hosts)),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow();
 
     expect(hosts.added).toEqual([]);
     expect(hosts.removed).toEqual([]);
@@ -330,13 +341,15 @@ describe("recoverManagedSandboxes", () => {
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
-      job: "job_7",
-      getJobError: new Error("raw secret token leaked"),
+      piInstalled: false,
+      listJobsError: new Error("raw secret token leaked"),
       labelUpdates: labels,
     });
 
     await recoverManagedSandboxes(
-      recoveryContext(fakeRuntime([sandbox]), new FakePaseoHosts()),
+      recoveryContext(fakeRuntime([sandbox]), new FakePaseoHosts(), {
+        sandboxHost: new FakeSandboxCreator({ existing: sandbox }),
+      }),
     );
 
     expect(JSON.stringify(labels)).not.toContain("raw secret token leaked");

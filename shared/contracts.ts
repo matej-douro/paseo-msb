@@ -3,7 +3,6 @@ import { z } from "zod";
 import {
   CREDENTIAL_NAMES,
   ERROR_LABEL,
-  JOB_LABEL,
   MANAGED_LABEL,
   MAX_ERROR_DETAIL_CHARS,
   PARENT_LABEL,
@@ -12,7 +11,6 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_STATUSES,
   RUNTIME_STATUSES,
-  SANDBOX_ID_LABEL,
 } from "./constants";
 import { SafeErrorSchema, SAFE_ERROR_CODES } from "./errors";
 
@@ -43,9 +41,7 @@ const ManagedLabelsSchema = z
   .object({
     [MANAGED_LABEL]: z.literal(PLUGIN_VERSION),
     [PARENT_LABEL]: z.string().min(1),
-    [SANDBOX_ID_LABEL]: z.string().min(1),
     [PHASE_LABEL]: PhaseSchema,
-    [JOB_LABEL]: z.string().min(1).optional(),
     [ERROR_LABEL]: SafeErrorCodeSchema.optional(),
   })
   .strict();
@@ -54,6 +50,10 @@ const PendingChildSchema = z
   .object({
     kind: z.literal("pending"),
     name: z.string().min(1).max(128),
+    /** Original identify for an idempotent retry. */
+    requestId: z.string().uuid(),
+    /** Original credential names; retries must preserve them. */
+    credentialNames: z.array(CredentialNameSchema),
     phase: PhaseSchema,
     error: SafeErrorSchema.nullable(),
     /** Bounded, redacted reason when the attempt failed. */
@@ -74,9 +74,24 @@ const SandboxChildSchema = z
   })
   .strict();
 
+const RegistrationChildSchema = z
+  .object({
+    kind: z.literal("registration"),
+    name: z.string().min(1).max(128),
+    /** The generation token from `registration.source.key`. */
+    id: z.string().min(1),
+    phase: PhaseSchema,
+    registration: RegistrationSchema,
+    /** Bounded, redacted reason when the child failed. */
+    error: SafeErrorSchema.nullable(),
+    errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
+  })
+  .strict();
+
 export const VmChildSchema = z.discriminatedUnion("kind", [
   PendingChildSchema,
   SandboxChildSchema,
+  RegistrationChildSchema,
 ]);
 
 const LogStreamSchema = z.enum(["stdout", "stderr", "output", "system"]);
@@ -283,6 +298,7 @@ export type VmListResult = z.infer<typeof VmListOutputSchema>;
 export type VmDetailInput = z.infer<typeof VmDetailInputSchema>;
 export type VmDetailResult = z.infer<typeof VmDetailOutputSchema>;
 export type VmChild = z.infer<typeof VmChildSchema>;
+export type RegistrationChild = z.infer<typeof RegistrationChildSchema>;
 export type VmCreateInput = z.infer<typeof VmCreateInputSchema>;
 export type VmCreateResult = z.infer<typeof VmCreateOutputSchema>;
 export type VmDeleteInput = z.infer<typeof VmDeleteInputSchema>;

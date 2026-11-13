@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  ERROR_LABEL,
-  MANAGED_LABEL,
-  PARENT_LABEL,
-  PHASE_LABEL,
-  SANDBOX_ID_LABEL,
-} from "../../shared/constants";
+import { ERROR_LABEL, MANAGED_LABEL, PARENT_LABEL, PHASE_LABEL } from "../../shared/constants";
 import type { VmChild } from "../../shared/contracts";
 import { safeError } from "../../shared/errors";
 import {
@@ -33,6 +27,8 @@ import {
 const PENDING: VmChild = {
   kind: "pending",
   name: "paseo-pending",
+  requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
+  credentialNames: ["ANTHROPIC_API_KEY"],
   phase: "creating",
   error: null,
 };
@@ -44,7 +40,6 @@ const SANDBOX: VmChild = {
   labels: {
     [MANAGED_LABEL]: "v1",
     [PARENT_LABEL]: "srv_parent",
-    [SANDBOX_ID_LABEL]: "sandbox_1",
     [PHASE_LABEL]: "ready",
   },
   runtimeStatus: "running",
@@ -85,6 +80,7 @@ describe("create selection", () => {
 describe("child presentation", () => {
   it("labels phases, runtime, and registration", () => {
     expect(phaseText("installing")).toBe("Installing Pi");
+    expect(phaseText("deleting")).toBe("Deleting");
     expect(phaseText("ready")).toBe("Ready");
     expect(runtimeText("running")).toBe("Running");
     expect(registrationText(SANDBOX.kind === "sandbox" ? SANDBOX.registration : null)).toBe(
@@ -97,6 +93,16 @@ describe("child presentation", () => {
     expect(childPhase(PENDING)).toBe("creating");
     expect(childTone(PENDING)).toBe("accent");
     expect(childTone(SANDBOX)).toBe("success");
+    expect(
+      childTone({
+        kind: "registration",
+        name: "paseo-gone",
+        id: "sandbox_gone",
+        phase: "registering",
+        registration: { registrationId: "reg", status: "offline", serverId: null },
+        error: null,
+      }),
+    ).toBe("warning");
     expect(registrationTone({ registrationId: "reg", status: "error", serverId: null })).toBe(
       "danger",
     );

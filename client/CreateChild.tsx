@@ -90,7 +90,8 @@ export function CreateChild({
             Credentials
           </Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-            Names only. Values are read from the parent environment and never shown.
+            Names only. Values come from the plugin store or parent environment and are never
+            shown.
           </Text>
 
           {credentials.length === 0 ? (

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MAX_ERROR_DETAIL_CHARS } from "../../shared/constants";
-import { failureDetail } from "../../server/diagnostics";
+import {
+  failureDetail,
+  persistedCredentialValues,
+} from "../../server/diagnostics";
 
 describe("failureDetail", () => {
   it("redacts every known credential value", () => {
@@ -27,5 +30,21 @@ describe("failureDetail", () => {
   it("returns null for empty failures", () => {
     expect(failureDetail(null)).toBeNull();
     expect(failureDetail(new Error(""))).toBe("Error");
+  });
+
+  it("reads creation-time credential values from persisted sandbox config", () => {
+    const values = persistedCredentialValues({
+      env: [{ name: "ANTHROPIC_API_KEY", value: "anthropic-old" }],
+      network: {
+        secrets: {
+          secrets: [
+            { envVar: "GH_TOKEN", value: "gh-old" },
+            { envVar: "CUSTOM", value: "not-fixed" },
+          ],
+        },
+      },
+    });
+
+    expect(values.sort()).toEqual(["anthropic-old", "gh-old"]);
   });
 });

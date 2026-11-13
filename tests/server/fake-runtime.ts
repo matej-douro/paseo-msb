@@ -1,31 +1,33 @@
 import {
   ERROR_LABEL,
-  JOB_LABEL,
   MANAGED_LABEL,
   PARENT_LABEL,
   PHASE_LABEL,
   PI_PREFIX,
   PI_VERSION,
   PLUGIN_VERSION,
+  REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
-  SANDBOX_ID_LABEL,
   type CredentialName,
   type Phase,
 } from "../../shared/constants";
 import type {
   ExecSpec,
+  SandboxConnectHandleLike,
   SandboxCreateHandleLike,
   SandboxCreateRequest,
   SandboxHandleLike,
   SandboxHost,
   SandboxJobHandleLike,
+  SandboxJobInfoLike,
   SandboxJobLike,
+  SandboxJobListBuilderLike,
   SandboxLogEntryLike,
-  SandboxResumeHandleLike,
   SandboxRuntime,
 } from "../../server/sandbox";
 import type {
   HostAddInput,
+  HostUpdateInput,
   RegistrationHostsLike,
   RoutedPaseoLike,
 } from "../../server/registration";
@@ -77,22 +79,30 @@ export function unavailableSecretsStore(): SecretsStore {
 }
 
 export interface ManagedLabelOptions {
-  id: string;
+  id?: string;
   parentId?: string;
   phase?: Phase;
-  job?: string;
   error?: string;
 }
 
-export function managedLabels(options: ManagedLabelOptions): Record<string, string> {
+/** New managed labels never include a stable ID or job label. */
+export function managedLabels(options: ManagedLabelOptions = {}): Record<string, string> {
   return {
     [MANAGED_LABEL]: PLUGIN_VERSION,
     [PARENT_LABEL]: options.parentId ?? PARENT_ID,
-    [SANDBOX_ID_LABEL]: options.id,
     [PHASE_LABEL]: options.phase ?? "ready",
-    ...(options.job ? { [JOB_LABEL]: options.job } : {}),
     ...(options.error ? { [ERROR_LABEL]: options.error } : {}),
   };
+}
+
+export interface FakeJobOptions {
+  id: string;
+  command?: readonly string[];
+  state?: string;
+  exitCode?: number | null;
+  timedOut?: boolean;
+  createdAt?: number;
+  failure?: { kind: string; message: string } | null;
 }
 
 export interface FakeSandboxOptions {
@@ -100,7 +110,6 @@ export interface FakeSandboxOptions {
   name: string;
   status?: string;
   phase?: Phase;
-  job?: string;
   error?: string;
   parentId?: string;
   labels?: Record<string, string>;
@@ -112,27 +121,55 @@ export interface FakeSandboxOptions {
   jobLogs?: readonly { timestamp: number; source: string; data: Uint8Array }[];
   labelUpdates?: Record<string, string>[];
   modifyError?: Error;
-  getJobError?: Error;
+  refreshError?: Error;
+  connectError?: Error;
+  execError?: Error;
+  execCode?: number;
+  execOutput?: string;
+  /** Defaults to "from-jobs": a successful Pi job or a ready phase. */
+  piInstalled?: boolean | "from-jobs";
+  jobs?: FakeJobOptions[];
+  listJobsError?: Error;
   jobState?: string;
   jobExitCode?: number;
   jobStateAfterWait?: string;
   jobWaitCode?: number;
   jobWaitError?: Error;
   jobInspectError?: Error;
+  getJobError?: Error;
+}
+
+const PI_COMMAND = ["npm", "install", "-g", "--ignore-scripts", "--prefix", PI_PREFIX, `@earendil-works/pi-coding-agent@${PI_VERSION}`];
+
+function jobList(options: FakeSandboxOptions): FakeJobOptions[] {
+  const jobs = options.jobs ?? [];
+  if ((options.jobState || options.jobExitCode !== undefined) && jobs.length === 0) {
+    jobs.push({
+      id: "job_1",
+      command: PI_COMMAND,
+      state: options.jobState ?? "exited",
+      exitCode: options.jobExitCode ?? 0,
+    });
+  }
+  return jobs;
+}
+
+function isPiCommand(command: readonly string[]): boolean {
+  return command.join(" ") === PI_COMMAND.join(" ");
 }
 
 export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
   const labels = {
     ...managedLabels({
-      id: options.id,
       parentId: options.parentId,
       phase: options.phase,
-      job: options.job,
       error: options.error,
     }),
     ...(options.extraLabels ?? {}),
     ...(options.labels ?? {}),
   };
+
+  const jobs = jobList(options);
 
   const config = {
     image: "ghcr.io/getpaseo/paseo:0.15.4",
@@ -161,31 +198,95 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
     ...(options.configExtras ?? {}),
   };
 
-  return {
+  function jobInfos(): readonly SandboxJobInfoLike[] {
+    return jobs.map((job) => ({
+      id: job.id,
+      command: job.command ?? ["sh", "-lc", "true"],
+      state: job.state ?? "exited",
+      exitCode: job.exitCode ?? 0,
+      timedOut: job.timedOut ?? false,
+      createdAt: job.createdAt,
+      failure: job.failure ?? null,
+    }));
+  }
+
+  function piInstalled(): boolean {
+    if (typeof options.piInstalled === "boolean") return options.piInstalled;
+    if (jobInfos().some((job) => isPiCommand(job.command) && job.state === "exited" && job.exitCode === 0)) {
+      return true;
+    }
+    return labels[PHASE_LABEL] === "ready" || labels[PHASE_LABEL] === "registering";
+  }
+
+  const connectHandle: SandboxConnectHandleLike = {
+    async exec(spec) {
+      if (options.execError) throw options.execError;
+      if (spec.command === "sh" && spec.args.some((arg) => arg.includes("command -v pi"))) {
+        if (!piInstalled()) return { code: 1, stdout: "" };
+        return {
+          code: options.execCode ?? 0,
+          stdout: options.execOutput ?? `${PI_PREFIX}/bin/pi\n${PI_VERSION}\n`,
+        };
+      }
+      return { code: options.execCode ?? 0, stdout: options.execOutput ?? "" };
+    },
+  };
+
+  let currentLabels = labels;
+
+  const handle: SandboxHandleLike = {
     id: options.id,
     name: options.name,
     status: options.status ?? "running",
-    config: () => (options.rawConfig !== undefined ? options.rawConfig : config),
+    config: () => {
+      const raw = options.rawConfig !== undefined ? options.rawConfig : config;
+      if (typeof raw === "object" && raw !== null) {
+        return { ...raw, labels: currentLabels };
+      }
+      return raw;
+    },
     modify: async (update) => {
       if (options.modifyError) throw options.modifyError;
+      currentLabels = { ...currentLabels, ...update.labels };
       options.labelUpdates?.push({ ...update.labels });
+    },
+    refresh: async () => {
+      if (options.refreshError) throw options.refreshError;
+      return handle;
+    },
+    connect: async () => {
+      if (options.connectError) throw options.connectError;
+      return connectHandle;
+    },
+    listJobsWith: async (configure) => {
+      if (options.listJobsError) throw options.listJobsError;
+      const builder = new FakeJobListBuilder();
+      configure(builder);
+      return builder.page(jobInfos());
     },
     logs: async (readOptions) => {
       const tail = readOptions.tail ?? options.logs?.length ?? 0;
       return (options.logs ?? []).slice(-tail);
     },
-    getJob: async (): Promise<SandboxJobLike> => {
+    getJob: async (id: string): Promise<SandboxJobLike> => {
       if (options.getJobError) throw options.getJobError;
+      const job = jobInfos().find((candidate) => candidate.id === id);
+      if (!job) throw new Error("job not found");
 
-      let state = options.jobState ?? "exited";
+      let state = job.state;
       return {
         inspect: async () => {
           if (options.jobInspectError) throw options.jobInspectError;
-          return { state, exitCode: options.jobExitCode ?? 0 };
+          return { ...job, state };
         },
         wait: async () => {
           if (options.jobWaitError) throw options.jobWaitError;
           state = options.jobStateAfterWait ?? "exited";
+          const source = jobs.find((candidate) => candidate.id === id);
+          if (source) {
+            source.state = state;
+            if (options.jobWaitCode !== undefined) source.exitCode = options.jobWaitCode;
+          }
           return { code: options.jobWaitCode ?? 0 };
         },
         logs: async (readOptions) => {
@@ -195,6 +296,43 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
       };
     },
   };
+
+  handleJobs.set(handle, jobs);
+  return handle;
+}
+
+const handleJobs = new WeakMap<SandboxHandleLike, FakeJobOptions[]>();
+
+class FakeJobListBuilder implements SandboxJobListBuilderLike {
+  private limited = 100;
+  private after: string | undefined;
+
+  all(): this {
+    return this;
+  }
+
+  limit(value: number): this {
+    this.limited = value;
+    return this;
+  }
+
+  cursor(value: string): this {
+    this.after = value;
+    return this;
+  }
+
+  page(items: readonly SandboxJobInfoLike[]): {
+    items: readonly SandboxJobInfoLike[];
+    nextCursor: string | null;
+  } {
+    const start = this.after ? Number(this.after) : 0;
+    const slice = items.slice(start, start + this.limited);
+    const next = start + this.limited;
+    return {
+      items: slice,
+      nextCursor: next < items.length ? String(next) : null,
+    };
+  }
 }
 
 export function fakeRuntime(handles: readonly SandboxHandleLike[]): SandboxRuntime {
@@ -211,11 +349,12 @@ export function failingRuntime(): SandboxRuntime {
   };
 }
 
-export function fakeRegistration(overrides: Partial<HostRegistrationLike> = {}): HostRegistrationLike {
+export function fakeRegistration(
+  overrides: Partial<HostRegistrationLike> = {},
+): HostRegistrationLike {
   const metadata =
     overrides.metadata ?? {
       source: REGISTRATION_SOURCE,
-      vm: "sandbox_1",
       name: "paseo-1",
     };
 
@@ -223,9 +362,11 @@ export function fakeRegistration(overrides: Partial<HostRegistrationLike> = {}):
     registrationId: "reg_1",
     serverId: "srv_child",
     status: "online",
+    enabled: true,
     label: `${PARENT_ID}/${metadata.name}`,
-    source: { id: "plugin", key: metadata.vm },
+    source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_1" },
     metadata,
+    targetDescription: "127.0.0.1:41000",
     ...overrides,
   };
 }
@@ -241,6 +382,7 @@ export interface FakePaseoHostsOptions {
   directory?: HostDirectoryLike;
   listError?: Error;
   addError?: Error;
+  updateError?: Error;
   removeError?: Error;
   onlineImmediately?: boolean;
   clientError?: Error;
@@ -251,10 +393,11 @@ export interface FakePaseoHostsOptions {
   providerMissing?: boolean;
 }
 
-/** Recording parent host API with a routed client for provider checks. */
+/** Recording parent host API with the real producer and conflict semantics. */
 export class FakePaseoHosts implements RegistrationHostsLike {
   directory: HostDirectoryLike;
   readonly added: HostAddInput[] = [];
+  readonly updated: { registrationId: string; patch: HostUpdateInput }[] = [];
   readonly removed: string[] = [];
   readonly clients: string[] = [];
   disposed = 0;
@@ -273,20 +416,69 @@ export class FakePaseoHosts implements RegistrationHostsLike {
 
   async add(input: HostAddInput): Promise<HostRegistrationLike> {
     if (this.options.addError) throw this.options.addError;
-    this.added.push(input);
 
+    const existing = this.directory.hosts.find(
+      (registration) =>
+        registration.source?.id === REGISTRATION_PRODUCER_ID &&
+        registration.source?.key === input.sourceKey,
+    );
+
+    if (existing) {
+      const unchanged =
+        existing.label === input.label &&
+        existing.metadata.source === input.metadata.source &&
+        existing.metadata.name === input.metadata.name &&
+        existing.targetDescription === input.connection;
+      if (!unchanged) {
+        const error = new Error("source_conflict") as Error & { code?: string };
+        error.code = "source_conflict";
+        throw error;
+      }
+      return existing;
+    }
+
+    this.added.push(input);
     const online = this.options.onlineImmediately ?? true;
     const registration: HostRegistrationLike = {
       registrationId: `reg_${this.added.length}`,
       serverId: online ? "srv_child" : null,
       status: online ? "online" : "connecting",
+      enabled: true,
       label: input.label,
-      source: { id: "plugin", key: input.sourceKey },
+      source: { id: REGISTRATION_PRODUCER_ID, key: input.sourceKey },
       metadata: input.metadata,
+      targetDescription: input.connection,
     };
 
     this.directory = { ...this.directory, hosts: [...this.directory.hosts, registration] };
     return registration;
+  }
+
+  async update(
+    registrationId: string,
+    patch: HostUpdateInput,
+  ): Promise<HostRegistrationLike> {
+    if (this.options.updateError) throw this.options.updateError;
+    this.updated.push({ registrationId, patch });
+
+    let updated: HostRegistrationLike | null = null;
+    this.directory = {
+      ...this.directory,
+      hosts: this.directory.hosts.map((entry) => {
+        if (entry.registrationId !== registrationId) return entry;
+        updated = {
+          ...entry,
+          ...(patch.label !== undefined ? { label: patch.label } : {}),
+          ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
+          ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+          ...(patch.connection !== undefined ? { targetDescription: patch.connection } : {}),
+        };
+        return updated;
+      }),
+    };
+
+    if (!updated) throw new Error("registration not found");
+    return updated;
   }
 
   async remove(registrationId: string): Promise<void> {
@@ -327,30 +519,25 @@ export class FakePaseoHosts implements RegistrationHostsLike {
 export interface FakeCreatorOptions {
   existing?: SandboxHandleLike | null;
   findError?: Error;
-  /** Consumed one per create attempt before the SDK failure path. */
   createFailures?: readonly Error[];
-  /** Delays the resolved create, for observing an in-flight attempt. */
   createGate?: Promise<void>;
   sandboxId?: string;
   jobId?: string;
   jobExitCode?: number;
   jobState?: string;
-  /** Overrides the job wait, for observing an in-flight install. */
   jobWait?: () => Promise<{ readonly code: number }>;
   execOutput?: string;
   execError?: Error;
   execDetachedError?: Error;
   modifyError?: Error;
-  resumeError?: Error;
   destroyError?: Error;
   hostPorts?: readonly number[];
   probeError?: Error;
 }
 
 /**
- * Recording fake for the create and recovery runners. It captures the exact
- * create request, label updates, and guest command specs so tests can assert
- * the contract without the microsandbox runtime.
+ * Recording fake SandboxHost. Created sandboxes are real fake handles, so the
+ * reconciler can look them up, connect, install, and register end to end.
  */
 export class FakeSandboxCreator implements SandboxHost {
   readonly requests: SandboxCreateRequest[] = [];
@@ -359,17 +546,19 @@ export class FakeSandboxCreator implements SandboxHost {
   readonly destroyed: string[] = [];
   createCount = 0;
   probeCount = 0;
-  resumeCount = 0;
+  connectCount = 0;
 
   private readonly failures: Error[];
+  private readonly sandboxes = new Map<string, SandboxHandleLike>();
 
   constructor(private readonly options: FakeCreatorOptions = {}) {
     this.failures = [...(options.createFailures ?? [])];
+    if (options.existing) this.sandboxes.set(options.existing.name, options.existing);
   }
 
-  async find(_name: string): Promise<SandboxHandleLike | null> {
+  async find(name: string): Promise<SandboxHandleLike | null> {
     if (this.options.findError) throw this.options.findError;
-    return this.options.existing ?? null;
+    return this.sandboxes.get(name) ?? null;
   }
 
   async probePort(): Promise<number> {
@@ -385,53 +574,64 @@ export class FakeSandboxCreator implements SandboxHost {
 
     const failure = this.failures.shift();
     if (failure) throw failure;
-
     if (this.options.createGate) await this.options.createGate;
 
-    const job: SandboxJobHandleLike = {
-      id: this.options.jobId ?? "job_1",
-      wait: this.options.jobWait ?? (async () => ({ code: this.options.jobExitCode ?? 0 })),
-      inspect: async () => ({
-        state: this.options.jobState ?? "exited",
-        exitCode: this.options.jobExitCode ?? 0,
-      }),
-    };
-
-    return {
-      id: this.options.sandboxId ?? "sandbox_1",
+    const id = this.options.sandboxId ?? `sandbox_${this.createCount}`;
+    const jobs: FakeJobOptions[] = [];
+    const handle = fakeSandbox({
+      id,
       name: request.name,
-      modify: (update) => this.modify(update.labels),
-      execDetached: async (spec: ExecSpec) => {
-        this.execSpecs.push(spec);
-        if (this.options.execDetachedError) throw this.options.execDetachedError;
-        return job;
-      },
-      exec: (spec) => this.exec(spec),
-    };
+      phase: "creating",
+      hostPort: request.hostPort,
+      labelUpdates: this.labelUpdates,
+      modifyError: this.options.modifyError,
+      execError: this.options.execError,
+      execOutput: this.options.execOutput,
+      jobs,
+    });
+    this.sandboxes.set(request.name, handle);
+    return { id, name: request.name };
   }
 
-  async resume(_name: string): Promise<SandboxResumeHandleLike> {
-    this.resumeCount += 1;
-    if (this.options.resumeError) throw this.options.resumeError;
+  async connect(handle: SandboxHandleLike): Promise<SandboxConnectHandleLike> {
+    this.connectCount += 1;
+    return handle.connect();
+  }
+
+  async startInstall(
+    handle: SandboxHandleLike,
+    spec: ExecSpec,
+  ): Promise<SandboxJobHandleLike> {
+    this.execSpecs.push(spec);
+    if (this.options.execDetachedError) throw this.options.execDetachedError;
+
+    const id = this.options.jobId ?? "job_1";
+    const jobs = handleJobs.get(handle) ?? [];
+    jobs.push({
+      id,
+      command: [spec.command, ...spec.args],
+      state: this.options.jobState ?? "exited",
+      exitCode: this.options.jobExitCode ?? 0,
+    });
+    handleJobs.set(handle, jobs);
+
     return {
-      modify: (update) => this.modify(update.labels),
-      exec: (spec) => this.exec(spec),
+      id,
+      wait: this.options.jobWait ?? (async () => ({ code: this.options.jobExitCode ?? 0 })),
+      inspect: async () => ({
+        id,
+        command: [spec.command, ...spec.args],
+        state: this.options.jobState ?? "exited",
+        exitCode: this.options.jobExitCode ?? 0,
+        timedOut: false,
+        failure: null,
+      }),
     };
   }
 
   async destroy(handle: SandboxHandleLike): Promise<void> {
     if (this.options.destroyError) throw this.options.destroyError;
     this.destroyed.push(handle.id);
-  }
-
-  private async modify(labels: Readonly<Record<string, string>>): Promise<void> {
-    if (this.options.modifyError) throw this.options.modifyError;
-    this.labelUpdates.push({ ...labels });
-  }
-
-  private async exec(spec: ExecSpec): Promise<string> {
-    this.execSpecs.push(spec);
-    if (this.options.execError) throw this.options.execError;
-    return this.options.execOutput ?? `${PI_PREFIX}/bin/pi\n${PI_VERSION}\n`;
+    this.sandboxes.delete(handle.name);
   }
 }

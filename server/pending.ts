@@ -1,4 +1,4 @@
-import { sandboxName, type Phase } from "../shared/constants";
+import { sandboxName, type CredentialName, type Phase } from "../shared/constants";
 import type { SafeErrorCode } from "../shared/errors";
 
 /**
@@ -7,11 +7,13 @@ import type { SafeErrorCode } from "../shared/errors";
  * creates stay visible across UI navigation.
  *
  * A pending entry never carries credential values: only the request ID, the
- * generated name, a phase, a safe error code, and bounded redacted detail.
+ * generated name, the selected credential **names**, a phase, a safe error code,
+ * and bounded redacted detail.
  */
 export interface PendingCreate {
   readonly requestId: string;
   readonly name: string;
+  readonly credentialNames: readonly CredentialName[];
   readonly phase: Phase;
   readonly createdAt: number;
   readonly errorCode: SafeErrorCode | null;
@@ -22,17 +24,21 @@ export interface PendingCreateStore {
   list(): readonly PendingCreate[];
   find(requestId: string): PendingCreate | null;
   /** Adds the attempt, or returns the existing entry for a repeated request ID. */
-  ensure(requestId: string): PendingCreate;
+  ensure(requestId: string, credentialNames: readonly CredentialName[]): PendingCreate;
   /** Restarts an empty pre-create failure under the same request ID. */
-  restart(requestId: string): PendingCreate;
+  restart(requestId: string, credentialNames: readonly CredentialName[]): PendingCreate;
   fail(requestId: string, code: SafeErrorCode, detail?: string | null): void;
   remove(requestId: string): void;
 }
 
-function initialEntry(requestId: string): PendingCreate {
+function initialEntry(
+  requestId: string,
+  credentialNames: readonly CredentialName[],
+): PendingCreate {
   return {
     requestId,
     name: sandboxName(requestId),
+    credentialNames: [...credentialNames],
     phase: "creating",
     createdAt: Date.now(),
     errorCode: null,
@@ -54,12 +60,12 @@ export function createPendingCreateStore(): PendingCreateStore {
       return entries.get(requestId) ?? null;
     },
 
-    ensure(requestId) {
-      return entries.get(requestId) ?? insert(initialEntry(requestId));
+    ensure(requestId, credentialNames) {
+      return entries.get(requestId) ?? insert(initialEntry(requestId, credentialNames));
     },
 
-    restart(requestId) {
-      return insert(initialEntry(requestId));
+    restart(requestId, credentialNames) {
+      return insert(initialEntry(requestId, credentialNames));
     },
 
     fail(requestId, code, detail = null) {

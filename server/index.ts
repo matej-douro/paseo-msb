@@ -9,10 +9,11 @@ import {
   vmListRpc,
   vmReconcileRpc,
 } from "../shared/contracts";
-import type { CredentialName } from "../shared/constants";
+import { CLEANUP_SETTLE_MS, type CredentialName } from "../shared/constants";
 import { safeError } from "../shared/errors";
 import { createVm } from "./create";
 import { deleteVm } from "./delete";
+import { createLifecycleLanes, LifecycleAbortedError } from "./lanes";
 import { createPendingCreateStore } from "./pending";
 import { reconcileVm } from "./reconcile";
 import { recoverManagedSandboxes } from "./recovery";
@@ -25,14 +26,16 @@ import {
 } from "./secrets-store";
 
 /**
- * Registers the five lifecycle RPCs plus the plugin credential store. Recovery
- * runs once on first use, so a plugin reload resumes unambiguous setup without
- * a terminal history.
+ * Registers the five lifecycle RPCs plus the plugin credential store. One
+ * per-name lifecycle lane serializes Create, recovery, Repair, and Delete.
+ * Recovery starts on first use and is retried after a transient failure.
  */
-export function registerRpcHandlers(server: PluginServerContext): () => void {
+export function registerRpcHandlers(server: PluginServerContext): () => Promise<void> {
   const pending = createPendingCreateStore();
   const secretsStore = createSecretsStore(defaultSecretsFilePath(process.env));
+  const lanes = createLifecycleLanes();
   let recovery: Promise<void> | null = null;
+  let recoveryDone = false;
 
   async function readContext(paseo: PluginHandlerContext["paseo"]): Promise<ReadContext> {
     const stored = await secretsStore.read();
@@ -49,17 +52,31 @@ export function registerRpcHandlers(server: PluginServerContext): () => void {
     };
   }
 
-  function setupContext(paseo: PluginHandlerContext["paseo"]) {
+  function reconcileContext(paseo: PluginHandlerContext["paseo"]) {
     return {
       hosts: paseo.hosts,
       runtime: createMicrosandboxRuntime(paseo),
       sandboxHost: createMicrosandboxHost(paseo),
+      env: process.env,
+      pending,
+      secretsStore,
+      lanes,
     };
   }
 
   function ensureRecovery(paseo: PluginHandlerContext["paseo"]): void {
-    if (recovery) return;
-    recovery = recoverManagedSandboxes(setupContext(paseo)).catch(() => {});
+    if (recoveryDone || recovery) return;
+
+    recovery = recoverManagedSandboxes(reconcileContext(paseo))
+      .then(() => {
+        recoveryDone = true;
+      })
+      .catch(() => {
+        // A transient directory/inventory failure stays retryable on next use.
+      })
+      .finally(() => {
+        recovery = null;
+      });
   }
 
   server.handle(vmListRpc, async (_input, { paseo }) => {
@@ -74,31 +91,27 @@ export function registerRpcHandlers(server: PluginServerContext): () => void {
 
   server.handle(vmCreateRpc, (input, { paseo }) => {
     ensureRecovery(paseo);
-    const setup = setupContext(paseo);
-    return createVm(
-      {
-        ...setup,
-        creator: setup.sandboxHost,
-        env: process.env,
-        pending,
-        secretsStore,
-      },
-      input,
-    );
+    return createVm(reconcileContext(paseo), input);
   });
 
-  server.handle(vmDeleteRpc, (input, { paseo }) =>
-    deleteVm(
-      {
-        hosts: paseo.hosts,
-        sandboxHost: createMicrosandboxHost(paseo),
-      },
-      input,
-    ),
-  );
+  server.handle(vmDeleteRpc, (input, { paseo }) => {
+    const context = reconcileContext(paseo);
+    return lanes
+      .run(
+        input.name,
+        (token) => deleteVm(context, input, token),
+        { abortPrevious: true },
+      )
+      .catch((error) => {
+        if (error instanceof LifecycleAbortedError) {
+          throw new Error(safeError("delete_failed").message);
+        }
+        throw error;
+      });
+  });
 
   server.handle(vmReconcileRpc, (input, { paseo }) =>
-    reconcileVm(setupContext(paseo), input),
+    reconcileVm(reconcileContext(paseo), input),
   );
 
   server.handle(secretsListRpc, () => listSecrets(secretsStore, process.env));
@@ -121,5 +134,10 @@ export function registerRpcHandlers(server: PluginServerContext): () => void {
     }
   });
 
-  return () => {};
+  // Paseo tears the old plugin down before starting the replacement and allows
+  // two seconds for cleanup. Abort and settle promptly; never wait for an
+  // install or registration timeout.
+  return async () => {
+    await lanes.settle(CLEANUP_SETTLE_MS);
+  };
 }

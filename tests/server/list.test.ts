@@ -14,6 +14,7 @@ import {
 const PENDING = {
   requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
   name: "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
+  credentialNames: ["ANTHROPIC_API_KEY"] as const,
   phase: "creating" as const,
   createdAt: 1,
   errorCode: null,
@@ -23,7 +24,7 @@ const PENDING = {
 describe("buildVmList", () => {
   it("joins a managed sandbox with its parent registration", async () => {
     const inventory = await loadManagedSandboxes(
-      fakeRuntime([fakeSandbox({ id: "sandbox_1", name: "paseo-1", job: "job_1" })]),
+      fakeRuntime([fakeSandbox({ id: "sandbox_1", name: "paseo-1" })]),
       PARENT_ID,
     );
 
@@ -67,7 +68,8 @@ describe("buildVmList", () => {
         status: "available",
         hosts: [
           fakeRegistration({
-            metadata: { source: "another-plugin", vm: "sandbox_1", name: "paseo-1" },
+            source: { id: "plugin:another-plugin", key: "sandbox_1" },
+            metadata: { source: "another-plugin", name: "paseo-1" },
           }),
         ],
       },
@@ -91,8 +93,8 @@ describe("buildVmList", () => {
         status: "available",
         hosts: [
           fakeRegistration({
-            source: { id: "plugin", key: "sandbox_old" },
-            metadata: { source: "paseo-msb", vm: "sandbox_old", name: "paseo-1" },
+            source: { id: "plugin:paseo-msb", key: "sandbox_old" },
+            metadata: { source: "paseo-msb", name: "paseo-1" },
           }),
         ],
       },
@@ -124,6 +126,8 @@ describe("buildVmList", () => {
     expect(result.children[0]).toEqual({
       kind: "pending",
       name: PENDING.name,
+      requestId: PENDING.requestId,
+      credentialNames: PENDING.credentialNames,
       phase: "creating",
       error: null,
       errorDetail: null,
@@ -194,6 +198,59 @@ describe("buildVmList", () => {
     });
   });
 
+  it("replaces a pending row when a sandbox with the same name exists", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: PENDING.name, phase: "installing" });
+    const inventory = await loadManagedSandboxes(fakeRuntime([sandbox]), PARENT_ID);
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [PENDING],
+      env: {},
+    });
+
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0]).toMatchObject({
+      kind: "sandbox",
+      name: PENDING.name,
+      id: "sandbox_1",
+    });
+    expect(VmListOutputSchema.parse(result)).toEqual(result);
+  });
+
+  it("includes a registration-only child when no sandbox has that name", () => {
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory: { status: "available", sandboxes: [], failures: [] },
+      registrations: {
+        status: "available",
+        hosts: [
+          fakeRegistration({
+            registrationId: "reg_only",
+            source: { id: "plugin:paseo-msb", key: "sandbox_gone" },
+            metadata: { source: "paseo-msb", name: "paseo-gone" },
+            label: `${PARENT_ID}/paseo-gone`,
+            status: "offline",
+            serverId: null,
+          }),
+        ],
+      },
+      pending: [],
+      env: {},
+    });
+
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0]).toMatchObject({
+      kind: "registration",
+      name: "paseo-gone",
+      id: "sandbox_gone",
+      phase: "registering",
+      registration: { registrationId: "reg_only", status: "offline" },
+    });
+    expect(VmListOutputSchema.parse(result)).toEqual(result);
+  });
+
   it("reports plugin-stored credentials by name only", () => {
     const result = buildVmList({
       parentId: PARENT_ID,
@@ -218,7 +275,6 @@ describe("buildVmList", () => {
       fakeRegistration({
         metadata: {
           source: "paseo-msb",
-          vm: "sandbox_1",
           name: "paseo-1",
           secret: SECRET_VALUE,
         },

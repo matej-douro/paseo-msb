@@ -38,17 +38,35 @@ export const GUEST_INIT_ARGS = ["--", "/usr/local/bin/paseo-docker-entrypoint"] 
 /** Managed sandbox labels. */
 export const MANAGED_LABEL = "paseo-msb";
 export const PARENT_LABEL = "paseo-msb-parent";
-export const SANDBOX_ID_LABEL = "paseo-msb-id";
 export const PHASE_LABEL = "paseo-msb-phase";
-export const JOB_LABEL = "paseo-msb-job";
 export const ERROR_LABEL = "paseo-msb-error";
+
+/**
+ * Legacy labels from the initial implementation. They are read only to migrate
+ * existing children; new sandboxes never write them. A present legacy ID that
+ * does not match the live handle quarantines the sandbox instead of adopting it.
+ */
+export const SANDBOX_ID_LABEL = "paseo-msb-id";
+export const JOB_LABEL = "paseo-msb-job";
 /** Bounded, redacted diagnostic text. Never contains a credential value. */
 export const ERROR_DETAIL_LABEL = "paseo-msb-error-detail";
 
 /** Upper bound for diagnostic text exposed in DTOs, pending state, and labels. */
 export const MAX_ERROR_DETAIL_CHARS = 1_000;
 
-export const PHASES = ["creating", "installing", "registering", "ready", "failed"] as const;
+/**
+ * Phase is a progress hint, not proof of an external side effect. `deleting` is
+ * cleanup-only. `failed` is legacy-only; new failures keep the actionable phase
+ * and carry an error code.
+ */
+export const PHASES = [
+  "creating",
+  "installing",
+  "registering",
+  "ready",
+  "deleting",
+  "failed",
+] as const;
 export type Phase = (typeof PHASES)[number];
 
 export const RUNTIME_STATUSES = [
@@ -100,9 +118,16 @@ export const CREDENTIALS = CREDENTIAL_NAMES.map((envVar) => ({
 export const REGISTRATION_SOURCE = PLUGIN_ID;
 
 /**
+ * The authenticated producer id Paseo assigns to this plugin. Registration
+ * identity is `(REGISTRATION_PRODUCER_ID, handle.id)`; metadata is display and
+ * configuration only.
+ */
+export const REGISTRATION_PRODUCER_ID = `plugin:${PLUGIN_ID}`;
+
+/**
  * Child sandbox names are `paseo-<requestId>`, per DESIGN.md. This is
- * deliberately shorter than the plugin ID; ownership is still proven by the
- * managed, parent, and stable-ID labels.
+ * deliberately shorter than the plugin ID; ownership is proven by the managed
+ * and parent labels, and the current generation is the exact handle id.
  */
 export const MANAGED_NAME_PREFIX = "paseo-";
 
@@ -115,7 +140,12 @@ export function registrationLabel(parentId: string, name: string): string {
 }
 
 /** Read-side size bounds. */
+export const MAX_JOB_PAGES = 100;
 export const MAX_LOG_ENTRIES = 100;
 export const MAX_LOG_LINE_BYTES = 2_000;
 export const MAX_LOG_TOTAL_BYTES = 32_768;
 export const MAX_SANDBOX_PAGE_SIZE = 100;
+export const MAX_JOB_PAGE_SIZE = 100;
+
+/** How long plugin cleanup waits for in-flight lifecycle work to settle. */
+export const CLEANUP_SETTLE_MS = 1_500;

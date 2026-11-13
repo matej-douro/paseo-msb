@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Text, View } from "react-native";
 import type {
   LogBundle,
+  VmCreateInput,
   VmDeleteInput,
   VmDetailResult,
   VmReconcileResult,
@@ -33,6 +34,7 @@ export interface ChildDetailProps {
   onBack(): void;
   onRetry(): void;
   onRepair(name: string): Promise<VmReconcileResult>;
+  onRetryCreate(input: VmCreateInput): Promise<void>;
   onDelete(input: VmDeleteInput): Promise<void>;
   onDeleted(): void;
 }
@@ -51,11 +53,14 @@ export function ChildDetail({
   onBack,
   onRetry,
   onRepair,
+  onRetryCreate,
   onDelete,
   onDeleted,
 }: ChildDetailProps) {
   const toast = useToast();
   const [repairing, setRepairing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [repairError, setRepairError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -63,6 +68,8 @@ export function ChildDetail({
 
   const child = data?.child ?? null;
   const sandbox = child?.kind === "sandbox" ? child : null;
+  const registrationOnly = child?.kind === "registration" ? child : null;
+  const deleteTarget = sandbox ?? registrationOnly;
   const childError = child ? childErrorText(child) : null;
   const logs = data?.logs ?? null;
 
@@ -89,16 +96,36 @@ export function ChildDetail({
     }
   };
 
+  const retryCreate = async () => {
+    if (child?.kind !== "pending" || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+
+    try {
+      await onRetryCreate({
+        requestId: child.requestId,
+        secretEnvVars: child.credentialNames,
+      });
+      toast.show(`Retrying ${child.name}.`, { variant: "info" });
+    } catch (retryFailure) {
+      const message = errorMessage(retryFailure);
+      setRetryError(message);
+      toast.error(message);
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const confirmDelete = async () => {
-    if (!sandbox || deleting) return;
+    if (!deleteTarget || deleting) return;
     setDeleting(true);
     setDeleteError(null);
 
     try {
       await onDelete({
-        name: sandbox.name,
-        id: sandbox.id,
-        confirmName: sandbox.name,
+        name: deleteTarget.name,
+        id: deleteTarget.id,
+        confirmName: deleteTarget.name,
       });
       setDeleteOpen(false);
       toast.show("Child deleted.", { variant: "success" });
@@ -175,28 +202,55 @@ export function ChildDetail({
                   />
                   <DetailRow theme={theme} label="Stable ID" value={sandbox.id} mono />
                 </>
+              ) : registrationOnly ? (
+                <>
+                  <DetailRow theme={theme} label="Kind" value="Registration only" />
+                  <DetailRow
+                    theme={theme}
+                    label="Registration"
+                    value={registrationText(registrationOnly.registration)}
+                  />
+                  <DetailRow theme={theme} label="Stable ID" value={registrationOnly.id} mono />
+                </>
               ) : (
                 <DetailRow theme={theme} label="Kind" value="Pending create" />
               )}
             </View>
 
-            {sandbox?.registration ? (
+            {sandbox?.registration || registrationOnly ? (
               <StatusPill
-                label={registrationText(sandbox.registration)}
-                tone={registrationTone(sandbox.registration)}
+                label={registrationText(
+                  sandbox ? sandbox.registration : (registrationOnly?.registration ?? null),
+                )}
+                tone={registrationTone(
+                  sandbox ? sandbox.registration : (registrationOnly?.registration ?? null),
+                )}
                 theme={theme}
               />
             ) : null}
 
             {childError ? <Notice text={childError} tone="danger" theme={theme} /> : null}
 
-            {sandbox ? (
+            {child.kind === "pending" && child.error ? (
+              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                <ActionButton
+                  label={retrying ? "Retrying…" : "Retry create"}
+                  theme={theme}
+                  variant="primary"
+                  onPress={() => void retryCreate()}
+                  disabled={retrying}
+                  compact
+                />
+              </View>
+            ) : null}
+
+            {deleteTarget ? (
               <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
                 <ActionButton
                   label={repairing ? "Repairing…" : "Repair"}
                   theme={theme}
                   onPress={() => void repair()}
-                  disabled={repairing || deleting}
+                  disabled={repairing || deleting || retrying}
                   compact
                 />
                 <ActionButton
@@ -217,6 +271,8 @@ export function ChildDetail({
                 theme={theme}
               />
             )}
+
+            {retryError ? <Notice text={retryError} tone="danger" theme={theme} /> : null}
 
             {repairError ? (
               <Notice text={repairError} tone="danger" theme={theme} />

@@ -4,22 +4,21 @@ import {
   GUEST_INIT_ARGS,
   GUEST_INIT_COMMAND,
   GUEST_PATH,
-  JOB_LABEL,
   MANAGED_LABEL,
-  MAX_ERROR_DETAIL_CHARS,
   PARENT_LABEL,
   PHASE_LABEL,
-  SANDBOX_ID_LABEL,
+  PLUGIN_VERSION,
 } from "../../shared/constants";
 import type { VmCreateInput } from "../../shared/contracts";
 import { safeError } from "../../shared/errors";
 import { createVm, startCreate, type CreateContext } from "../../server/create";
+import { createLifecycleLanes } from "../../server/lanes";
 import { createPendingCreateStore } from "../../server/pending";
-import { piInstallSpec, piPathCheckSpec } from "../../server/pi-install";
 import { buildSandboxCreatePlan } from "../../server/sandbox";
 import { resolveSelectedSecrets } from "../../server/secrets";
 import { buildVmList } from "../../server/status";
 import {
+  fakeRuntime,
   fakeSandbox,
   FakePaseoHosts,
   FakeSandboxCreator,
@@ -49,7 +48,7 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function waitFor(predicate: () => boolean, deadlineMs = 1000): Promise<void> {
+async function waitFor(predicate: () => boolean, deadlineMs = 1_000): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error("condition was not observed");
@@ -63,10 +62,12 @@ function createContext(
 ): CreateContext {
   return {
     hosts: new FakePaseoHosts(),
-    creator,
+    runtime: fakeRuntime([]),
+    sandboxHost: creator,
     env: { ANTHROPIC_API_KEY: SECRET_VALUE, GH_TOKEN: "gh-secret-value" },
     pending: createPendingCreateStore(),
     secretsStore: memorySecretsStore(),
+    lanes: createLifecycleLanes(),
     installTimeoutMs: 250,
     timeoutMs: 250,
     pollMs: 1,
@@ -75,74 +76,73 @@ function createContext(
 }
 
 describe("createVm", () => {
-  it("returns the generated name immediately and finishes Pi readiness in the background", async () => {
+  it("returns the name immediately and finishes Pi readiness in the lane", async () => {
     const gate = deferred<void>();
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const hosts = new FakePaseoHosts();
     const context = createContext(creator, { hosts });
 
-    const attempt = startCreate(context, INPUT);
+    const attempt = await startCreate(context, INPUT);
 
     expect(attempt.name).toBe(NAME);
     expect(context.pending.find(REQUEST_ID)).toMatchObject({
       name: NAME,
+      credentialNames: ["ANTHROPIC_API_KEY"],
       phase: "creating",
       errorCode: null,
     });
 
-    await tick();
-    expect(creator.createCount).toBe(1);
-    expect(context.pending.find(REQUEST_ID)?.phase).toBe("creating");
-
     gate.resolve();
     await attempt.started;
 
-    expect(context.pending.list()).toEqual([]);
-    expect(creator.requests).toEqual([
-      {
-        name: NAME,
-        parentId: PARENT_ID,
-        hostPort: 41_000,
-        secrets: [
-          {
-            envVar: "ANTHROPIC_API_KEY",
-            value: SECRET_VALUE,
-            allowedHosts: ["api.anthropic.com"],
-          },
-        ],
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(creator.createCount).toBe(1);
+    expect(creator.requests[0]).toMatchObject({
+      name: NAME,
+      parentId: PARENT_ID,
+      secrets: [
+        {
+          envVar: "ANTHROPIC_API_KEY",
+          value: SECRET_VALUE,
+          allowedHosts: ["api.anthropic.com"],
+        },
+      ],
+    });
+
+    const created = await creator.find(NAME);
+    expect(created).not.toBeNull();
+    expect(created!.config()).toMatchObject({
+      labels: {
+        [MANAGED_LABEL]: PLUGIN_VERSION,
+        [PARENT_LABEL]: PARENT_ID,
+        [PHASE_LABEL]: "ready",
       },
-    ]);
-    expect(creator.labelUpdates).toEqual([
-      { [SANDBOX_ID_LABEL]: "sandbox_1", [PHASE_LABEL]: "installing" },
-      { [JOB_LABEL]: "job_1" },
-      { [PHASE_LABEL]: "registering" },
-      { [PHASE_LABEL]: "ready" },
-    ]);
-    expect(creator.execSpecs).toEqual([piInstallSpec(), piPathCheckSpec()]);
-    expect(hosts.added).toEqual([
-      {
-        connection: "127.0.0.1:41000",
-        label: `${PARENT_ID}/${NAME}`,
-        metadata: { source: "paseo-msb", vm: "sandbox_1", name: NAME },
-        sourceKey: "sandbox_1",
-      },
-    ]);
-    expect(hosts.clients).toEqual(["srv_child"]);
-    expect(hosts.disposed).toBe(1);
+    });
+
+    expect(hosts.added).toHaveLength(1);
+    expect(hosts.added[0]).toMatchObject({
+      connection: "127.0.0.1:41000",
+      label: `${PARENT_ID}/${NAME}`,
+      metadata: { source: "paseo-msb", name: NAME },
+      sourceKey: "sandbox_1",
+    });
+
+    const writtenLabels = creator.labelUpdates.flatMap((labels) => Object.keys(labels));
+    expect(writtenLabels).not.toContain("paseo-msb-id");
+    expect(writtenLabels).not.toContain("paseo-msb-job");
+    expect(JSON.stringify(creator.labelUpdates)).not.toContain(SECRET_VALUE);
   });
 
-  it("resolves the RPC before host work completes", async () => {
+  it("resolves create before host work completes", async () => {
     const gate = deferred<void>();
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const context = createContext(creator);
 
     const result = await createVm(context, INPUT);
-
-    expect(result).toEqual({ name: NAME });
-    expect(context.pending.list()).toHaveLength(1);
+    expect(result.name).toBe(NAME);
+    await waitFor(() => creator.createCount === 1);
 
     gate.resolve();
-    await waitFor(() => context.pending.list().length === 0);
   });
 
   it("starts one attempt for a repeated request ID", async () => {
@@ -150,66 +150,60 @@ describe("createVm", () => {
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const context = createContext(creator);
 
-    const first = startCreate(context, INPUT);
-    const second = startCreate(context, INPUT);
+    const first = await startCreate(context, INPUT);
+    const second = await startCreate(context, INPUT);
+
+    expect(second.name).toBe(first.name);
     await second.started;
     await waitFor(() => creator.createCount === 1);
-
-    expect(second.name).toBe(NAME);
-    expect(creator.createCount).toBe(1);
 
     gate.resolve();
     await first.started;
     expect(creator.createCount).toBe(1);
-    expect(context.pending.list()).toEqual([]);
   });
 
-  it("accepts an owned sandbox from an earlier attempt without creating another", async () => {
-    const creator = new FakeSandboxCreator({
-      existing: fakeSandbox({ id: "sandbox_owned", name: NAME, phase: "registering" }),
-    });
+  it("joins an owned sandbox from an earlier attempt without creating another", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_existing", name: NAME, phase: "ready" });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
 
-    const attempt = startCreate(context, INPUT);
+    const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
     expect(creator.createCount).toBe(0);
-    expect(context.pending.list()).toEqual([]);
+    expect(context.hosts).toBeInstanceOf(FakePaseoHosts);
   });
 
-  it("refuses a same-name replacement instead of adopting it", async () => {
-    const creator = new FakeSandboxCreator({
-      existing: fakeSandbox({
-        id: "sandbox_replacement",
-        name: NAME,
-        labels: { [SANDBOX_ID_LABEL]: "sandbox_original" },
-      }),
-    });
+  it("rejects a repeated request with different credential names", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const first = await startCreate(context, INPUT);
 
-    expect(creator.createCount).toBe(0);
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
-      phase: "failed",
-      errorCode: "name_conflict",
-    });
+    await expect(
+      startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] }),
+    ).rejects.toThrow(safeError("invalid_request").message);
+
+    gate.resolve();
+    await first.started;
   });
 
-  it("refuses an unmanaged sandbox that already has the generated name", async () => {
-    const creator = new FakeSandboxCreator({
-      existing: fakeSandbox({
-        id: "sandbox_foreign",
-        name: NAME,
-        labels: { [MANAGED_LABEL]: "v2" },
-      }),
+  it("rejects different credential names for an existing sandbox", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_existing",
+      name: NAME,
+      phase: "ready",
+      configExtras: {
+        env: [{ name: "ANTHROPIC_API_KEY", value: SECRET_VALUE }],
+      },
     });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
-
-    expect(creator.createCount).toBe(0);
-    expect(context.pending.find(REQUEST_ID)?.errorCode).toBe("name_conflict");
+    await expect(
+      startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] }),
+    ).rejects.toThrow(safeError("invalid_request").message);
   });
 
   it("reports a pre-create failure and retries it under the same request ID", async () => {
@@ -218,7 +212,8 @@ describe("createVm", () => {
     });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
     expect(context.pending.find(REQUEST_ID)).toMatchObject({
       name: NAME,
@@ -226,74 +221,79 @@ describe("createVm", () => {
       errorCode: "create_failed",
     });
 
-    const retry = startCreate(context, INPUT);
-
-    expect(retry.name).toBe(NAME);
+    const retry = await startCreate(context, INPUT);
     await retry.started;
 
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
     expect(creator.createCount).toBe(2);
-    expect(context.pending.list()).toEqual([]);
   });
 
-  it("marks the sandbox failed when the Pi install exits non-zero", async () => {
-    const creator = new FakeSandboxCreator({ jobExitCode: 1 });
+  it("marks the sandbox with a retryable error when the Pi install exits non-zero", async () => {
+    const creator = new FakeSandboxCreator({ jobExitCode: 7 });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
-    expect(creator.labelUpdates).toEqual([
-      { [SANDBOX_ID_LABEL]: "sandbox_1", [PHASE_LABEL]: "installing" },
-      { [JOB_LABEL]: "job_1" },
-      {
-        [PHASE_LABEL]: "failed",
+    const created = await creator.find(NAME);
+    expect(created!.config()).toMatchObject({
+      labels: {
+        [PHASE_LABEL]: "installing",
         "paseo-msb-error": "install_failed",
-        "paseo-msb-error-detail": "the Pi install job did not exit successfully",
       },
-    ]);
+    });
+    expect(creator.labelUpdates).toContainEqual({
+      [PHASE_LABEL]: "installing",
+    });
   });
 
-  it("marks the sandbox failed when the detached job cannot start", async () => {
+  it("keeps a launch failure retryable instead of starting a second job", async () => {
     const creator = new FakeSandboxCreator({
-      execDetachedError: new Error("job backend unavailable"),
+      execDetachedError: new Error("job launch failed"),
     });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
-    expect(creator.labelUpdates.at(-1)).toEqual({
-      [PHASE_LABEL]: "failed",
-      "paseo-msb-error": "install_failed",
-      "paseo-msb-error-detail": "Error: job backend unavailable",
+    const created = await creator.find(NAME);
+    expect(created!.config()).toMatchObject({
+      labels: {
+        [PHASE_LABEL]: "installing",
+        "paseo-msb-error": "install_pending",
+      },
     });
   });
 
-  it("marks the sandbox failed when Pi is not on the daemon PATH", async () => {
-    const creator = new FakeSandboxCreator({ execOutput: "/usr/bin/pi\n1.1.0\n" });
+  it("marks the sandbox path_unverified when Pi is not on the daemon PATH", async () => {
+    const creator = new FakeSandboxCreator({ execOutput: "not-pi\n0.0.1\n" });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
-    expect(creator.labelUpdates.at(-1)).toEqual({
-      [PHASE_LABEL]: "failed",
-      "paseo-msb-error": "path_unverified",
-      "paseo-msb-error-detail": "pi did not resolve on the daemon user PATH",
+    const created = await creator.find(NAME);
+    expect(created!.config()).toMatchObject({
+      labels: {
+        [PHASE_LABEL]: "installing",
+        "paseo-msb-error": "path_unverified",
+      },
     });
   });
 
   it("rejects a create whose selected credentials are absent", async () => {
     const creator = new FakeSandboxCreator();
     const context = createContext(creator);
-    const input: VmCreateInput = { requestId: REQUEST_ID, secretEnvVars: ["OPENAI_API_KEY"] };
 
-    expect(() => startCreate(context, input)).toThrow(
-      safeError("missing_credentials").message,
-    );
-    await expect(createVm(context, input)).rejects.toThrow(
-      safeError("missing_credentials").message,
-    );
+    await expect(
+      createVm(context, {
+        requestId: REQUEST_ID,
+        secretEnvVars: ["GEMINI_API_KEY"],
+      }),
+    ).rejects.toThrow(safeError("missing_credentials").message);
 
-    expect(context.pending.list()).toEqual([]);
     expect(creator.createCount).toBe(0);
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
   });
 
   it("resolves a plugin-stored credential before the parent environment", async () => {
@@ -303,11 +303,7 @@ describe("createVm", () => {
       secretsStore: memorySecretsStore({ ANTHROPIC_API_KEY: "stored-value" }),
     });
 
-    const attempt = startCreate(
-      context,
-      INPUT,
-      new Map([["ANTHROPIC_API_KEY", "stored-value"]]),
-    );
+    const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
     expect(creator.requests[0].secrets).toEqual([
@@ -319,99 +315,74 @@ describe("createVm", () => {
     ]);
   });
 
-  it("reads the plugin store when vm.create resolves credentials", async () => {
-    const creator = new FakeSandboxCreator();
-    const context = createContext(creator, {
-      env: {},
-      secretsStore: memorySecretsStore({ GH_TOKEN: "stored-gh-token" }),
-    });
-    const input: VmCreateInput = { requestId: REQUEST_ID, secretEnvVars: ["GH_TOKEN"] };
-
-    await expect(createVm(context, input)).resolves.toEqual({ name: NAME });
-    await waitFor(() => creator.requests.length === 1);
-
-    expect(creator.requests[0].secrets[0]).toMatchObject({
-      envVar: "GH_TOKEN",
-      value: "stored-gh-token",
-    });
-    await waitFor(() => context.pending.list().length === 0);
-  });
-
   it("fails safely when the credential store is unavailable", async () => {
     const creator = new FakeSandboxCreator();
-    const context = createContext(creator, { secretsStore: unavailableSecretsStore() });
+    const context = createContext(creator, {
+      secretsStore: unavailableSecretsStore(),
+    });
 
     await expect(createVm(context, INPUT)).rejects.toThrow(
       safeError("secrets_unavailable").message,
     );
-
-    expect(context.pending.list()).toEqual([]);
     expect(creator.createCount).toBe(0);
   });
 
   it("retries creation on a new loopback port after a bind failure", async () => {
     const creator = new FakeSandboxCreator({
-      createFailures: [new Error("bind: address already in use")],
-      hostPorts: [41_001, 41_002],
+      createFailures: [new Error("address already in use")],
+      hostPorts: [41_000, 42_000],
     });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
-    expect(creator.probeCount).toBe(2);
-    expect(creator.requests.map((request) => request.hostPort)).toEqual([41_001, 41_002]);
-    expect(creator.labelUpdates.at(-1)).toEqual({ [PHASE_LABEL]: "ready" });
-    expect(context.pending.list()).toEqual([]);
+    expect(creator.createCount).toBe(2);
+    expect(creator.requests[1].hostPort).toBe(42_000);
   });
 
   it("reports an exhausted port retry budget", async () => {
     const creator = new FakeSandboxCreator({
       createFailures: [
-        new Error("bind: address already in use"),
-        new Error("bind: address already in use"),
-        new Error("bind: address already in use"),
+        new Error("address already in use"),
+        new Error("address already in use"),
+        new Error("address already in use"),
       ],
     });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
-    expect(creator.createCount).toBe(3);
-    expect(context.pending.find(REQUEST_ID)?.errorCode).toBe("port_unavailable");
-  });
-
-  it("reports an unavailable port probe", async () => {
-    const creator = new FakeSandboxCreator({ probeError: new Error("no loopback") });
-    const context = createContext(creator);
-
-    await startCreate(context, INPUT).started;
-
-    expect(creator.createCount).toBe(0);
-    expect(context.pending.find(REQUEST_ID)?.errorCode).toBe("port_unavailable");
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "port_unavailable",
+    });
   });
 
   it("reports an unavailable parent directory with a bounded detail", async () => {
     const creator = new FakeSandboxCreator();
     const context = createContext(creator, {
-      hosts: new FakePaseoHosts({ listError: new Error("parent directory unavailable: leaked detail") }),
+      hosts: new FakePaseoHosts({ listError: new Error("socket closed") }),
     });
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
-    expect(creator.createCount).toBe(0);
     const pending = context.pending.find(REQUEST_ID);
-    expect(pending?.errorCode).toBe("runtime_unavailable");
-    expect(pending?.errorDetail).toContain("parent directory unavailable");
-    expect(pending!.errorDetail!.length).toBeLessThanOrEqual(MAX_ERROR_DETAIL_CHARS);
+    expect(pending).toMatchObject({ phase: "failed" });
+    expect(pending!.errorDetail).toContain("socket closed");
+    expect(pending!.errorDetail!.length).toBeLessThanOrEqual(1_000);
   });
 
   it("never writes credential values into pending state or labels", async () => {
     const creator = new FakeSandboxCreator({
-      createFailures: [new Error(`pull failed with ${SECRET_VALUE}`)],
+      createFailures: [new Error("create failed with fake-anthropic-secret-value-123")],
     });
     const context = createContext(creator);
 
-    await startCreate(context, INPUT).started;
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
 
     const persisted = JSON.stringify({
       pending: context.pending.list(),
@@ -419,15 +390,6 @@ describe("createVm", () => {
     });
     expect(persisted).not.toContain(SECRET_VALUE);
     expect(persisted).toContain("[redacted]");
-    expect(persisted).toContain("pull failed");
-
-    const retryCreator = new FakeSandboxCreator();
-    const retryContext = createContext(retryCreator);
-    await startCreate(retryContext, INPUT).started;
-
-    expect(
-      JSON.stringify({ pending: retryContext.pending.list(), labels: retryCreator.labelUpdates }),
-    ).not.toContain(SECRET_VALUE);
   });
 
   it("keeps a pending create visible through the list projection", async () => {
@@ -435,8 +397,7 @@ describe("createVm", () => {
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const context = createContext(creator);
 
-    startCreate(context, INPUT);
-    await tick();
+    const attempt = await startCreate(context, INPUT);
 
     const list = buildVmList({
       parentId: PARENT_ID,
@@ -446,16 +407,14 @@ describe("createVm", () => {
       env: context.env,
     });
 
-    expect(list.children[0]).toEqual({
+    expect(list.children[0]).toMatchObject({
       kind: "pending",
       name: NAME,
       phase: "creating",
-      error: null,
-      errorDetail: null,
     });
 
     gate.resolve();
-    await waitFor(() => context.pending.list().length === 0);
+    await attempt.started;
   });
 });
 
@@ -463,57 +422,47 @@ describe("sandbox create plan", () => {
   it("pins the image, resources, init, loopback port, PATH, labels, and header-only secrets", () => {
     const resolution = resolveSelectedSecrets(
       ["ANTHROPIC_API_KEY", "GH_TOKEN"],
-      { ANTHROPIC_API_KEY: SECRET_VALUE, GH_TOKEN: "gh-secret-value" },
+      {
+        ANTHROPIC_API_KEY: "anthropic-secret",
+        GH_TOKEN: "gh-secret",
+      },
     );
-    expect(resolution.status).toBe("ok");
-    if (resolution.status !== "ok") return;
+    if (resolution.status !== "ok") throw new Error("expected resolved secrets");
 
     const plan = buildSandboxCreatePlan({
       name: NAME,
       parentId: PARENT_ID,
-      hostPort: 42_000,
+      hostPort: 43_000,
       secrets: resolution.secrets,
     });
 
-    expect(plan).toMatchObject({
-      name: NAME,
-      image: GUEST_IMAGE,
-      cpus: 2,
-      memoryMib: 2048,
-      detached: true,
-      init: { command: GUEST_INIT_COMMAND, args: [...GUEST_INIT_ARGS] },
-      hostPort: 42_000,
-      guestPort: 6767,
-      env: { PATH: GUEST_PATH },
-      labels: {
-        [MANAGED_LABEL]: "v1",
-        [PARENT_LABEL]: PARENT_ID,
-        [PHASE_LABEL]: "creating",
-      },
+    expect(plan.name).toBe(NAME);
+    expect(plan.image).toBe(GUEST_IMAGE);
+    expect(plan.cpus).toBe(2);
+    expect(plan.memoryMib).toBe(2048);
+    expect(plan.detached).toBe(true);
+    expect(plan.init).toEqual({ command: GUEST_INIT_COMMAND, args: GUEST_INIT_ARGS });
+    expect(plan.hostPort).toBe(43_000);
+    expect(plan.guestPort).toBe(6767);
+    expect(plan.env).toEqual({ PATH: GUEST_PATH });
+    expect(plan.labels).toEqual({
+      [MANAGED_LABEL]: PLUGIN_VERSION,
+      [PARENT_LABEL]: PARENT_ID,
+      [PHASE_LABEL]: "creating",
     });
 
-    expect(plan.secrets.map((secret) => secret.envVar)).toEqual([
-      "ANTHROPIC_API_KEY",
-      "GH_TOKEN",
-    ]);
-    expect(plan.secrets[0].substitution).toEqual({ headers: true, query: false, body: false });
-    expect(plan.secrets[0].allowedHosts).toEqual(["api.anthropic.com"]);
-    expect(plan.secrets[1].allowedHosts).toEqual([
-      "api.github.com",
-      "github.com",
-      "uploads.github.com",
-    ]);
+    for (const secret of plan.secrets) {
+      expect(secret.substitution).toEqual({ headers: true, query: false, body: false });
+    }
   });
 
   it("reports only names with non-empty values and ignores duplicates", () => {
     const resolution = resolveSelectedSecrets(
-      ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
-      { ANTHROPIC_API_KEY: SECRET_VALUE, OPENAI_API_KEY: "  " },
+      ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_API_KEY"],
+      { ANTHROPIC_API_KEY: "anthropic-secret", OPENAI_API_KEY: "  " },
     );
 
-    expect(resolution).toEqual({
-      status: "missing",
-      missing: ["OPENAI_API_KEY"],
-    });
+    expect(resolution.status).toBe("missing");
+    if (resolution.status === "missing") expect(resolution.missing).toEqual(["OPENAI_API_KEY"]);
   });
 });

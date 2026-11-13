@@ -1,6 +1,8 @@
 import type { VmDetailInput, VmDetailResult, VmListResult } from "../shared/contracts";
-import { JOB_LABEL, type CredentialName } from "../shared/constants";
+import type { CredentialName } from "../shared/constants";
 import { safeError, type SafeError } from "../shared/errors";
+import { persistedCredentialValues } from "./diagnostics";
+import { findLatestInstallJob } from "./jobs";
 import {
   credentialValues,
   readJobLogs,
@@ -57,8 +59,9 @@ async function readProjection(context: ReadContext): Promise<Projection> {
   const registrations = registrationsView(loaded);
   const parentId = loaded.status === "available" ? loaded.directory.self.serverId : null;
 
+  const redaction = credentialValues(context.env, context.storedSecrets);
   const inventory: SandboxInventory = parentId
-    ? await loadManagedSandboxes(context.runtime, parentId)
+    ? await loadManagedSandboxes(context.runtime, parentId, redaction)
     : { status: "unavailable", error: safeError("inventory_unavailable") };
 
   return {
@@ -97,12 +100,15 @@ export async function readVmDetail(
     );
 
     if (sandbox) {
-      const secrets = credentialValues(context.env, context.storedSecrets);
-      const jobId = sandbox.sandbox.labels[JOB_LABEL];
+      const secrets = [
+        ...credentialValues(context.env, context.storedSecrets),
+        ...persistedCredentialValues(sandbox.handle.config()),
+      ];
+      const job = await findLatestInstallJob(sandbox.handle).catch(() => null);
       logs = {
         sandbox: await readSandboxLogs(sandbox.handle, secrets),
-        job: jobId
-          ? await readJobLogs(sandbox.handle, jobId, secrets)
+        job: job
+          ? await readJobLogs(sandbox.handle, job.id, secrets)
           : unavailableLogBundle(),
       };
     }

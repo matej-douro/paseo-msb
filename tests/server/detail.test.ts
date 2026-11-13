@@ -27,7 +27,7 @@ function jobLogEntry(text: string, index = 0, source = "stdout") {
 
 function context(runtime: ReadContext["runtime"], pending: ReadContext["pending"] = []): ReadContext {
   return {
-    hosts: { list: async () => fakeHostDirectory([fakeRegistration()]) },
+    hosts: { list: async () => fakeHostDirectory([]) },
     runtime,
     pending,
     env: { ANTHROPIC_API_KEY: SECRET_VALUE },
@@ -61,7 +61,22 @@ describe("readVmDetail", () => {
     const handle = fakeSandbox({
       id: "sandbox_1",
       name: "paseo-1",
-      job: "job_1",
+      jobs: [
+        {
+          id: "job_1",
+          command: [
+            "npm",
+            "install",
+            "-g",
+            "--ignore-scripts",
+            "--prefix",
+            "/home/paseo/.local",
+            "@earendil-works/pi-coding-agent@1.1.0",
+          ],
+          state: "exited",
+          exitCode: 0,
+        },
+      ],
       logs,
       jobLogs: [jobLogEntry(`npm token=${SECRET_VALUE}`, 0)],
     });
@@ -88,7 +103,13 @@ describe("readVmDetail", () => {
 
   it("distinguishes unavailable inventory from empty inventory", async () => {
     const unavailable = await readVmDetail(context(failingRuntime()), { name: "paseo-1" });
-    const empty = await readVmDetail(context(fakeRuntime([])), { name: "paseo-1" });
+    const empty = await readVmDetail(
+      {
+        ...context(fakeRuntime([])),
+        hosts: { list: async () => fakeHostDirectory([]) },
+      },
+      { name: "paseo-1" },
+    );
 
     expect(unavailable.inventory.status).toBe("unavailable");
     expect(unavailable.child).toBeNull();
@@ -103,6 +124,7 @@ describe("readVmDetail", () => {
     const pending = {
       requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       name: "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
+      credentialNames: ["ANTHROPIC_API_KEY"] as const,
       phase: "creating" as const,
       createdAt: 1,
       errorCode: null,
@@ -116,6 +138,8 @@ describe("readVmDetail", () => {
     expect(detail.child).toEqual({
       kind: "pending",
       name: pending.name,
+      requestId: pending.requestId,
+      credentialNames: pending.credentialNames,
       phase: "creating",
       error: null,
       errorDetail: null,
@@ -126,12 +150,13 @@ describe("readVmDetail", () => {
   });
 
   it("reports unavailable logs without failing the detail", async () => {
-    const handle = fakeSandbox({ id: "sandbox_1", name: "paseo-1", job: "job_1" });
+    const handle = fakeSandbox({
+      id: "sandbox_1",
+      name: "paseo-1",
+      listJobsError: new Error("job backend unavailable"),
+    });
     handle.logs = async () => {
       throw new Error("log backend unavailable");
-    };
-    handle.getJob = async () => {
-      throw new Error("job backend unavailable");
     };
 
     const detail = await readVmDetail(context(fakeRuntime([handle])), { name: "paseo-1" });
@@ -144,7 +169,13 @@ describe("readVmDetail", () => {
 
   it("includes the registration identity and status in the detail", async () => {
     const handle = fakeSandbox({ id: "sandbox_1", name: "paseo-1" });
-    const detail = await readVmDetail(context(fakeRuntime([handle])), { name: "paseo-1" });
+    const detail = await readVmDetail(
+      {
+        ...context(fakeRuntime([handle])),
+        hosts: { list: async () => fakeHostDirectory([fakeRegistration()]) },
+      },
+      { name: "paseo-1" },
+    );
 
     expect(detail.registrations.status).toBe("available");
     expect(detail.child).toMatchObject({

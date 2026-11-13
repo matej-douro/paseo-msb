@@ -5,9 +5,8 @@ import {
   PARENT_LABEL,
   PHASE_LABEL,
   PLUGIN_VERSION,
-  REGISTRATION_SOURCE,
+  REGISTRATION_PRODUCER_ID,
   REGISTRATION_STATUSES,
-  SANDBOX_ID_LABEL,
   type CredentialName,
   type RegistrationStatus,
 } from "../shared/constants";
@@ -21,9 +20,12 @@ export interface HostRegistrationLike {
   readonly registrationId: string;
   readonly serverId: string | null;
   readonly status: string;
+  readonly enabled?: boolean;
   readonly label?: string | null;
   readonly source?: { readonly id?: string; readonly key?: string };
   readonly metadata: Readonly<Record<string, string>>;
+  /** Parent-provided connection description, used for deliberate updates. */
+  readonly targetDescription?: string;
 }
 
 export interface HostDirectoryLike {
@@ -68,23 +70,22 @@ export function availableCredentialNames(
 }
 
 export function isManagedRegistration(registration: HostRegistrationLike): boolean {
-  return registration.metadata.source === REGISTRATION_SOURCE;
+  return registration.source?.id === REGISTRATION_PRODUCER_ID;
 }
 
 /**
- * The registration uses the stable sandbox ID as its source key and also
- * records it in metadata. Match only stable identity so a same-name
- * replacement never inherits an older registration.
+ * Registration identity is the authenticated producer plus the exact generation
+ * id. Metadata is configuration and never proves ownership.
  */
 export function findRegistration(
   id: string,
   registrations: readonly HostRegistrationLike[],
 ): HostRegistrationLike | null {
-  const managed = registrations.filter(isManagedRegistration);
   return (
-    managed.find((candidate) => candidate.source?.key === id) ??
-    managed.find((candidate) => candidate.metadata.vm === id) ??
-    null
+    registrations.find(
+      (candidate) =>
+        candidate.source?.id === REGISTRATION_PRODUCER_ID && candidate.source?.key === id,
+    ) ?? null
   );
 }
 
@@ -109,6 +110,8 @@ function pendingChild(pending: PendingCreate): VmChild {
   return {
     kind: "pending",
     name: pending.name,
+    requestId: pending.requestId,
+    credentialNames: [...pending.credentialNames],
     phase: pending.phase,
     error: pending.errorCode ? safeError(pending.errorCode) : null,
     errorDetail: pending.errorDetail,
@@ -131,7 +134,6 @@ function failedChild(parentId: string, failure: SandboxDecodeFailure): VmChild {
   const labels: ManagedLabels = {
     [MANAGED_LABEL]: PLUGIN_VERSION,
     [PARENT_LABEL]: parentId,
-    [SANDBOX_ID_LABEL]: failure.id,
     [PHASE_LABEL]: "failed",
     [ERROR_LABEL]: failure.code,
   };
@@ -142,6 +144,23 @@ function failedChild(parentId: string, failure: SandboxDecodeFailure): VmChild {
     labels,
     runtimeStatus: failure.runtimeStatus,
     registration: null,
+    errorDetail: null,
+  };
+}
+
+function registrationChild(registration: HostRegistrationLike): VmChild | null {
+  const name = registration.metadata.name;
+  const id = registration.source?.key;
+  if (typeof name !== "string" || name.length === 0) return null;
+  if (typeof id !== "string" || id.length === 0) return null;
+
+  return {
+    kind: "registration",
+    name,
+    id,
+    phase: "registering",
+    registration: toRegistrationDto(registration),
+    error: null,
     errorDetail: null,
   };
 }
@@ -163,7 +182,23 @@ function registrationsAvailability(registrations: RegistrationsView): Availabili
  * read-side DTO. Raw sandbox config and environment never enter the result.
  */
 export function buildVmList(input: VmListInput): VmListResult {
-  const children: VmChild[] = input.pending.map(pendingChild);
+  const sandboxNames = new Set<string>();
+
+  if (input.inventory.status === "available") {
+    if (!input.parentId) {
+      throw new Error("available inventory requires a parent id");
+    }
+    for (const sandbox of input.inventory.sandboxes) {
+      sandboxNames.add(sandbox.sandbox.name);
+    }
+    for (const failure of input.inventory.failures) {
+      sandboxNames.add(failure.name);
+    }
+  }
+
+  // A live sandbox replaces a pending row with the same name.
+  const pending = input.pending.filter((entry) => !sandboxNames.has(entry.name));
+  const children: VmChild[] = pending.map(pendingChild);
 
   if (input.inventory.status === "available") {
     if (!input.parentId) {
@@ -174,6 +209,21 @@ export function buildVmList(input: VmListInput): VmListResult {
     }
     for (const failure of input.inventory.failures) {
       children.push(failedChild(input.parentId, failure));
+    }
+  }
+
+  if (input.parentId && input.registrations.status === "available") {
+    const known = new Set(pending.map((entry) => entry.name));
+    for (const registration of input.registrations.hosts) {
+      if (registration.source?.id !== REGISTRATION_PRODUCER_ID) continue;
+      const name = registration.metadata.name;
+      if (typeof name !== "string" || name.length === 0) continue;
+      if (sandboxNames.has(name) || known.has(name)) continue;
+      const child = registrationChild(registration);
+      if (child) {
+        known.add(name);
+        children.push(child);
+      }
     }
   }
 
