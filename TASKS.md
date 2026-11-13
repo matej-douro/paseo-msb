@@ -50,12 +50,14 @@ Add `vm.create` and the host-side runner through Pi readiness, leaving registrat
 
 Acceptance:
 
-- [ ] The client request ID produces `paseo-<requestId>`; strict create and repeated requests cannot allocate a second name or own a same-name replacement.
-- [ ] `vm.create` validates selected fixed credential names, resolves their values from parent env, adds a pending entry, starts background work, and returns `{ name }` immediately.
-- [ ] The runner creates the fixed detached VM with labels, `.init("auto")`, loopback port, and header-only microsandbox secrets. No secret value is written to the pending map, RPC, or logs.
-- [ ] Stable sandbox and job IDs are persisted in labels; Pi installs as `paseo` with the verified package and flags through `execDetachedWith`, and daemon-user PATH is verified.
-- [ ] Phase and short safe error codes are observable through list/detail. Pending creates remain visible after UI navigation without terminal history.
-- [ ] Fake-runtime tests cover success, duplicate request ID, pull/boot/install failure, missing credentials, port retry, and redaction.
+- [x] The client request ID produces `paseo-<requestId>`; strict create and repeated requests cannot allocate a second name or own a same-name replacement.
+- [x] `vm.create` validates selected fixed credential names, resolves their values from parent env, adds a pending entry, starts background work, and returns `{ name }` immediately.
+- [x] The runner creates the fixed detached VM with labels, `.init("auto")`, loopback port, and header-only microsandbox secrets. No secret value is written to the pending map, RPC, or logs.
+- [x] Stable sandbox and job IDs are persisted in labels; Pi installs as `paseo` with the verified package and flags through `execDetachedWith`, and daemon-user PATH is verified.
+- [x] Phase and short safe error codes are observable through list/detail. Pending creates remain visible after UI navigation without terminal history.
+- [x] Fake-runtime tests cover success, duplicate request ID, pull/boot/install failure, missing credentials, port retry, and redaction.
+
+Result: creation is idempotent per request ID, returns before host work, and stops at `registering` for task 4. The pinned image still requires the task 1 fallback of explicit tini init instead of `.init("auto")`, and host port `0` still needs the probe-and-retry loop. Raw SDK and guest errors never reach pending state or labels; only fixed safe codes do.
 
 Files: `server/create.ts`, `server/pending.ts`, `server/pi-install.ts`, `server/secrets.ts`, `server/sandbox.ts`, `shared/`, `tests/server/create.test.ts`, `tests/server/fake-runtime.ts`
 
