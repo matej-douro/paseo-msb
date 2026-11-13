@@ -72,6 +72,24 @@ The parent deduplicates unchanged adds by `(source.id, source.key)`. Changed con
 
 `vm.list` merges pending creates, managed sandboxes, and registrations, including registration-only children. A sandbox replaces a pending row with the same name. Unavailable APIs produce explicit errors or partial results, never authoritative empty inventory. Raw microsandbox config, environment, and secret values never enter public DTOs.
 
+### Generation-exact label writes (pinned SDK limitation)
+
+The pinned `microsandbox@0.7.14` `modify()` does not bind a captured generation: a
+same-name replacement can receive a stale handle's label write, as the identity
+spike asserts. V1 therefore does not claim atomic label writes. It
+
+- refreshes and compares `handle.id` before every label write;
+- treats phase and error labels as best-effort progress hints, never as
+authorization for destruction; and
+- destroys only through `destroy()` on the exact handle after a refresh/compare,
+which the SDK rejects for a replaced generation.
+
+The residual window is a concurrent external replacement created between the
+refresh and a `deleting` tombstone write. That replacement can inherit the
+tombstone and be completed by a later recovery. Eliminating the window requires
+an SDK conditional-mutation primitive; it must not be described as closed
+without one.
+
 ## 4. Create, reconciliation, and readiness
 
 `vm.create({ requestId, secretEnvVars })` validates the fixed input, records a pending attempt, starts host-side work, and returns `{ name }` immediately. Background Create, startup recovery, and manual Repair all call the same idempotent reconciler. At most one operation advances a name at a time; plugin cleanup aborts further side effects promptly, and runners revalidate their generation/tombstone after uncertain awaits.
@@ -119,7 +137,7 @@ Absence from managed, decoded, label-filtered inventory is not proof of deletion
 - exact `Sandbox.get(metadata.name)` plus comparison of `handle.id` with `registration.source.key`; or
 - a complete, unfiltered runtime ID inventory with checked pagination.
 
-A different live ID proves only the old generation is stale. Lookup, decode, or pagination errors block destructive cleanup.
+A different live ID proves only the old generation is stale. Lookup, decode, or pagination errors block destructive cleanup. The runtime absence is revalidated at the moment of removal, so a generation created between an earlier observation and the removal keeps its live registration.
 
 `vm.delete({ name, id, confirmName })` requires the exact logical name, confirmation, and current generation token. In the same per-name lifecycle lane it:
 

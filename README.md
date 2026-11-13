@@ -106,8 +106,10 @@ the authenticated producer `plugin:paseo-msb` plus the exact generation id;
 metadata and labels are configuration, not ownership proof. A user-disabled
 registration is preserved, not re-enabled.
 
-Registration-only children remain visible and actionable. While one remains,
-a same-request Create joins its cleanup instead of allocating a replacement.
+Registration-only children remain visible and actionable. A same-request Create
+first removes only registrations whose generation is proven gone, re-checks the
+runtime, then either advances the generation that appeared or creates one; it
+never leaves a permanent pending row behind.
 
 ### Delete
 
@@ -143,6 +145,38 @@ characters are stripped and the length is capped. Retryable codes include
 `install_pending`, `install_conflict`, `job_inventory_unavailable`,
 `registration_failed`, `registration_timeout`, and `provider_unavailable`.
 
+## Native addon troubleshooting
+
+If `vm.list` reports `Microsandbox inventory is unavailable` with
+`Cannot find native binding. npm has a bug related to optional dependencies…`,
+the npm hint is usually misleading. Run:
+
+```sh
+npm run check:native
+```
+
+It loads the pinned addon under system Node and, when present, under the signed
+`/Applications/Paseo.app` runtime, printing the actual cause chain. Each line is
+only the last error napi-rs saw; the loader hides the real reason.
+
+On macOS the observed failure is a `dlopen` error such as:
+
+```text
+mapping process and mapped file (non-platform) have different Team IDs
+```
+
+The published addon is ad-hoc signed (no Team ID), while `Paseo.app` runs with
+the hardened runtime and does not carry
+`com.apple.security.cs.disable-library-validation`. macOS therefore refuses to
+map the addon into the app's plugin process. Reinstalling `node_modules` cannot
+change that, and the addon itself is fine under system Node.
+
+Use a parent daemon that runs under system Node for this plugin (for example
+`@getpaseo/cli`, as in the release instructions below), or a Paseo build that is
+signed/permitted to load the addon. Inventory and detail errors include the full
+cause chain, so the dlopen reason is visible in the UI rather than only the npm
+hint.
+
 ## Trust boundary
 
 The child daemon is published only on parent loopback and runs without
@@ -159,17 +193,27 @@ rediscovers labelled sandboxes and plugin-owned registrations and feeds each
 name to the same reconciler. It does not create, start, or adopt a VM. The only
 destroy it performs is completing an explicit `deleting` tombstone.
 
-Plugin cleanup aborts in-flight lanes promptly instead of waiting for install or
-registration timeouts. A reload before a sandbox exists can lose the empty
-pending create; retrying that request ID is safe. A stopped VM is not started
-automatically, and there is no operation history. Uncertain setup keeps its
-actionable phase and a safe error until Repair or Delete.
+Plugin cleanup permanently closes every lane before it waits, so no in-flight or
+queued Create, recovery, Repair target, or Delete can start a side effect during
+or after teardown. Job, guest, label, log, and parent-directory calls are bounded
+and carry the lane's abort signal. A reload before a sandbox exists removes the
+cancelled pending attempt; retrying that request ID is safe. A stopped VM is not
+started automatically, and there is no operation history. Uncertain setup keeps
+its actionable phase and a safe error until Repair or Delete.
 
 Legacy `paseo-msb-id` and `paseo-msb-job` labels are read only for migration. A
 matching legacy ID is tolerated; a mismatched legacy ID quarantines the VM as
-`id_mismatch` instead of adopting it. Legacy `failed` phases are not replayed;
-actual Pi readiness still wins. Existing registrations are updated to the current
-metadata shape on their next successful reconciliation.
+`id_mismatch` instead of adopting it. A legacy `failed` phase is reclassified
+from the complete job inventory: an active install is awaited, a successful job
+wins, a confirmed failed job stays terminal, and no job history permits one
+idempotent install. Existing registrations are updated to the current metadata
+shape on their next successful reconciliation.
+
+The pinned SDK's `modify()` is not generation-bound: a same-name replacement can
+receive a stale handle's label write. Label writes therefore refresh and compare
+the exact id first and are never used as destructive authority. Stale-
+registration cleanup re-reads the runtime at removal time. The remaining window,
+and why it is not claimed closed, is documented in [DESIGN.md](./DESIGN.md).
 
 ## Development
 
@@ -192,10 +236,13 @@ through the plugin RPCs. It also:
 
 - reloads the plugin during the Pi installation and verifies one sandbox, one
   detached job, and one registration remain;
+- asserts the pinned parent daemon, microsandbox SDK, guest image, and Pi version;
 - stores one fake fixed credential, verifies it reaches only the allowed
   microsandbox secret entry with header-only substitution, and verifies it never
-  appears in RPC output, plugin logs, sandbox logs, pending state, or test
-  artifacts;
+  appears in RPC output, plugin logs, raw sandbox/job/system logs, pending state,
+  labels, or test artifacts;
+- replaces and then removes that stored value and re-checks detail redaction of
+  the creation-time value persisted in the VM config;
 - restores a missing registration, then removes an orphaned plugin-owned
   registration by creating a second child, destroying its sandbox behind the
   plugin, and confirming Repair removes only the registration;
@@ -226,8 +273,8 @@ The test requires at least one of the five credential names to be unused in the
 plugin store, because it stores a fake value under that name and removes it
 afterwards. An isolated `PASEO_HOME` satisfies this. Set `PASEO_PASSWORD` when
 the parent daemon requires authentication. Set `PASEO_MSB_SECRETS_FILE` on the
-**parent daemon process** to relocate the plugin store; the test discovers the
-active path through `secrets.list`.
+**parent daemon process** to relocate the plugin store; no RPC exposes the store
+path.
 
 Spike results and the original pin verification:
 [docs/spikes/vertical-slice.md](./docs/spikes/vertical-slice.md).

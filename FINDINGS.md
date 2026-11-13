@@ -95,3 +95,32 @@ Legacy migration also rejects `failed/install_failed` before inspecting job inve
 - Several identity-spike outcomes are recorded rather than asserted, so `npm run spike:identity` is not a complete regression gate.
 
 **Required outcome:** implement the full design release matrix: after-side-effect uncertainty, concurrent operations, reload during install and deletion, exact resource counts, real pin assertions, store/environment and removed/replaced canaries, raw microsandbox logs, and no destructive fallback for malformed config/pagination. Until then, task 7's broad verification statements are not accepted as complete.
+
+## Task 8 resolution
+
+Task 8 addressed every finding above in `server/`, `client/`, `shared/`, and the tests:
+
+1. `settle()` permanently closes all lanes before waiting; `bounded()` races every job, guest,
+   label, log, lookup, create, and destroy call against a timeout and the lane signal.
+2. Create reserves synchronously and returns before external work; the lane resolves credentials,
+   reconciles, and settles the pending attempt exactly once on success, failure, or cancellation.
+3. Registration ownership is the parent directory plus authenticated `(source.id, source.key)`.
+   Connection (via the parent's `targetDescription`), label, and metadata drift are repaired with
+   one explicit update; disabled registrations are never re-enabled.
+4. Stale-registration cleanup re-reads the runtime at removal time, and the unit suite covers a
+   generation appearing between observation and removal. Because the pinned `modify()` cannot bind
+   a generation, `DESIGN.md` now states the limitation and the residual tombstone window rather
+   than claiming atomicity.
+5. Redaction runs through one diagnostic boundary for directory errors, unexpected reconciler
+   errors, legacy detail labels, and persisted values from every relevant VM. A legacy
+   `failed/install_failed` label is reclassified from complete job inventory before any terminal
+   decision.
+6. The UI separates unavailable, empty, missing, and unregistered state; polling is
+   latest-request-wins; detail selects an exact generation when rows share a name; `secrets.list` is
+   names/sources only; store permissions are enforced.
+7. The identity spike asserts every stale-handle outcome, and the unit/release suites cover lane
+   closure, cancellation, reload during deletion, exact install counts, pins, raw log sinks, and
+   replaced/removed credential canaries.
+
+`npm run typecheck`, `npm run lint`, and `npm test` pass. The live `npm run test:release` requires a
+reachable verified parent daemon and was not run in this environment; see [TASKS.md](./TASKS.md).

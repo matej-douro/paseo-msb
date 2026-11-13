@@ -185,31 +185,59 @@ the existing design; do not add another lifecycle layer or broaden v1 scope.
 
 ### Acceptance
 
-- [ ] Permanently close lifecycle lanes during plugin cleanup and make every job/SDK wait bounded
+- [x] Permanently close lifecycle lanes during plugin cleanup and make every job/SDK wait bounded
   and abortable. No operation may start or continue side effects after closure, including later
   names in a multi-name Repair.
-- [ ] Simplify Create reservation and pending settlement: validate credential names synchronously,
+- [x] Simplify Create reservation and pending settlement: validate credential names synchronously,
   return before external work, run preflight inside the lane, and settle every success/failure/
   cancellation exactly once. Registration-only cleanup remains visible and actionable.
-- [ ] Use one registration ownership predicate based on the parent directory and authenticated
+- [x] Use one registration ownership predicate based on the parent directory and authenticated
   producer/source key. Repair connection, label, and metadata drift without treating labels as
   ownership or re-enabling disabled registrations.
-- [ ] Establish genuine exact-generation mutation and stale-cleanup semantics. Cover replacement
+- [x] Establish genuine exact-generation mutation and stale-cleanup semantics. Cover replacement
   between refresh and modify and between absence observation and removal; if the pinned SDK cannot
   provide the required guarantee, narrow `DESIGN.md` rather than claiming it.
-- [ ] Centralize diagnostic redaction across current and persisted VM credentials, including
+- [x] Centralize diagnostic redaction across current and persisted VM credentials, including
   directory errors, unexpected reconciler errors, and legacy labels. Rediscover actual active jobs
   behind legacy `failed/install_failed` before declaring terminal failure.
-- [ ] Distinguish unavailable/empty/missing/unregistered in the UI, make polling latest-request-wins
+- [x] Distinguish unavailable/empty/missing/unregistered in the UI, make polling latest-request-wins
   and post-mutation refreshes effective, and align registration-only projection, store RPC fields,
   and owner-only store permissions with `DESIGN.md`.
-- [ ] Turn identity spikes into assertion-backed regression checks and complete the release matrix:
+- [x] Turn identity spikes into assertion-backed regression checks and complete the release matrix:
   after-side-effect failures, concurrent lifecycle operations, reload during install and deletion,
   exact resource counts, verified runtime/SDK/image pins, and malformed config/pagination faults.
 - [ ] Verify store and environment canaries, removed/replaced creation-time values, and injected
   upstream errors against RPC output, plugin logs, raw sandbox/job/system logs, pending state,
   labels, and test artifacts. `npm run typecheck`, `npm run lint`, `npm test`, and
   `npm run test:release` pass on the verified pins, with affected documentation updated.
+
+Result: lanes are permanently closed by `settle()`, so Create/recovery/Repair/Delete (including
+later names in one Repair) cannot start after cleanup. Job, guest, label, log, lookup, create, and
+destroy calls are bounded and carry the lane signal. Create reserves synchronously, returns before
+any external work, resolves credentials inside the lane, and settles exactly once (success, failure,
+or cancellation). Registration ownership is now only the directory plus authenticated
+`(source.id, source.key)`; connection, label, and metadata drift are repaired through one explicit
+update and disabled registrations are preserved. Stale-registration cleanup re-reads the runtime at
+removal time. The pinned `modify()` remains non-generation-bound, so `DESIGN.md` now states that
+limitation and its residual window instead of claiming atomic label writes.
+
+Redaction is centralized in the diagnostic boundary and covers directory failures, unexpected
+reconciler errors, legacy detail labels, and every managed VM's persisted values for inventory-wide
+reads. A legacy `failed/install_failed` label is reclassified from the complete job inventory before
+any terminal decision. The UI distinguishes unavailable, empty, missing, and unregistered state;
+polling is latest-request-wins; detail can select an exact generation when a failed pending attempt
+and a registration-only child share a name. `secrets.list` no longer exposes the store path and
+store permissions are enforced rather than best effort.
+
+Unit coverage now includes lane closure, cancellation settlement, missing credentials in-lane,
+legacy job recovery, registration drift, removal-time revalidation, interrupted deletion followed by
+recovery, redacted legacy detail labels, and exact-generation detail selection. The identity spike
+asserts every stale-handle outcome instead of recording it, and the live release test asserts exact
+install counts, pins, raw log sinks, and replaced/removed credential canaries.
+
+Validation in this environment: `npm run typecheck`, `npm run lint`, and `npm test` pass. The live
+`npm run test:release` was not executed because no reachable verified parent daemon was available;
+run it on the documented pins before accepting the final checkbox.
 
 Files: `DESIGN.md`, `FINDINGS.md`, `shared/`, `server/`, `client/`, `tests/`,
 `scripts/spikes/`, `docs/spikes/`, `README.md`
