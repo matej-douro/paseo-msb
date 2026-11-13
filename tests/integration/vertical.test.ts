@@ -13,7 +13,6 @@ import {
   MICROSANDBOX_VERSION,
   PARENT_DAEMON_VERSION,
   PHASE_LABEL,
-  PI_VERSION,
   PLUGIN_ID,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
@@ -21,6 +20,12 @@ import {
   type CredentialName,
   type Phase,
 } from "../../shared/constants";
+import {
+  CLAUDE_CODE_VERSION,
+  PROVISIONING_PI_VERSION,
+  buildProvisionScript,
+  type CanonicalPlan,
+} from "../../shared/provisioning";
 import {
   secretsDeleteRpc,
   secretsListRpc,
@@ -39,7 +44,6 @@ import {
   type VmReconcileResult,
 } from "../../shared/contracts";
 import { safeError } from "../../shared/errors";
-import { piInstallArgv } from "../../server/pi-install";
 import {
   allowedHostNames,
   connectDaemon,
@@ -74,6 +78,7 @@ let fakeCredentialValue = "";
 let credentialWasStored = false;
 let createdName = "";
 let createdSandboxId = "";
+let createdPlan: CanonicalPlan | null = null;
 let staleRegistrationId = "";
 
 /**
@@ -101,6 +106,23 @@ function expectNoStoredValue(label: string, value: unknown): void {
 function childPhase(child: VmChild | undefined): Phase | null {
   if (!child) return null;
   return child.kind === "sandbox" ? child.labels[PHASE_LABEL] : child.phase;
+}
+
+function planForCredential(name: CredentialName): CanonicalPlan {
+  switch (name) {
+    case "CLAUDE_CODE_OAUTH_TOKEN":
+      return { providers: [{ provider: "claude", llms: ["anthropic-oauth"] }], integrations: [] };
+    case "ANTHROPIC_API_KEY":
+      return { providers: [{ provider: "pi", llms: ["anthropic-api-key"] }], integrations: [] };
+    case "OPENAI_API_KEY":
+      return { providers: [{ provider: "pi", llms: ["openai-api-key"] }], integrations: [] };
+    case "GEMINI_API_KEY":
+      return { providers: [{ provider: "pi", llms: ["gemini-api-key"] }], integrations: [] };
+    case "NEURALWATT_API_KEY":
+      return { providers: [{ provider: "pi", llms: ["neuralwatt"] }], integrations: [] };
+    case "GH_TOKEN":
+      throw new Error("the release test requires a model credential, not GH_TOKEN");
+  }
 }
 
 function sandboxLabels(config: unknown): Record<string, string> {
@@ -143,7 +165,11 @@ async function installJobs(name: string) {
     cursor = page.nextCursor;
   }
 
-  return jobs.filter((job) => job.command.join(" ") === piInstallArgv().join(" "));
+  return jobs.filter(
+    (job) =>
+      createdPlan !== null &&
+      job.command.join(" ") === buildProvisionScript(createdPlan).argv.join(" "),
+  );
 }
 
 describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
@@ -189,10 +215,19 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
     installedByTest = ensured.installedByTest;
 
     const secrets = await rpc<SecretsListResult>(secretsListRpc.name, {});
-    const candidate = secrets.secrets.find((entry) => !entry.stored);
+    const modelCredentials: readonly CredentialName[] = [
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "OPENAI_API_KEY",
+      "GEMINI_API_KEY",
+      "NEURALWATT_API_KEY",
+    ];
+    const candidate = secrets.secrets.find(
+      (entry) => !entry.stored && modelCredentials.includes(entry.name),
+    );
     if (!candidate) {
       throw new Error(
-        "the release test needs at least one of the five credential names not already stored; use an isolated PASEO_HOME",
+        "the release test needs at least one model credential name not already stored; use an isolated PASEO_HOME",
       );
     }
 
@@ -235,12 +270,13 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const requestId = randomUUID();
       const name = sandboxName(requestId);
       createdName = name;
+      createdPlan = planForCredential(credentialName);
 
       // vm.create must return before host work. The sandbox does not exist yet.
       const createStartedAt = Date.now();
       const created = await rpc<VmCreateResult>(vmCreateRpc.name, {
         requestId,
-        secretEnvVars: [credentialName],
+        plan: createdPlan,
       });
       const createElapsedMs = Date.now() - createStartedAt;
 
@@ -251,7 +287,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       ).toBeLessThan(5_000);
 
       // Independent list/detail calls observe progress. Reload once while the
-      // detached Pi install is running, then let recovery finish the work.
+      // detached provision job is running, then let recovery finish the work.
       const phases = new Set<Phase>();
       const detailPhases = new Set<Phase>();
       let reloadedDuringInstall = false;
@@ -361,10 +397,10 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       ).toBe(GUEST_IMAGE);
 
       const jobs = await installJobs(name);
-      expect(jobs, "exactly one Pi install job for this attempt").toHaveLength(1);
+      expect(jobs, "exactly one provision job for this attempt").toHaveLength(1);
       expect(
         jobs.every((job) => job.state === "exited" && job.exitCode === 0),
-        "the pinned Pi install did not complete successfully",
+        "the provision script did not complete successfully",
       ).toBe(true);
 
       const registrations = await managedRegistrations(createdSandboxId);
@@ -372,26 +408,37 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(registrations[0].status).toBe("online");
       expect(registrations[0].source?.key).toBe(createdSandboxId);
 
-      // The routed child reaches online and exposes Pi after a refresh.
+      // The routed child reaches online and exposes the selected providers after a refresh.
       const remote = await paseo.hosts.client(childServerId as string);
       try {
         const refresh = await remote.providers.refresh();
         expect(refresh.acknowledged).toBe(true);
 
         const snapshot = await remote.providers.snapshot();
-        expect(
-          snapshot.entries.find((entry) => entry.provider === "pi")?.status,
-        ).toBe("ready");
+        for (const provider of createdPlan?.providers ?? []) {
+          expect(
+            snapshot.entries.find((entry) => entry.provider === provider.provider)?.status,
+          ).toBe("ready");
+        }
       } finally {
         await remote.dispose();
       }
 
-      // Pi was installed at the pinned version in the child.
-      const piVersion = await runGuest(
-        handles[0],
-        `PATH=${GUEST_PATH} pi --version`,
-      );
-      expect(piVersion).toBe(PI_VERSION);
+      // Each selected provider is at its pinned version in the child.
+      if (createdPlan?.providers.some((provider) => provider.provider === "pi")) {
+        const piVersion = await runGuest(
+          handles[0],
+          `PATH=${GUEST_PATH} pi --version`,
+        );
+        expect(piVersion).toBe(PROVISIONING_PI_VERSION);
+      }
+      if (createdPlan?.providers.some((provider) => provider.provider === "claude")) {
+        const claudeVersion = await runGuest(
+          handles[0],
+          `PATH=${GUEST_PATH} claude --version`,
+        );
+        expect(claudeVersion).toContain(CLAUDE_CODE_VERSION);
+      }
 
       // The stored value reaches only the fixed microsandbox secret entry.
       const secrets = secretEntries(config);
@@ -510,7 +557,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const staleName = sandboxName(staleRequestId);
       await rpc<VmCreateResult>(vmCreateRpc.name, {
         requestId: staleRequestId,
-        secretEnvVars: [credentialName],
+        plan: createdPlan,
       });
 
       const staleChild = await waitFor(
