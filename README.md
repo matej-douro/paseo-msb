@@ -8,6 +8,7 @@ terminals, and diffs. Creation, repair, and deletion happen in the plugin's
 Paseo UI; day-to-day work happens in Paseo's normal host UI.
 
 Design: [DESIGN.md](./DESIGN.md).
+Provisioning design, including the prepared shared layer and the remaining wiring: [docs/provisioning.md](./docs/provisioning.md).
 Open tasks: [TASKS.md](./TASKS.md).
 Change history: [CHANGELOG.md](./CHANGELOG.md).
 
