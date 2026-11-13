@@ -6,13 +6,14 @@ import {
   canCreate,
   childErrorText,
   childPhase,
-  childTone,
   credentialSourceLabel,
   deleteConfirmationText,
   findChild,
   inventoryNotice,
   isEmptyInventory,
   logBundleSummary,
+  logLineCountLabel,
+  logTimestamp,
   phaseText,
   reconcileFailureMessage,
   reconcileSuccessMessage,
@@ -21,7 +22,9 @@ import {
   registrationsNotice,
   runtimeText,
   secretSource,
+  setupPill,
   toggleCredential,
+  vmPill,
 } from "../state";
 
 const PENDING: VmChild = {
@@ -33,7 +36,9 @@ const PENDING: VmChild = {
   error: null,
 };
 
-const SANDBOX: VmChild = {
+type SandboxChild = Extract<VmChild, { kind: "sandbox" }>;
+
+const SANDBOX: SandboxChild = {
   kind: "sandbox",
   name: "paseo-ready",
   id: "sandbox_1",
@@ -44,6 +49,17 @@ const SANDBOX: VmChild = {
   },
   runtimeStatus: "running",
   registration: { registrationId: "reg_1", status: "online", serverId: "srv_child" },
+};
+
+const sandbox = (patch: Partial<SandboxChild>): SandboxChild => ({ ...SANDBOX, ...patch });
+
+const REGISTRATION: VmChild = {
+  kind: "registration",
+  name: "paseo-gone",
+  id: "sandbox_gone",
+  phase: "registering",
+  registration: { registrationId: "reg", status: "offline", serverId: null },
+  error: null,
 };
 
 describe("create selection", () => {
@@ -98,20 +114,69 @@ describe("child presentation", () => {
     ).toBe("Registration unknown");
   });
 
-  it("maps tones for phases and registrations", () => {
+  it("separates setup health from VM status", () => {
     expect(childPhase(PENDING)).toBe("creating");
-    expect(childTone(PENDING)).toBe("accent");
-    expect(childTone(SANDBOX)).toBe("success");
+    expect(setupPill(PENDING)).toEqual({ label: "Creating", tone: "accent" });
+    expect(setupPill(SANDBOX)).toEqual({ label: "Ready", tone: "success" });
     expect(
-      childTone({
-        kind: "registration",
-        name: "paseo-gone",
-        id: "sandbox_gone",
-        phase: "registering",
-        registration: { registrationId: "reg", status: "offline", serverId: null },
-        error: null,
-      }),
-    ).toBe("warning");
+      setupPill(sandbox({ labels: { ...SANDBOX.labels, [PHASE_LABEL]: "installing" } })),
+    ).toEqual({ label: "Installing Pi", tone: "accent" });
+    expect(
+      setupPill(
+        sandbox({
+          labels: {
+            ...SANDBOX.labels,
+            [PHASE_LABEL]: "installing",
+            [ERROR_LABEL]: "install_pending",
+          },
+        }),
+      ),
+    ).toEqual({ label: "Install pending", tone: "warning" });
+    expect(
+      setupPill(
+        sandbox({
+          labels: {
+            ...SANDBOX.labels,
+            [PHASE_LABEL]: "installing",
+            [ERROR_LABEL]: "install_failed",
+          },
+        }),
+      ),
+    ).toEqual({ label: "Install failed", tone: "danger" });
+    expect(setupPill({ ...PENDING, phase: "failed", error: safeError("create_failed") })).toEqual({
+      label: "Create failed",
+      tone: "danger",
+    });
+    expect(setupPill(REGISTRATION)).toEqual({ label: "Incomplete", tone: "warning" });
+  });
+
+  it("folds runtime and reachability into the VM pill", () => {
+    const available = { status: "available" } as const;
+
+    expect(vmPill(PENDING, available)).toEqual({ label: "No VM yet", tone: "muted" });
+    expect(vmPill(REGISTRATION, available)).toEqual({ label: "Missing", tone: "danger" });
+    expect(vmPill(SANDBOX, available)).toEqual({ label: "Online", tone: "success" });
+    expect(vmPill(sandbox({ registration: null }), available)).toEqual({
+      label: "Not registered",
+      tone: "warning",
+    });
+    expect(
+      vmPill(
+        sandbox({ registration: { registrationId: "reg", status: "offline", serverId: null } }),
+        available,
+      ),
+    ).toEqual({ label: "Offline", tone: "warning" });
+    expect(vmPill(sandbox({ runtimeStatus: "crashed" }), available)).toEqual({
+      label: "Crashed",
+      tone: "danger",
+    });
+    expect(vmPill(sandbox({ runtimeStatus: "stopped" }), available)).toEqual({
+      label: "Stopped",
+      tone: "muted",
+    });
+    expect(
+      vmPill(SANDBOX, { status: "unavailable", error: safeError("registrations_unavailable") }),
+    ).toEqual({ label: "Running", tone: "success" });
     expect(registrationTone({ registrationId: "reg", status: "error", serverId: null })).toBe(
       "danger",
     );
@@ -252,5 +317,25 @@ describe("log summaries", () => {
         entries: [{ timestamp: "2026-01-01T00:00:00.000Z", stream: "stdout", text: "x" }],
       }),
     ).toBe("Showing the newest 1 entries.");
+  });
+
+  it("labels a collapsible header with the line count", () => {
+    const line = { timestamp: "2026-01-01T00:00:00.000Z", stream: "stdout", text: "x" } as const;
+
+    expect(logLineCountLabel({ available: false, truncated: false, entries: [] })).toBe(
+      "Unavailable",
+    );
+    expect(logLineCountLabel({ available: true, truncated: false, entries: [] })).toBe("0 lines");
+    expect(logLineCountLabel({ available: true, truncated: false, entries: [line] })).toBe(
+      "1 line",
+    );
+    expect(logLineCountLabel({ available: true, truncated: true, entries: [line, line] })).toBe(
+      "2 lines · truncated",
+    );
+  });
+
+  it("keeps the clock time column and tolerates odd timestamps", () => {
+    expect(logTimestamp("2026-01-01T12:34:56.789Z")).toBe("12:34:56");
+    expect(logTimestamp("no-time")).toBe("no-time");
   });
 });

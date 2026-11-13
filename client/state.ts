@@ -14,7 +14,7 @@ import type {
   VmListResult,
   VmReconcileResult,
 } from "../shared/contracts";
-import { SAFE_ERROR_MESSAGES } from "../shared/errors";
+import { SAFE_ERROR_MESSAGES, isSafeErrorCode, type SafeErrorCode } from "../shared/errors";
 
 export type Tone = "success" | "warning" | "danger" | "muted" | "accent";
 
@@ -107,13 +107,119 @@ export function childPhase(child: VmChild): Phase {
   return child.phase;
 }
 
-export function childTone(child: VmChild): Tone {
+export interface Pill {
+  readonly label: string;
+  readonly tone: Tone;
+}
+
+/**
+ * Setup health labels. A phase is only a hint and terminal failures keep the
+ * actionable phase plus a code, so a stored error code wins over the phase. The
+ * label names the stage whose evidence is missing; Repair (sandbox) or Retry
+ * create (pending) is what actually retries it.
+ */
+const SETUP_ERROR_PILLS: Partial<Record<SafeErrorCode, Pill>> = {
+  invalid_config: { label: "Quarantined", tone: "danger" },
+  id_mismatch: { label: "Quarantined", tone: "danger" },
+  not_found: { label: "Missing", tone: "danger" },
+  name_conflict: { label: "Name conflict", tone: "danger" },
+  create_failed: { label: "Create failed", tone: "danger" },
+  port_unavailable: { label: "No loopback port", tone: "danger" },
+  install_failed: { label: "Install failed", tone: "danger" },
+  install_pending: { label: "Install pending", tone: "warning" },
+  install_conflict: { label: "Install conflict", tone: "warning" },
+  job_inventory_unavailable: { label: "Install unconfirmed", tone: "warning" },
+  path_unverified: { label: "Pi missing on PATH", tone: "danger" },
+  provider_unavailable: { label: "Pi not ready", tone: "warning" },
+  registration_failed: { label: "Registration failed", tone: "warning" },
+  registration_timeout: { label: "Registration pending", tone: "warning" },
+  registration_conflict: { label: "Registration conflict", tone: "danger" },
+  runtime_unavailable: { label: "Runtime unavailable", tone: "warning" },
+  missing_credentials: { label: "Credentials missing", tone: "warning" },
+  delete_failed: { label: "Delete failed", tone: "danger" },
+  registrations_unavailable: { label: "Registration unknown", tone: "warning" },
+  secrets_unavailable: { label: "Secrets unavailable", tone: "warning" },
+  invalid_request: { label: "Invalid request", tone: "danger" },
+  not_implemented: { label: "Unsupported", tone: "danger" },
+};
+
+/** A stored error code this build does not know about is still a problem. */
+const SETUP_UNKNOWN_ERROR: Pill = { label: "Setup issue", tone: "danger" };
+
+/** The stored safe error code for a child, if any. */
+function storedErrorCode(child: VmChild): SafeErrorCode | null {
+  if (child.kind !== "sandbox") return child.error?.code ?? null;
+  const code = child.labels[ERROR_LABEL];
+  return code !== undefined && isSafeErrorCode(code) ? code : null;
+}
+
+/** Where the plugin's setup pipeline stands, and whether it needs the user. */
+export function setupPill(child: VmChild): Pill {
+  const code = storedErrorCode(child);
+  if (code) return SETUP_ERROR_PILLS[code] ?? SETUP_UNKNOWN_ERROR;
+
+  if (child.kind === "registration") return { label: "Incomplete", tone: "warning" };
+
   const phase = childPhase(child);
-  if (phase === "failed") return "danger";
-  if (phase === "deleting") return "warning";
-  if (phase === "ready" && child.kind !== "registration") return "success";
-  if (child.kind === "registration") return "warning";
-  return "accent";
+  switch (phase) {
+    case "ready":
+      return { label: "Ready", tone: "success" };
+    case "deleting":
+      return { label: "Deleting", tone: "warning" };
+    case "failed":
+      return { label: "Failed", tone: "danger" };
+    default:
+      return { label: phaseText(phase), tone: "accent" };
+  }
+}
+
+/**
+ * VM status: the live runtime, folded with reachability while a sandbox is
+ * running. A stopped or crashed VM reports itself first, because that is the
+ * more informative fact and a deliberate stop should not read as "offline".
+ * Unavailable registrations never become an online or offline claim.
+ */
+export function vmPill(child: VmChild, registrations: Availability): Pill {
+  if (child.kind === "pending") return { label: "No VM yet", tone: "muted" };
+  if (child.kind === "registration") return { label: "Missing", tone: "danger" };
+
+  switch (child.runtimeStatus) {
+    case "crashed":
+      return { label: "Crashed", tone: "danger" };
+    case "stopped":
+      return { label: "Stopped", tone: "muted" };
+    case "paused":
+      return { label: "Paused", tone: "warning" };
+    case "draining":
+      return { label: "Draining", tone: "warning" };
+    case "created":
+    case "starting":
+      return { label: "Starting", tone: "accent" };
+    case "unknown":
+      return { label: "Unknown", tone: "muted" };
+    case "running":
+      break;
+  }
+
+  if (registrations.status !== "available") return { label: "Running", tone: "success" };
+
+  const registration = child.registration;
+  if (!registration) return { label: "Not registered", tone: "warning" };
+
+  switch (registration.status) {
+    case "online":
+      return { label: "Online", tone: "success" };
+    case "connecting":
+      return { label: "Connecting", tone: "accent" };
+    case "offline":
+      return { label: "Offline", tone: "warning" };
+    case "error":
+      return { label: "Unreachable", tone: "danger" };
+    case "disabled":
+      return { label: "Disabled", tone: "muted" };
+    case "unknown":
+      return { label: "Reachability unknown", tone: "muted" };
+  }
 }
 
 /** Safe text plus bounded, redacted detail when the server has one. */
@@ -192,6 +298,19 @@ export function logBundleSummary(bundle: LogBundle): string {
   if (bundle.entries.length === 0) return "No log output yet.";
   if (bundle.truncated) return `Showing the newest ${bundle.entries.length} entries.`;
   return `${bundle.entries.length} entries.`;
+}
+
+/** Header line count for a collapsible log block, with truncation and availability marked. */
+export function logLineCountLabel(bundle: LogBundle): string {
+  if (!bundle.available) return "Unavailable";
+  const count = bundle.entries.length;
+  const lines = count === 1 ? "1 line" : `${count} lines`;
+  return bundle.truncated ? `${lines} · truncated` : lines;
+}
+
+/** Clock time shown left of a log line; odd timestamps render unchanged. */
+export function logTimestamp(timestamp: string): string {
+  return timestamp.length >= 19 ? timestamp.slice(11, 19) : timestamp;
 }
 
 export function findChild(

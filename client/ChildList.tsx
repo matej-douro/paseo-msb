@@ -3,15 +3,11 @@ import { Pressable, Text, View } from "react-native";
 import type { VmChild, VmListResult } from "../shared/contracts";
 import {
   childErrorText,
-  childPhase,
-  childTone,
   inventoryNotice,
   isEmptyInventory,
-  phaseText,
-  registrationText,
-  registrationTone,
   registrationsNotice,
-  runtimeText,
+  setupPill,
+  vmPill,
 } from "./state";
 import { ActionButton, Notice, StatusPill, type PluginTheme } from "./ui";
 
@@ -124,6 +120,8 @@ function ChildRow({
   onSelect(): void;
 }) {
   const error = childErrorText(child);
+  const setup = setupPill(child);
+  const vm = vmPill(child, registrations);
 
   return (
     <Pressable
@@ -141,47 +139,21 @@ function ChildRow({
         opacity: pressed ? 0.8 : 1,
       })}
     >
-      <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
-        <Text
-          numberOfLines={1}
-          style={{
-            color: theme.colors.foreground,
-            fontSize: 13,
-            fontWeight: "600",
-            flexShrink: 1,
-          }}
-        >
-          {child.name}
-        </Text>
-        <StatusPill
-          label={phaseText(childPhase(child))}
-          tone={childTone(child)}
-          theme={theme}
-        />
-      </View>
+      <Text
+        numberOfLines={1}
+        style={{
+          color: theme.colors.foreground,
+          fontSize: 13,
+          fontWeight: "600",
+          flexShrink: 1,
+        }}
+      >
+        {child.name}
+      </Text>
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-        {child.kind === "sandbox" ? (
-          <>
-            <StatusPill label={runtimeText(child.runtimeStatus)} tone="muted" theme={theme} />
-            <StatusPill
-              label={registrationText(child.registration, registrations)}
-              tone={registrationTone(child.registration, registrations)}
-              theme={theme}
-            />
-          </>
-        ) : child.kind === "registration" ? (
-          <>
-            <StatusPill label="Registration only" tone="warning" theme={theme} />
-            <StatusPill
-              label={registrationText(child.registration, registrations)}
-              tone={registrationTone(child.registration, registrations)}
-              theme={theme}
-            />
-          </>
-        ) : (
-          <StatusPill label="Pending create" tone="accent" theme={theme} />
-        )}
+        <StatusPill label={setup.label} tone={setup.tone} theme={theme} filled />
+        <StatusPill label={vm.label} tone={vm.tone} theme={theme} filled />
       </View>
 
       {error ? (

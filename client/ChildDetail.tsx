@@ -2,7 +2,8 @@ import { Loading, Modal, ScrollView, useToast } from "@getpaseo/plugin/client/ui
 import { useState } from "react";
 import { Text, View } from "react-native";
 import type {
-  LogBundle,
+  Availability,
+  VmChild,
   VmCreateInput,
   VmDeleteInput,
   VmDetailResult,
@@ -11,18 +12,17 @@ import type {
 import {
   childErrorText,
   childPhase,
-  childTone,
   deleteConfirmationText,
   errorMessage,
-  logBundleSummary,
   phaseText,
   reconcileFailureMessage,
   reconcileSuccessMessage,
   registrationText,
-  registrationTone,
   runtimeText,
+  setupPill,
+  vmPill,
 } from "./state";
-import { ActionButton, Notice, StatusPill, type PluginTheme } from "./ui";
+import { ActionButton, IconButton, LogBlock, Notice, StatusPill, type PluginTheme } from "./ui";
 
 export interface ChildDetailProps {
   name: string;
@@ -73,6 +73,8 @@ export function ChildDetail({
   const deleteTarget = sandbox ?? registrationOnly;
   const childError = child ? childErrorText(child) : null;
   const logs = data?.logs ?? null;
+  // Logs stay open while setup is in progress; a ready child starts collapsed.
+  const logsDefaultOpen = child ? childPhase(child) !== "ready" : false;
 
   const repair = async () => {
     if (repairing) return;
@@ -148,20 +150,36 @@ export function ChildDetail({
           <Text
             numberOfLines={1}
             style={{
+              flex: 1,
+              flexShrink: 1,
               color: theme.colors.foreground,
               fontSize: 15,
               fontWeight: "600",
-              flexShrink: 1,
             }}
           >
             {name}
           </Text>
-          {child ? (
-            <StatusPill
-              label={phaseText(childPhase(child))}
-              tone={childTone(child)}
-              theme={theme}
-            />
+          {deleteTarget ? (
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              <IconButton
+                icon="Wrench"
+                label={repairing ? "Repairing…" : "Repair child"}
+                theme={theme}
+                onPress={() => void repair()}
+                disabled={repairing || deleting || retrying}
+              />
+              <IconButton
+                icon="Trash2"
+                label="Delete child"
+                theme={theme}
+                variant="danger"
+                onPress={() => {
+                  setDeleteError(null);
+                  setDeleteOpen(true);
+                }}
+                disabled={repairing || deleting}
+              />
+            </View>
           ) : null}
         </View>
 
@@ -187,12 +205,10 @@ export function ChildDetail({
 
         {child ? (
           <>
+            <ChildPills child={child} registrations={registrations} theme={theme} />
+
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
-              <DetailRow
-                theme={theme}
-                label="Phase"
-                value={phaseText(childPhase(child))}
-              />
+              <DetailRow theme={theme} label="Phase" value={phaseText(childPhase(child))} />
               {sandbox ? (
                 <>
                   <DetailRow
@@ -209,7 +225,6 @@ export function ChildDetail({
                 </>
               ) : registrationOnly ? (
                 <>
-                  <DetailRow theme={theme} label="Kind" value="Registration only" />
                   <DetailRow
                     theme={theme}
                     label="Registration"
@@ -217,24 +232,8 @@ export function ChildDetail({
                   />
                   <DetailRow theme={theme} label="Stable ID" value={registrationOnly.id} mono />
                 </>
-              ) : (
-                <DetailRow theme={theme} label="Kind" value="Pending create" />
-              )}
+              ) : null}
             </View>
-
-            {sandbox?.registration || registrationOnly ? (
-              <StatusPill
-                label={registrationText(
-                  sandbox ? sandbox.registration : (registrationOnly?.registration ?? null),
-                  registrations,
-                )}
-                tone={registrationTone(
-                  sandbox ? sandbox.registration : (registrationOnly?.registration ?? null),
-                  registrations,
-                )}
-                theme={theme}
-              />
-            ) : null}
 
             {childError ? <Notice text={childError} tone="danger" theme={theme} /> : null}
 
@@ -251,28 +250,7 @@ export function ChildDetail({
               </View>
             ) : null}
 
-            {deleteTarget ? (
-              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-                <ActionButton
-                  label={repairing ? "Repairing…" : "Repair"}
-                  theme={theme}
-                  onPress={() => void repair()}
-                  disabled={repairing || deleting || retrying}
-                  compact
-                />
-                <ActionButton
-                  label="Delete"
-                  theme={theme}
-                  variant="danger"
-                  onPress={() => {
-                    setDeleteError(null);
-                    setDeleteOpen(true);
-                  }}
-                  disabled={repairing || deleting}
-                  compact
-                />
-              </View>
-            ) : (
+            {deleteTarget ? null : (
               <Notice
                 text="Waiting for the sandbox to be created. Repair and Delete become available when it exists."
                 theme={theme}
@@ -287,8 +265,18 @@ export function ChildDetail({
 
             {sandbox && logs ? (
               <View style={{ gap: 12 }}>
-                <LogSection title="Sandbox logs" bundle={logs.sandbox} theme={theme} />
-                <LogSection title="Pi install logs" bundle={logs.job} theme={theme} />
+                <LogBlock
+                  title="Sandbox logs"
+                  bundle={logs.sandbox}
+                  theme={theme}
+                  defaultOpen={logsDefaultOpen}
+                />
+                <LogBlock
+                  title="Pi install logs"
+                  bundle={logs.job}
+                  theme={theme}
+                  defaultOpen={logsDefaultOpen}
+                />
               </View>
             ) : null}
           </>
@@ -324,6 +312,26 @@ export function ChildDetail({
   );
 }
 
+function ChildPills({
+  child,
+  registrations,
+  theme,
+}: {
+  child: VmChild;
+  registrations: Availability;
+  theme: PluginTheme;
+}) {
+  const setup = setupPill(child);
+  const vm = vmPill(child, registrations);
+
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+      <StatusPill label={setup.label} tone={setup.tone} theme={theme} filled />
+      <StatusPill label={vm.label} tone={vm.tone} theme={theme} filled />
+    </View>
+  );
+}
+
 function DetailRow({
   theme,
   label,
@@ -351,52 +359,3 @@ function DetailRow({
   );
 }
 
-function LogSection({
-  title,
-  bundle,
-  theme,
-}: {
-  title: string;
-  bundle: LogBundle;
-  theme: PluginTheme;
-}) {
-  return (
-    <View style={{ gap: 4 }}>
-      <Text style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}>
-        {title}
-      </Text>
-      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
-        {logBundleSummary(bundle)}
-      </Text>
-
-      {bundle.entries.map((entry, index) => (
-        <View
-          // biome-ignore lint/suspicious/noArrayIndexKey: entries are append-only, no stable id
-          key={`${entry.timestamp}-${index}`}
-          style={{
-            flexDirection: "row",
-            gap: 6,
-            backgroundColor: theme.colors.surface1,
-            borderRadius: 4,
-            paddingVertical: 3,
-            paddingHorizontal: 6,
-          }}
-        >
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-            {entry.timestamp.slice(11, 19)}
-          </Text>
-          <Text
-            style={{
-              color: theme.colors.foreground,
-              fontSize: 11,
-              fontFamily: "monospace",
-              flexShrink: 1,
-            }}
-          >
-            {entry.text}
-          </Text>
-        </View>
-      ))}
-    </View>
-  );
-}
