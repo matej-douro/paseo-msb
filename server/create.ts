@@ -1,10 +1,21 @@
-import { ERROR_LABEL, JOB_LABEL, PHASE_LABEL, SANDBOX_ID_LABEL } from "../shared/constants";
+import { JOB_LABEL, PHASE_LABEL, SANDBOX_ID_LABEL } from "../shared/constants";
 import type { VmCreateInput, VmCreateResult } from "../shared/contracts";
 import { safeError, type SafeErrorCode } from "../shared/errors";
-import { inspectPiInstall, piInstallSpec, piPathCheckSpec } from "./pi-install";
-import type { PendingCreate, PendingCreateStore } from "./pending";
-import type { ParentHostsLike } from "./status";
 import {
+  inspectPiInstall,
+  piInstallSpec,
+  piPathCheckSpec,
+  waitForPiInstall,
+} from "./pi-install";
+import type { PendingCreate, PendingCreateStore } from "./pending";
+import {
+  registerSandbox,
+  SetupFailure,
+  type RegistrationContext,
+  type RegistrationHostsLike,
+} from "./registration";
+import {
+  markSandboxFailed,
   ownsSandbox,
   type SandboxCreateHandleLike,
   type SandboxCreateRequest,
@@ -18,6 +29,11 @@ const DEFAULT_INSTALL_TIMEOUT_MS = 600_000;
 
 type CreateRequestBase = Omit<SandboxCreateRequest, "hostPort">;
 
+interface CreatedSandbox {
+  readonly handle: SandboxCreateHandleLike;
+  readonly hostPort: number;
+}
+
 /** A host failure with a fixed, safe code. Raw SDK and guest text never cross. */
 class CreateFailure extends Error {
   constructor(readonly code: SafeErrorCode) {
@@ -26,8 +42,8 @@ class CreateFailure extends Error {
   }
 }
 
-export interface CreateContext {
-  readonly hosts: ParentHostsLike;
+export interface CreateContext extends RegistrationContext {
+  readonly hosts: RegistrationHostsLike;
   readonly creator: SandboxCreator;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly pending: PendingCreateStore;
@@ -96,11 +112,12 @@ async function runCreate(
       throw new CreateFailure("name_conflict");
     }
 
-    handle = await createWithPortRetry(context.creator, {
+    const created: CreatedSandbox = await createWithPortRetry(context.creator, {
       name: entry.name,
       parentId,
       secrets,
     });
+    handle = created.handle;
 
     // Persist the stable ID before the pending entry disappears so a repeated
     // request in this window sees an owned sandbox instead of a name conflict.
@@ -116,21 +133,29 @@ async function runCreate(
 
     const job = await startPiInstall(handle);
     await handle.modify({ labels: { [JOB_LABEL]: job.id } });
-    await waitForInstall(job, context.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS);
+    if (!(await waitForPiInstall(job, context.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS))) {
+      throw new CreateFailure("install_failed");
+    }
 
     const output = await handle.exec(piPathCheckSpec()).catch(() => null);
     if (!output || !inspectPiInstall(output)) {
       throw new CreateFailure("path_unverified");
     }
 
-    // Task 4 continues from here into registration.
     await handle.modify({ labels: { [PHASE_LABEL]: "registering" } });
+    await registerSandbox(
+      context,
+      parentId,
+      { id: handle.id, name: handle.name },
+      created.hostPort,
+    );
+    await handle.modify({ labels: { [PHASE_LABEL]: "ready" } });
   } catch (error) {
     await failCreate(context, entry, handle, errorCode(error));
   }
 }
 
-async function resolveParentId(hosts: ParentHostsLike): Promise<string> {
+async function resolveParentId(hosts: RegistrationHostsLike): Promise<string> {
   try {
     const directory = await hosts.list();
     const serverId = directory.self.serverId;
@@ -149,7 +174,7 @@ async function resolveParentId(hosts: ParentHostsLike): Promise<string> {
 async function createWithPortRetry(
   creator: SandboxCreator,
   request: CreateRequestBase,
-): Promise<SandboxCreateHandleLike> {
+): Promise<CreatedSandbox> {
   let portFailures = 0;
 
   for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt += 1) {
@@ -161,7 +186,8 @@ async function createWithPortRetry(
     }
 
     try {
-      return await creator.create({ ...request, hostPort });
+      const handle = await creator.create({ ...request, hostPort });
+      return { handle, hostPort };
     } catch (error) {
       const existing = await creator.find(request.name).catch(() => null);
       if (existing) throw new CreateFailure("create_failed");
@@ -187,28 +213,9 @@ async function startPiInstall(handle: SandboxCreateHandleLike): Promise<SandboxJ
   }
 }
 
-async function waitForInstall(job: SandboxJobHandleLike, timeoutMs: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  try {
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new CreateFailure("install_failed")), timeoutMs);
-    });
-    const exit = await Promise.race([job.wait(), timeout]);
-    const info = await job.inspect().catch(() => null);
-
-    if (exit.code !== 0 || !info || info.state !== "exited") {
-      throw new CreateFailure("install_failed");
-    }
-  } catch (error) {
-    throw error instanceof CreateFailure ? error : new CreateFailure("install_failed");
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 function errorCode(error: unknown): SafeErrorCode {
-  return error instanceof CreateFailure ? error.code : "create_failed";
+  if (error instanceof CreateFailure || error instanceof SetupFailure) return error.code;
+  return "create_failed";
 }
 
 /**
@@ -229,12 +236,5 @@ async function failCreate(
 
   // Once a sandbox exists, progress lives in labels, not in the pending map.
   context.pending.remove(entry.requestId);
-
-  try {
-    await handle.modify({
-      labels: { [PHASE_LABEL]: "failed", [ERROR_LABEL]: code },
-    });
-  } catch {
-    // The sandbox stays visible as failed/incomplete through its stable ID.
-  }
+  await markSandboxFailed(handle, code);
 }

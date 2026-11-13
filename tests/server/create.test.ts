@@ -19,9 +19,8 @@ import { buildSandboxCreatePlan } from "../../server/sandbox";
 import { resolveSelectedSecrets } from "../../server/secrets";
 import { buildVmList } from "../../server/status";
 import {
-  failingHosts,
-  fakeHosts,
   fakeSandbox,
+  FakePaseoHosts,
   FakeSandboxCreator,
   PARENT_ID,
   SECRET_VALUE,
@@ -60,11 +59,13 @@ function createContext(
   overrides: Partial<CreateContext> = {},
 ): CreateContext {
   return {
-    hosts: fakeHosts(),
+    hosts: new FakePaseoHosts(),
     creator,
     env: { ANTHROPIC_API_KEY: SECRET_VALUE, GH_TOKEN: "gh-secret-value" },
     pending: createPendingCreateStore(),
     installTimeoutMs: 250,
+    timeoutMs: 250,
+    pollMs: 1,
     ...overrides,
   };
 }
@@ -73,7 +74,8 @@ describe("createVm", () => {
   it("returns the generated name immediately and finishes Pi readiness in the background", async () => {
     const gate = deferred<void>();
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
-    const context = createContext(creator);
+    const hosts = new FakePaseoHosts();
+    const context = createContext(creator, { hosts });
 
     const attempt = startCreate(context, INPUT);
 
@@ -110,8 +112,19 @@ describe("createVm", () => {
       { [SANDBOX_ID_LABEL]: "sandbox_1", [PHASE_LABEL]: "installing" },
       { [JOB_LABEL]: "job_1" },
       { [PHASE_LABEL]: "registering" },
+      { [PHASE_LABEL]: "ready" },
     ]);
     expect(creator.execSpecs).toEqual([piInstallSpec(), piPathCheckSpec()]);
+    expect(hosts.added).toEqual([
+      {
+        connection: "127.0.0.1:41000",
+        label: `${PARENT_ID}/${NAME}`,
+        metadata: { source: "paseo-msb", vm: "sandbox_1", name: NAME },
+        sourceKey: "sandbox_1",
+      },
+    ]);
+    expect(hosts.clients).toEqual(["srv_child"]);
+    expect(hosts.disposed).toBe(1);
   });
 
   it("resolves the RPC before host work completes", async () => {
@@ -284,7 +297,7 @@ describe("createVm", () => {
 
     expect(creator.probeCount).toBe(2);
     expect(creator.requests.map((request) => request.hostPort)).toEqual([41_001, 41_002]);
-    expect(creator.labelUpdates.at(-1)).toEqual({ [PHASE_LABEL]: "registering" });
+    expect(creator.labelUpdates.at(-1)).toEqual({ [PHASE_LABEL]: "ready" });
     expect(context.pending.list()).toEqual([]);
   });
 
@@ -316,7 +329,9 @@ describe("createVm", () => {
 
   it("reports an unavailable parent directory without touching the runtime", async () => {
     const creator = new FakeSandboxCreator();
-    const context = createContext(creator, { hosts: failingHosts() });
+    const context = createContext(creator, {
+      hosts: new FakePaseoHosts({ listError: new Error("parent directory unavailable: leaked detail") }),
+    });
 
     await startCreate(context, INPUT).started;
 

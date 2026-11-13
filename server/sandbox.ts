@@ -42,6 +42,8 @@ export interface SandboxJobLogEntryLike {
 }
 
 export interface SandboxJobLike {
+  inspect(): Promise<{ readonly state: string; readonly exitCode: number | null }>;
+  wait(): Promise<{ readonly code: number }>;
   logs(options: { tail?: number }): Promise<readonly SandboxJobLogEntryLike[]>;
 }
 
@@ -50,6 +52,7 @@ export interface SandboxHandleLike {
   readonly name: string;
   readonly status: string;
   config(): unknown;
+  modify(options: { readonly labels: Readonly<Record<string, string>> }): Promise<unknown>;
   logs(options: {
     tail?: number;
     sources?: readonly string[];
@@ -74,7 +77,7 @@ export interface ExecSpec {
 export interface SandboxJobHandleLike {
   readonly id: string;
   wait(): Promise<{ readonly code: number }>;
-  inspect(): Promise<{ readonly state: string }>;
+  inspect(): Promise<{ readonly state: string; readonly exitCode: number | null }>;
 }
 
 /** The handle returned by a strict create, with the guest operations it needs. */
@@ -129,6 +132,25 @@ export interface SandboxCreator {
   /** Probes a free loopback port; the runtime does not allocate host port 0. */
   probePort(): Promise<number>;
   create(request: SandboxCreateRequest): Promise<SandboxCreateHandleLike>;
+}
+
+/** The write-side slice shared by create and recovery. */
+export interface SandboxLabelHandleLike {
+  modify(options: { readonly labels: Readonly<Record<string, string>> }): Promise<unknown>;
+}
+
+/** Reconnects to a sandbox so recovery can run read-only guest checks. */
+export interface SandboxResumeHandleLike extends SandboxLabelHandleLike {
+  exec(spec: ExecSpec): Promise<string>;
+}
+
+/**
+ * Host-side sandbox operations used by task 4. `resume` never starts a stopped
+ * sandbox; `destroy` refuses a same-name replacement through its stable handle.
+ */
+export interface SandboxHost extends SandboxCreator {
+  resume(name: string): Promise<SandboxResumeHandleLike>;
+  destroy(handle: SandboxHandleLike): Promise<void>;
 }
 
 export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCreatePlan {
@@ -343,4 +365,74 @@ export function ownsSandbox(handle: SandboxHandleLike, parentId: string): boolea
     labels[PARENT_LABEL] === parentId &&
     labels[SANDBOX_ID_LABEL] === handle.id
   );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function readPortNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function isLoopbackBind(bind: string | null): boolean {
+  return bind === null || bind === "127.0.0.1" || bind === "localhost" || bind === "::1";
+}
+
+/**
+ * Reads the published loopback host port for guest 6767 from the persisted
+ * config. The SDK uses camelCase; older/CLI shapes use snake_case.
+ */
+export function readSandboxHostPort(handle: SandboxHandleLike): number | null {
+  let raw: unknown;
+  try {
+    raw = handle.config();
+  } catch {
+    return null;
+  }
+
+  const ports = asRecord(asRecord(raw)?.network)?.ports;
+  if (!Array.isArray(ports)) return null;
+
+  for (const entry of ports) {
+    const port = asRecord(entry);
+    if (!port) continue;
+
+    const guestPort = readPortNumber(port.guestPort, port.guest_port);
+    const hostPort = readPortNumber(port.hostPort, port.host_port);
+    const protocol = typeof port.protocol === "string" ? port.protocol : "tcp";
+    const bind =
+      typeof port.hostBind === "string"
+        ? port.hostBind
+        : typeof port.host_bind === "string"
+          ? port.host_bind
+          : null;
+
+    if (
+      guestPort === GUEST_PORT &&
+      hostPort !== null &&
+      hostPort > 0 &&
+      protocol === "tcp" &&
+      isLoopbackBind(bind)
+    ) {
+      return hostPort;
+    }
+  }
+
+  return null;
+}
+
+/** Writes only a fixed safe code; raw errors are dropped. */
+export async function markSandboxFailed(
+  handle: SandboxLabelHandleLike,
+  code: SafeErrorCode,
+): Promise<void> {
+  try {
+    await handle.modify({ labels: { [PHASE_LABEL]: "failed", [ERROR_LABEL]: code } });
+  } catch {
+    // The sandbox stays visible as failed/incomplete through its stable ID.
+  }
 }

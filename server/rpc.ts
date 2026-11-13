@@ -108,17 +108,3 @@ export async function readVmDetail(
     logs,
   };
 }
-
-function notImplemented(): never {
-  throw new Error(safeError("not_implemented").message);
-}
-
-/** Task 4 replaces this with exact sandbox and registration removal. */
-export async function deleteVm(): Promise<never> {
-  notImplemented();
-}
-
-/** Task 4 replaces this with setup and registration repair. */
-export async function reconcileVm(): Promise<never> {
-  notImplemented();
-}

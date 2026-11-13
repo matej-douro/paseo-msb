@@ -7,16 +7,20 @@ import {
   vmReconcileRpc,
 } from "../shared/contracts";
 import { createVm } from "./create";
+import { deleteVm } from "./delete";
 import { createPendingCreateStore } from "./pending";
-import { deleteVm, readVmDetail, readVmList, reconcileVm, type ReadContext } from "./rpc";
-import { createMicrosandboxCreator, createMicrosandboxRuntime } from "./runtime";
+import { reconcileVm } from "./reconcile";
+import { recoverManagedSandboxes } from "./recovery";
+import { readVmDetail, readVmList, type ReadContext } from "./rpc";
+import { createMicrosandboxHost, createMicrosandboxRuntime } from "./runtime";
 
 /**
- * Registers the five v1 RPC contracts. Creation runs in the background;
- * delete and reconcile fail with a safe not-implemented error until task 4.
+ * Registers the five v1 RPC contracts. Recovery runs once on first use, so a
+ * plugin reload resumes unambiguous setup without a terminal history.
  */
 export function registerRpcHandlers(server: PluginServerContext): () => void {
   const pending = createPendingCreateStore();
+  let recovery: Promise<void> | null = null;
 
   function readContext(paseo: PluginHandlerContext["paseo"]): ReadContext {
     return {
@@ -27,21 +31,56 @@ export function registerRpcHandlers(server: PluginServerContext): () => void {
     };
   }
 
-  server.handle(vmListRpc, (_input, { paseo }) => readVmList(readContext(paseo)));
-  server.handle(vmDetailRpc, (input, { paseo }) => readVmDetail(readContext(paseo), input));
-  server.handle(vmCreateRpc, (input, { paseo }) =>
-    createVm(
+  function setupContext(paseo: PluginHandlerContext["paseo"]) {
+    return {
+      hosts: paseo.hosts,
+      runtime: createMicrosandboxRuntime(paseo),
+      sandboxHost: createMicrosandboxHost(paseo),
+    };
+  }
+
+  function ensureRecovery(paseo: PluginHandlerContext["paseo"]): void {
+    if (recovery) return;
+    recovery = recoverManagedSandboxes(setupContext(paseo)).catch(() => {});
+  }
+
+  server.handle(vmListRpc, (_input, { paseo }) => {
+    ensureRecovery(paseo);
+    return readVmList(readContext(paseo));
+  });
+
+  server.handle(vmDetailRpc, (input, { paseo }) => {
+    ensureRecovery(paseo);
+    return readVmDetail(readContext(paseo), input);
+  });
+
+  server.handle(vmCreateRpc, (input, { paseo }) => {
+    ensureRecovery(paseo);
+    const setup = setupContext(paseo);
+    return createVm(
       {
-        hosts: paseo.hosts,
-        creator: createMicrosandboxCreator(paseo),
+        ...setup,
+        creator: setup.sandboxHost,
         env: process.env,
         pending,
       },
       input,
+    );
+  });
+
+  server.handle(vmDeleteRpc, (input, { paseo }) =>
+    deleteVm(
+      {
+        hosts: paseo.hosts,
+        sandboxHost: createMicrosandboxHost(paseo),
+      },
+      input,
     ),
   );
-  server.handle(vmDeleteRpc, () => deleteVm());
-  server.handle(vmReconcileRpc, () => reconcileVm());
+
+  server.handle(vmReconcileRpc, (input, { paseo }) =>
+    reconcileVm(setupContext(paseo), input),
+  );
 
   return () => {};
 }

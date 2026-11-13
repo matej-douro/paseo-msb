@@ -13,9 +13,10 @@ import {
   buildSandboxCreatePlan,
   type ExecSpec,
   type SandboxCreateHandleLike,
-  type SandboxCreator,
   type SandboxHandleLike,
+  type SandboxHost,
   type SandboxJobHandleLike,
+  type SandboxResumeHandleLike,
   type SandboxRuntime,
 } from "./sandbox";
 
@@ -99,19 +100,41 @@ export function createMicrosandboxRuntime(paseo: PaseoApi): SandboxRuntime {
  * image, resources, init, loopback port, PATH, labels, and header-only secrets
  * stay identical between tests and production.
  */
-export function createMicrosandboxCreator(paseo: PaseoApi): SandboxCreator {
+export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
   return {
     async find(name) {
       const { Sandbox } = await loadMicrosandbox(paseo);
       try {
         const handle = await Sandbox.get(name);
         return handle as unknown as SandboxHandleLike;
-      } catch {
-        return null;
+      } catch (error) {
+        if (isSandboxNotFound(error)) return null;
+        throw error;
       }
     },
 
     probePort: probeLoopbackPort,
+
+    async resume(name) {
+      const { Sandbox } = await loadMicrosandbox(paseo);
+      const handle = await Sandbox.get(name);
+      // connect() fails for a stopped sandbox instead of starting it.
+      const sandbox = await handle.connect();
+      const wrapped = wrapCreateHandle(sandbox);
+      return { modify: wrapped.modify, exec: wrapped.exec } satisfies SandboxResumeHandleLike;
+    },
+
+    async destroy(handle) {
+      try {
+        await (handle as unknown as SdkHandleDestroyLike).destroy({
+          force: true,
+          timeoutMs: 15_000,
+        });
+      } catch (error) {
+        if (isSandboxNotFound(error)) return;
+        throw error;
+      }
+    },
 
     async create(request) {
       const { Sandbox, MiB } = await loadMicrosandbox(paseo);
@@ -166,6 +189,18 @@ interface SdkSandboxLike {
     readonly code: number;
     stdout(): string;
   }>;
+}
+
+interface SdkHandleDestroyLike {
+  destroy(options: { force: boolean; timeoutMs: number }): Promise<void>;
+}
+
+function isSandboxNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "sandboxNotFound"
+  );
 }
 
 function applyExecSpec(builder: any, spec: ExecSpec): any {

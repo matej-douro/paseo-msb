@@ -215,6 +215,7 @@ export type VmChild = z.infer<typeof VmChildSchema>;
 export type VmCreateInput = z.infer<typeof VmCreateInputSchema>;
 export type VmCreateResult = z.infer<typeof VmCreateOutputSchema>;
 export type VmDeleteInput = z.infer<typeof VmDeleteInputSchema>;
+export type VmDeleteResult = z.infer<typeof VmDeleteOutputSchema>;
 export type VmReconcileInput = z.infer<typeof VmReconcileInputSchema>;
 export type VmReconcileResult = z.infer<typeof VmReconcileOutputSchema>;
 export type Availability = z.infer<typeof AvailabilitySchema>;

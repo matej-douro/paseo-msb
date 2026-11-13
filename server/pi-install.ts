@@ -68,3 +68,46 @@ export function inspectPiInstall(stdout: string): PiInstallCheck | null {
 
   return { path, version };
 }
+
+export interface PiInstallJobLike {
+  wait(): Promise<{ readonly code: number }>;
+  inspect(): Promise<{ readonly state: string; readonly exitCode: number | null }>;
+}
+
+function succeeded(info: { readonly state: string; readonly exitCode: number | null }): boolean {
+  return info.state === "exited" && info.exitCode === 0;
+}
+
+/**
+ * Bounds the detached install wait and reports whether the job exited cleanly.
+ * Never replays the install; a running job is awaited, not restarted.
+ */
+export async function waitForPiInstall(
+  job: PiInstallJobLike,
+  timeoutMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    const timeout = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+
+    return await Promise.race([run(job), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function run(job: PiInstallJobLike): Promise<boolean> {
+  try {
+    const info = await job.inspect();
+    if (!succeeded(info) && (info.state === "starting" || info.state === "running")) {
+      await job.wait();
+      return succeeded(await job.inspect());
+    }
+    return succeeded(info);
+  } catch {
+    return false;
+  }
+}

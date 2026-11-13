@@ -20,6 +20,11 @@ export const SAFE_ERROR_CODES = [
   "port_unavailable",
   "install_failed",
   "path_unverified",
+  "registration_conflict",
+  "registration_failed",
+  "registration_timeout",
+  "provider_unavailable",
+  "delete_failed",
 ] as const;
 
 export type SafeErrorCode = (typeof SAFE_ERROR_CODES)[number];
@@ -40,6 +45,11 @@ export const SAFE_ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   port_unavailable: "No loopback port could be published.",
   install_failed: "Pi installation failed.",
   path_unverified: "Pi is not available on the child PATH.",
+  registration_conflict: "Multiple parent registrations match this child.",
+  registration_failed: "The parent registration could not be updated.",
+  registration_timeout: "The child did not become reachable.",
+  provider_unavailable: "Pi is not ready in the child.",
+  delete_failed: "The sandbox could not be destroyed.",
 };
 
 export const SafeErrorSchema = z

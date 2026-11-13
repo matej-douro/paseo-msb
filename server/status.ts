@@ -21,6 +21,7 @@ export interface HostRegistrationLike {
   readonly registrationId: string;
   readonly serverId: string | null;
   readonly status: string;
+  readonly label?: string | null;
   readonly source?: { readonly id?: string; readonly key?: string };
   readonly metadata: Readonly<Record<string, string>>;
 }
