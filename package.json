@@ -16,6 +16,7 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:release": "PASEO_MSB_RELEASE_TEST=1 vitest run tests/integration",
     "spike:vertical": "node scripts/spikes/verify-vertical-slice.mjs"
   },
   "dependencies": {
