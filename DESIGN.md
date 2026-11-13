@@ -166,8 +166,8 @@ The single Paseo screen contains:
 
 - Manage secrets, with add/replace/remove controls that never display values.
 - Create confirmation with fixed resources and available credential checkboxes marked Stored or Environment.
-- Rows for pending, sandbox, and registration-only children with phase, runtime/registration status, and safe errors.
-- Detail with bounded read-only logs, Repair, and Delete.
+- Rows for pending, sandbox, and registration-only children with two pills: setup health (the pipeline stage, or the stored safe error that names the stage that stalls it) and VM status (runtime, folded with registration reachability while running). Raw phase, runtime, and registration status stay in the detail sheet; the row keeps its safe error text.
+- Detail with bounded read-only logs as collapsible monospace blocks (line count in each header, timestamps in a separate column), Repair, and Delete.
 - Retry of a failed pending create with its original request ID and credential names, and working Repair/Delete for registration-only children.
 - Clear loading, genuinely empty, partial-unavailable, and failed states. Unavailable inventory is never presented as empty or confirmed missing.
 
