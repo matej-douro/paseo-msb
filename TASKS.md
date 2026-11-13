@@ -117,11 +117,13 @@ Add one real-runtime test through the plugin RPCs and replace contributor specul
 
 Acceptance:
 
-- [ ] Test drives all five RPCs: create returns immediately, independent list/detail calls observe progress, routed host reaches online, and Pi appears after refresh.
-- [ ] Reload during installation produces one sandbox, detached job, and registration; Repair restores a missing/stale registration without another VM.
-- [ ] A fake fixed credential from the plugin store reaches only the allowed substitution path and never appears in RPC output, logs, pending state, or test artifacts.
-- [ ] Delete cleans the exact sandbox and registration; repeated delete and Repair are safe.
-- [ ] Test runs in the release check on the verified parent/runtime/image/Pi pins.
-- [ ] README records requirements, pins, the five parent env credentials, Create/Repair/Delete behavior, loopback trust boundary, reload limitations, and release-test command.
+- [x] Test drives all five RPCs: create returns immediately, independent list/detail calls observe progress, routed host reaches online, and Pi appears after refresh.
+- [x] Reload during installation produces one sandbox, detached job, and registration; Repair restores a missing/stale registration without another VM.
+- [x] A fake fixed credential from the plugin store reaches only the allowed substitution path and never appears in RPC output, logs, pending state, or test artifacts.
+- [x] Delete cleans the exact sandbox and registration; repeated delete and Repair are safe.
+- [x] Test runs in the release check on the verified parent/runtime/image/Pi pins.
+- [x] README records requirements, pins, the five parent env credentials, Create/Repair/Delete behavior, loopback trust boundary, reload limitations, and release-test command.
 
-Files: `tests/integration/vertical.test.ts`, `tests/integration/fixtures/`, `README.md`
+Result: `npm run test:release` installs or reloads this checkout as a directory plugin on a reachable parent, stores a fake fixed credential, and drives the five lifecycle RPCs. It reloads the plugin while the detached Pi install is running, verifies one sandbox/job/registration, restores a removed registration, removes a stale one, and deletes the exact sandbox and registration twice. The stored value is checked at the microsandbox secret boundary and scanned out of RPC outputs and plugin logs. Live header substitution and blocked destinations remain covered by the task 1 spike because the plugin cannot add test-only hosts or interception settings. List/detail now expose a bounded, redacted failure detail (also stored as `paseo-msb-error-detail`) so runtime failures are investigable; the release parent must be able to load the microsandbox native addon, which the signed macOS app's hardened runtime rejects on this host, so the documented check uses `@getpaseo/cli` under system Node.
+
+Files: `tests/integration/vertical.test.ts`, `tests/integration/fixtures/`, `package.json`, `README.md`, `server/diagnostics.ts`, `tests/server/diagnostics.test.ts`
