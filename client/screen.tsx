@@ -2,7 +2,7 @@ import { useRpc, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View, type ViewStyle } from "react-native";
-import { CPUS, MEMORY_MIB, PI_VERSION, type CredentialName } from "../shared/constants";
+import type { CredentialName } from "../shared/constants";
 import {
   secretsDeleteRpc,
   secretsSetRpc,
@@ -89,19 +89,31 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       screen: {
         flex: 1,
         backgroundColor: theme.colors.surface0,
-        padding: compact ? 12 : 20,
-        gap: compact ? 10 : 14,
+        padding: compact ? 10 : 12,
+        gap: 10,
       },
-      header: {
+      columns: { flex: 1, flexDirection: "row", gap: 12, minHeight: 0 },
+      listColumn: { width: compact ? undefined : 360, minHeight: 0 },
+      // A bordered sheet separates the panes and holds the detail scrolling.
+      panel: {
+        flex: 1,
+        minHeight: 0,
+        borderColor: theme.colors.border,
+        borderWidth: compact ? 0 : 1,
+        borderRadius: compact ? 0 : 10,
+        padding: compact ? 0 : 12,
+        gap: 10,
+        overflow: "hidden",
+      },
+      listPanel: { flex: 1, minHeight: 0, gap: 10 },
+      panelHeader: {
         flexDirection: compact ? "column" : "row",
         alignItems: compact ? "stretch" : "center",
         justifyContent: "space-between",
-        gap: 10,
+        gap: 8,
       },
-      columns: { flex: 1, flexDirection: "row", gap: 14, minHeight: 0 },
-      listPane: { width: 360, minHeight: 0 },
-      detailPane: { flex: 1, minHeight: 0 },
-      compactPane: { flex: 1, minHeight: 0 },
+      panelTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+      panelActions: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
       emptyDetail: {
         flex: 1,
         alignItems: "center",
@@ -110,34 +122,6 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       },
     }),
     [theme, compact],
-  );
-
-  const header = (
-    <View style={styles.header}>
-      <View style={{ gap: 2 }}>
-        <Text style={{ color: theme.colors.foreground, fontSize: compact ? 20 : 24, fontWeight: "600" }}>
-          Paseo microVM hosts
-        </Text>
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-          {CPUS} vCPU · {MEMORY_MIB} MiB · Pi {PI_VERSION} · loopback only
-        </Text>
-      </View>
-      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-        <ActionButton
-          label="Manage secrets"
-          theme={theme}
-          onPress={() => setSecretsOpen(true)}
-          compact={compact}
-        />
-        <ActionButton
-          label="Create child"
-          theme={theme}
-          variant="primary"
-          onPress={() => setCreateOpen(true)}
-          compact={compact}
-        />
-      </View>
-    </View>
   );
 
   const listPane = (
@@ -157,6 +141,40 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       }
       onRetry={() => void list.refresh()}
     />
+  );
+
+  // The screen header is gone: the buttons that matter live with the list.
+  const listPanel = (
+    <View style={styles.listPanel}>
+      <View style={styles.panelHeader}>
+        <View style={styles.panelTitleRow}>
+          <Text style={{ color: theme.colors.foreground, fontSize: 14, fontWeight: "600" }}>
+            Child VMs
+          </Text>
+          {list.data ? (
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+              {list.data.children.length}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.panelActions}>
+          <ActionButton
+            label="Manage secrets"
+            theme={theme}
+            onPress={() => setSecretsOpen(true)}
+            compact={compact}
+          />
+          <ActionButton
+            label="Create child"
+            theme={theme}
+            variant="primary"
+            onPress={() => setCreateOpen(true)}
+            compact={compact}
+          />
+        </View>
+      </View>
+      <View style={{ flex: 1, minHeight: 0 }}>{listPane}</View>
+    </View>
   );
 
   const detailPane = selection ? (
@@ -187,21 +205,23 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
           textAlign: "center",
         }}
       >
-        Select a child to see bounded logs, Repair, and Delete.
+        Select a child to see details.
       </Text>
     </View>
   );
 
   return (
     <View style={styles.screen}>
-      {header}
-
       {compact ? (
-        <View style={styles.compactPane}>{selection ? detailPane : listPane}</View>
+        selection ? (
+          <View style={styles.panel}>{detailPane}</View>
+        ) : (
+          listPanel
+        )
       ) : (
         <View style={styles.columns}>
-          <View style={styles.listPane}>{listPane}</View>
-          <View style={styles.detailPane}>{detailPane}</View>
+          <View style={styles.listColumn}>{listPanel}</View>
+          <View style={styles.panel}>{detailPane}</View>
         </View>
       )}
 
