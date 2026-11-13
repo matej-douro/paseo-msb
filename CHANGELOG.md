@@ -5,6 +5,39 @@ listed where they close a PR. This file replaces the historical task and audit r
 [DESIGN.md](./DESIGN.md) is the authoritative spec and [TASKS.md](./TASKS.md) tracks what is still
 open.
 
+## 2026-11-13
+
+### `01c2e76` — Add the shared provisioning catalog, planner, and provisioner
+
+- Added `shared/provisioning/` with the data-only provider/integration catalog, plan validation and
+  canonical hashing, deterministic content-addressed provision script rendering, and the status
+  contract, plus 24 unit tests.
+
+### `3baa290` — Document the provisioning design
+
+- Recorded the agreed provider/integration selection model, credential direction, provisioning
+  semantics, pins, and remaining verification in `docs/provisioning.md`.
+
+### `cfbfb88` — Install selected providers and integrations
+
+- Replaced `secretEnvVars` with the provider/integration plan, persisted `PASEO_MSB_PLAN`, added
+  `CLAUDE_CODE_OAUTH_TOKEN`, raised the default VM memory to 4096 MiB, and injected only the
+  credentials the selected options require.
+- Replaced the Pi-only install path with one idempotent provision script and detached job, made all
+  provisioning failures fatal, and confirmed every selected Paseo provider before `ready`.
+- Rebuilt the Create screen around collapsible Providers and Integrations sections with availability
+  reasons, nested LLM options, and a derived-credential confirmation; detail now shows the plan.
+
+### `ba669e5` — Exercise the provider plan and provision job in the release test
+
+- Updated the real-runtime test to create a plan, wait for the plan-hash provision job and
+  `status.json`, and assert the selected provider and pinned version in the child.
+
+### `e841d6e` — Document the provider and integration flow
+
+- Updated the README, DESIGN, TASKS, and provisioning doc for the new selection model, six fixed
+  credentials, 4096 MiB shape, provider toolchain pins, and remaining live matrix.
+
 ## 2026-11-02
 
 ### `a8e5715` — Initial commit
