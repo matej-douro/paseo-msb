@@ -28,8 +28,11 @@ import { ActionButton } from "./ui";
 export function MainScreen({ theme, layout, params }: PluginScreenProps) {
   const compact = layout.compact;
   const list = useVmList();
-  const [selectedName, setSelectedName] = useState<string | null>(params.name ?? null);
-  const detail = useVmDetail(selectedName);
+  const [selection, setSelection] = useState<{ name: string; id?: string } | null>(
+    params.name ? { name: params.name } : null,
+  );
+  const selectedName = selection?.name ?? null;
+  const detail = useVmDetail(selectedName, selection?.id);
   const [createOpen, setCreateOpen] = useState(false);
   const [secretsOpen, setSecretsOpen] = useState(false);
 
@@ -47,12 +50,12 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
 
   // Reconnect to the child named in the screen params after navigation.
   useEffect(() => {
-    if (params.name) setSelectedName(params.name);
+    if (params.name) setSelection({ name: params.name });
   }, [params.name]);
 
   const handleCreate = async (input: VmCreateInput) => {
     const result = await create(input);
-    setSelectedName(result.name);
+    setSelection({ name: result.name });
     toast.show(`Creating ${result.name}.`, { variant: "info" });
     await list.refresh();
   };
@@ -65,7 +68,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
 
   const handleDelete = async (input: VmDeleteInput) => {
     await remove(input);
-    setSelectedName(null);
+    setSelection(null);
     await list.refresh();
   };
 
@@ -143,29 +146,35 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       error={list.error}
       loading={list.loading}
       selectedName={selectedName}
+      selectedId={selection?.id ?? null}
       theme={theme}
       compact={compact}
-      onSelect={setSelectedName}
+      onSelect={(child) =>
+        setSelection({
+          name: child.name,
+          ...(child.kind === "pending" ? {} : { id: child.id }),
+        })
+      }
       onRetry={() => void list.refresh()}
     />
   );
 
-  const detailPane = selectedName ? (
+  const detailPane = selection ? (
     <ChildDetail
-      key={selectedName}
-      name={selectedName}
+      key={`${selection.name}:${selection.id ?? "pending"}`}
+      name={selection.name}
       data={detail.data}
       loading={detail.loading}
       error={detail.error}
       theme={theme}
       compact={compact}
-      onBack={() => setSelectedName(null)}
+      onBack={() => setSelection(null)}
       onRetry={() => void detail.refresh()}
       onRepair={handleRepair}
       onRetryCreate={handleCreate}
       onDelete={handleDelete}
       onDeleted={() => {
-        setSelectedName(null);
+        setSelection(null);
         void list.refresh();
       }}
     />
@@ -188,7 +197,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       {header}
 
       {compact ? (
-        <View style={styles.compactPane}>{selectedName ? detailPane : listPane}</View>
+        <View style={styles.compactPane}>{selection ? detailPane : listPane}</View>
       ) : (
         <View style={styles.columns}>
           <View style={styles.listPane}>{listPane}</View>

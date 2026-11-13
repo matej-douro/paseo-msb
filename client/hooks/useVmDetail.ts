@@ -15,8 +15,11 @@ export interface VmDetailState {
 /**
  * Reconnects by sandbox name and polls while that name is selected. A null name
  * stops polling without affecting host work.
+ *
+ * Responses are latest-request-wins across selections and manual refreshes, so
+ * one selection's in-flight detail can never clear or overwrite another's.
  */
-export function useVmDetail(name: string | null): VmDetailState {
+export function useVmDetail(name: string | null, id?: string): VmDetailState {
   const invoke = useRpc(vmDetailRpc);
   const invokeRef = useRef(invoke);
   invokeRef.current = invoke;
@@ -26,16 +29,11 @@ export function useVmDetail(name: string | null): VmDetailState {
   const [loading, setLoading] = useState(false);
 
   const mounted = useRef(false);
-  const inFlight = useRef(false);
-  const generation = useRef(0);
+  const sequence = useRef(0);
   const reload = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     mounted.current = true;
-    generation.current += 1;
-    const current = generation.current;
-    let cancelled = false;
-    inFlight.current = false;
 
     if (!name) {
       reload.current = async () => {};
@@ -43,7 +41,6 @@ export function useVmDetail(name: string | null): VmDetailState {
       setError(null);
       setLoading(false);
       return () => {
-        cancelled = true;
         mounted.current = false;
       };
     }
@@ -53,22 +50,20 @@ export function useVmDetail(name: string | null): VmDetailState {
     setError(null);
 
     const load = async () => {
-      if (inFlight.current) return;
-      inFlight.current = true;
+      const request = ++sequence.current;
 
       try {
-        const result = await invokeRef.current({ name });
-        if (!cancelled && current === generation.current) {
+        const result = await invokeRef.current(id ? { name, id } : { name });
+        if (mounted.current && request === sequence.current) {
           setData(result);
           setError(null);
         }
       } catch (rpcError) {
-        if (!cancelled && current === generation.current) {
+        if (mounted.current && request === sequence.current) {
           setError(errorMessage(rpcError));
         }
       } finally {
-        inFlight.current = false;
-        if (!cancelled && current === generation.current) setLoading(false);
+        if (mounted.current && request === sequence.current) setLoading(false);
       }
     };
 
@@ -79,11 +74,11 @@ export function useVmDetail(name: string | null): VmDetailState {
     }, POLL_MS);
 
     return () => {
-      cancelled = true;
       mounted.current = false;
+      sequence.current += 1;
       clearInterval(timer);
     };
-  }, [name]);
+  }, [name, id]);
 
   const refresh = useCallback(async () => {
     if (mounted.current) await reload.current();

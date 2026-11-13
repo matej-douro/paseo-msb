@@ -15,6 +15,10 @@ export interface VmListState {
 /**
  * Polls `vm.list` only while the screen is mounted. Host work continues on the
  * server; stopping the interval does not stop it.
+ *
+ * Responses are latest-request-wins: an older in-flight poll can never
+ * overwrite a newer response, and a manual refresh always issues its own
+ * request instead of being skipped behind a poll.
  */
 export function useVmList(): VmListState {
   const invoke = useRpc(vmListRpc);
@@ -26,23 +30,23 @@ export function useVmList(): VmListState {
   const [loading, setLoading] = useState(true);
 
   const mounted = useRef(false);
-  const inFlight = useRef(false);
+  const sequence = useRef(0);
 
   const refresh = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+    const request = ++sequence.current;
 
     try {
       const result = await invokeRef.current({});
-      if (mounted.current) {
+      if (mounted.current && request === sequence.current) {
         setData(result);
         setError(null);
       }
     } catch (rpcError) {
-      if (mounted.current) setError(errorMessage(rpcError));
+      if (mounted.current && request === sequence.current) {
+        setError(errorMessage(rpcError));
+      }
     } finally {
-      inFlight.current = false;
-      if (mounted.current) setLoading(false);
+      if (mounted.current && request === sequence.current) setLoading(false);
     }
   }, []);
 

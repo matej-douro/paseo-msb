@@ -83,10 +83,19 @@ describe("child presentation", () => {
     expect(phaseText("deleting")).toBe("Deleting");
     expect(phaseText("ready")).toBe("Ready");
     expect(runtimeText("running")).toBe("Running");
-    expect(registrationText(SANDBOX.kind === "sandbox" ? SANDBOX.registration : null)).toBe(
-      "Registration online",
-    );
-    expect(registrationText(null)).toBe("Not registered");
+    expect(
+      registrationText(
+        SANDBOX.kind === "sandbox" ? SANDBOX.registration : null,
+        { status: "available" },
+      ),
+    ).toBe("Registration online");
+    expect(registrationText(null, { status: "available" })).toBe("Not registered");
+    expect(
+      registrationText(null, {
+        status: "unavailable",
+        error: safeError("registrations_unavailable"),
+      }),
+    ).toBe("Registration unknown");
   });
 
   it("maps tones for phases and registrations", () => {
@@ -172,6 +181,18 @@ describe("list states", () => {
         credentials: ["GH_TOKEN"],
         storedCredentials: [],
         children: [PENDING],
+      }),
+    ).toBe(false);
+    expect(
+      isEmptyInventory({
+        inventory: {
+          status: "unavailable",
+          error: safeError("inventory_unavailable"),
+        },
+        registrations: { status: "available" },
+        credentials: [],
+        storedCredentials: [],
+        children: [],
       }),
     ).toBe(false);
   });

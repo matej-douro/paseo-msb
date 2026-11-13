@@ -20,9 +20,10 @@ export interface ChildListProps {
   error: string | null;
   loading: boolean;
   selectedName: string | null;
+  selectedId: string | null;
   theme: PluginTheme;
   compact: boolean;
-  onSelect(name: string): void;
+  onSelect(child: VmChild): void;
   onRetry(): void;
 }
 
@@ -31,6 +32,7 @@ export function ChildList({
   error,
   loading,
   selectedName,
+  selectedId,
   theme,
   compact,
   onSelect,
@@ -77,11 +79,15 @@ export function ChildList({
 
       {data?.children.map((child) => (
         <ChildRow
-          key={child.name}
+          key={`${child.kind}:${child.name}:${child.kind === "pending" ? "" : child.id}`}
           child={child}
-          selected={child.name === selectedName}
+          registrations={data.registrations}
+          selected={
+            child.name === selectedName &&
+            (child.kind === "pending" ? selectedId === null : child.id === selectedId)
+          }
           theme={theme}
-          onSelect={() => onSelect(child.name)}
+          onSelect={() => onSelect(child)}
         />
       ))}
     </ScrollView>
@@ -106,11 +112,13 @@ function ListNotices({ data, theme }: { data: VmListResult; theme: PluginTheme }
 
 function ChildRow({
   child,
+  registrations,
   selected,
   theme,
   onSelect,
 }: {
   child: VmChild;
+  registrations: VmListResult["registrations"];
   selected: boolean;
   theme: PluginTheme;
   onSelect(): void;
@@ -157,8 +165,8 @@ function ChildRow({
           <>
             <StatusPill label={runtimeText(child.runtimeStatus)} tone="muted" theme={theme} />
             <StatusPill
-              label={registrationText(child.registration)}
-              tone={registrationTone(child.registration)}
+              label={registrationText(child.registration, registrations)}
+              tone={registrationTone(child.registration, registrations)}
               theme={theme}
             />
           </>
@@ -166,8 +174,8 @@ function ChildRow({
           <>
             <StatusPill label="Registration only" tone="warning" theme={theme} />
             <StatusPill
-              label={registrationText(child.registration)}
-              tone={registrationTone(child.registration)}
+              label={registrationText(child.registration, registrations)}
+              tone={registrationTone(child.registration, registrations)}
               theme={theme}
             />
           </>

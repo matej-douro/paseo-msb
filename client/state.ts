@@ -74,12 +74,20 @@ export function runtimeText(status: RuntimeStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-export function registrationText(registration: Registration | null): string {
-  return registration ? `Registration ${registration.status}` : "Not registered";
+export function registrationText(
+  registration: Registration | null,
+  availability: Availability,
+): string {
+  if (registration) return `Registration ${registration.status}`;
+  // Unavailable registrations are unknown, not confidently absent.
+  return availability.status === "available" ? "Not registered" : "Registration unknown";
 }
 
-export function registrationTone(registration: Registration | null): Tone {
-  if (!registration) return "muted";
+export function registrationTone(
+  registration: Registration | null,
+  availability: Availability = { status: "available" },
+): Tone {
+  if (!registration) return availability.status === "available" ? "muted" : "warning";
   switch (registration.status) {
     case "online":
       return "success";
@@ -147,7 +155,12 @@ export function registrationsNotice(availability: Availability): string | null {
 }
 
 export function isEmptyInventory(data: VmListResult): boolean {
-  return data.children.length === 0;
+  // Only a complete, available directory can prove that nothing exists.
+  return (
+    data.inventory.status === "available" &&
+    data.registrations.status === "available" &&
+    data.children.length === 0
+  );
 }
 
 export function reconcileFailureMessage(result: VmReconcileResult): string | null {

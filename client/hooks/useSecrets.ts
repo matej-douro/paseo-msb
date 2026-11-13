@@ -19,22 +19,22 @@ export function useSecrets(): SecretsState {
   const [data, setData] = useState<SecretsListResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const inFlight = useRef(false);
+  const sequence = useRef(0);
 
   const refresh = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+    const request = ++sequence.current;
     setLoading(true);
 
     try {
       const result = await invokeRef.current({});
-      setData(result);
-      setError(null);
+      if (request === sequence.current) {
+        setData(result);
+        setError(null);
+      }
     } catch (rpcError) {
-      setError(errorMessage(rpcError));
+      if (request === sequence.current) setError(errorMessage(rpcError));
     } finally {
-      inFlight.current = false;
-      setLoading(false);
+      if (request === sequence.current) setLoading(false);
     }
   }, []);
 

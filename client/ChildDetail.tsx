@@ -67,6 +67,7 @@ export function ChildDetail({
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const child = data?.child ?? null;
+  const registrations = data?.registrations ?? ({ status: "available" } as const);
   const sandbox = child?.kind === "sandbox" ? child : null;
   const registrationOnly = child?.kind === "registration" ? child : null;
   const deleteTarget = sandbox ?? registrationOnly;
@@ -175,7 +176,11 @@ export function ChildDetail({
 
         {data && !child ? (
           <Notice
-            text="This child is no longer in the managed inventory. It may have been deleted or reloaded."
+            text={
+              data.inventory.status === "unavailable"
+                ? "Inventory is unavailable, so this child's state cannot be confirmed. It is not known to be deleted."
+                : "This child is no longer in the managed inventory. It may have been deleted or reloaded."
+            }
             theme={theme}
           />
         ) : null}
@@ -198,7 +203,7 @@ export function ChildDetail({
                   <DetailRow
                     theme={theme}
                     label="Registration"
-                    value={registrationText(sandbox.registration)}
+                    value={registrationText(sandbox.registration, registrations)}
                   />
                   <DetailRow theme={theme} label="Stable ID" value={sandbox.id} mono />
                 </>
@@ -208,7 +213,7 @@ export function ChildDetail({
                   <DetailRow
                     theme={theme}
                     label="Registration"
-                    value={registrationText(registrationOnly.registration)}
+                    value={registrationText(registrationOnly.registration, registrations)}
                   />
                   <DetailRow theme={theme} label="Stable ID" value={registrationOnly.id} mono />
                 </>
@@ -221,9 +226,11 @@ export function ChildDetail({
               <StatusPill
                 label={registrationText(
                   sandbox ? sandbox.registration : (registrationOnly?.registration ?? null),
+                  registrations,
                 )}
                 tone={registrationTone(
                   sandbox ? sandbox.registration : (registrationOnly?.registration ?? null),
+                  registrations,
                 )}
                 theme={theme}
               />
