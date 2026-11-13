@@ -7,4 +7,5 @@ Create a fixed-size child VM with selected Pi credentials and it appears in the 
 Design: [DESIGN.md](./DESIGN.md).
 Implementation plan: [TASKS.md](./TASKS.md).
 
-Status: design for v1, implementation not started.
+Status: design for v1; Task 1 vertical slice verified, implementation not started.
+Spike results: [docs/spikes/vertical-slice.md](./docs/spikes/vertical-slice.md).

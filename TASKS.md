@@ -14,13 +14,15 @@ Create one scratch plugin/script that boots the official Paseo image, installs P
 
 Acceptance:
 
-- [ ] Record the full guest image digest, parent daemon version, microsandbox SDK/runtime versions, and exact Pi package version used by the remaining tasks.
-- [ ] Verify guest Node >= 22.19, npm, `.init("auto")`, non-root global Pi installation, and `pi` on the daemon user's PATH.
-- [ ] Verify loopback publishing with host port `0`; if unsupported, prove a minimal bind-probe/retry alternative and prompt release after stop.
-- [ ] Verify detached survival, stable-ID replacement checks, persisted labels/config/logs, and detached-job inspection after plugin and parent-daemon restart.
-- [ ] Verify a loopback child without `PASEO_PASSWORD`, or the minimal internal-password fallback, plus routed online, `hosts.remove`, and Pi detection after `providers.refresh()`.
-- [ ] Verify header-only secret substitution and blocked-destination behavior with a controlled HTTPS endpoint and fake values. Verify all five fixed guest variables contain placeholders rather than raw values.
-- [ ] Record results and any required narrow fallback in `docs/spikes/vertical-slice.md`; do not expand the product scope.
+- [x] Record the full guest image digest, parent daemon version, microsandbox SDK/runtime versions, and exact Pi package version used by the remaining tasks.
+- [x] Verify guest Node >= 22.19, npm, `.init("auto")`, non-root global Pi installation, and `pi` on the daemon user's PATH.
+- [x] Verify loopback publishing with host port `0`; if unsupported, prove a minimal bind-probe/retry alternative and prompt release after stop.
+- [x] Verify detached survival, stable-ID replacement checks, persisted labels/config/logs, and detached-job inspection after plugin and parent-daemon restart.
+- [x] Verify a loopback child without `PASEO_PASSWORD`, or the minimal internal-password fallback, plus routed online, `hosts.remove`, and Pi detection after `providers.refresh()`.
+- [x] Verify header-only secret substitution and blocked-destination behavior with a controlled HTTPS endpoint and fake values. Verify all five fixed guest variables contain placeholders rather than raw values.
+- [x] Record results and any required narrow fallback in `docs/spikes/vertical-slice.md`; do not expand the product scope.
+
+Result: [docs/spikes/vertical-slice.md](./docs/spikes/vertical-slice.md). Narrow fallbacks: the image requires explicit tini init (`.init("auto")` fails), and host port `0` is not allocated, so creation uses a bind-probe/retry port.
 
 Files: `package.json`, `package-lock.json`, `scripts/spikes/verify-vertical-slice.mjs`, `scripts/spikes/fixtures/`, `docs/spikes/vertical-slice.md`
 
