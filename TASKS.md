@@ -32,15 +32,17 @@ Create the parent plugin, fixed constants, five RPC contracts, and read-side pro
 
 Acceptance:
 
-- [ ] Manifest matches the verified parent floor and client/server/shared import boundaries.
-- [ ] `shared/constants.ts` contains the image/Pi pins, 2 CPUs, 2048 MiB, guest port, labels, and five fixed credential-to-host mappings.
-- [ ] Zod contracts implement exactly `vm.list`, `vm.detail`, `vm.create`, `vm.delete`, and `vm.reconcile` with safe errors and no secret values.
-- [ ] Server lists label-filtered sandboxes for the current parent and joins them with parent registrations and an initially empty pending-create map.
-- [ ] Strict config decoding returns only stable ID, name, labels, runtime status, registration identity/status, and available credential names. Raw config and env never cross RPC.
-- [ ] `vm.detail` returns bounded, redacted sandbox/job logs and distinguishes unavailable inventory from empty inventory.
-- [ ] Typecheck, build, and focused config/RPC tests pass.
+- [x] Manifest matches the verified parent floor and client/server/shared import boundaries.
+- [x] `shared/constants.ts` contains the image/Pi pins, 2 CPUs, 2048 MiB, guest port, labels, and five fixed credential-to-host mappings.
+- [x] Zod contracts implement exactly `vm.list`, `vm.detail`, `vm.create`, `vm.delete`, and `vm.reconcile` with safe errors and no secret values.
+- [x] Server lists label-filtered sandboxes for the current parent and joins them with parent registrations and an initially empty pending-create map.
+- [x] Strict config decoding returns only stable ID, name, labels, runtime status, registration identity/status, and available credential names. Raw config and env never cross RPC.
+- [x] `vm.detail` returns bounded, redacted sandbox/job logs and distinguishes unavailable inventory from empty inventory.
+- [x] Typecheck, build, and focused config/RPC tests pass.
 
-Files: `paseo-plugin.json`, `tsconfig.json`, `index.client.tsx`, `index.server.ts`, `shared/`, `server/index.ts`, `server/rpc.ts`, `server/sandbox.ts`, `server/status.ts`, `server/logs.ts`, `client/screen.tsx`, `tests/server/`
+Result: mutation RPCs are registered but return the safe `not_implemented` error until tasks 3 and 4.
+
+Files: `paseo-plugin.json`, `tsconfig.json`, `index.client.tsx`, `index.server.ts`, `shared/`, `server/index.ts`, `server/rpc.ts`, `server/sandbox.ts`, `server/runtime.ts`, `server/status.ts`, `server/logs.ts`, `server/pending.ts`, `client/screen.tsx`, `tests/server/`
 
 ## 3. Implement idempotent background creation with Pi and secrets
 
