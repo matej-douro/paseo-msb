@@ -67,7 +67,7 @@ export function hasEnvironmentCredential(
   return usable(env[name]);
 }
 
-/** Management view: names, sources, and the store location. Never values. */
+/** Management view: names and sources only. Never values or store paths. */
 export async function listSecrets(
   store: SecretsStore,
   env: Readonly<Record<string, string | undefined>>,
@@ -78,7 +78,6 @@ export async function listSecrets(
   }
 
   return {
-    storePath: store.filePath,
     secrets: CREDENTIAL_NAMES.map((name) => ({
       name,
       stored: stored.values.has(name),

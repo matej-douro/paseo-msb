@@ -105,12 +105,13 @@ export function createSecretsStore(filePath = defaultSecretsFilePath()): Secrets
 
     try {
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-      await fs.chmod(directory, 0o700).catch(() => {});
+      // Owner-only permissions are part of the contract, not best effort.
+      await fs.chmod(directory, 0o700);
       await fs.writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, {
         mode: 0o600,
       });
       await fs.rename(temporary, filePath);
-      await fs.chmod(filePath, 0o600).catch(() => {});
+      await fs.chmod(filePath, 0o600);
     } catch {
       await fs.rm(temporary, { force: true }).catch(() => {});
       throw new SecretsStoreUnavailableError();

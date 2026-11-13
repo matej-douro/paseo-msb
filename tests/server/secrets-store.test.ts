@@ -122,7 +122,6 @@ describe("secrets store", () => {
 
     const result = await listSecrets(store, { GH_TOKEN: "env-gh-value" });
 
-    expect(result.storePath).toBe(filePath);
     expect(result.secrets).toEqual([
       { name: "ANTHROPIC_API_KEY", stored: false, environment: false },
       { name: "OPENAI_API_KEY", stored: true, environment: false },
@@ -132,6 +131,7 @@ describe("secrets store", () => {
     ]);
     expect(JSON.stringify(result)).not.toContain("stored-openai-value");
     expect(JSON.stringify(result)).not.toContain("env-gh-value");
+    expect(JSON.stringify(result)).not.toContain(filePath);
   });
 
   it("reports an unavailable store with a safe error", async () => {

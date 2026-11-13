@@ -193,9 +193,6 @@ export function ManageSecrets({
               );
             })}
 
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-              Store: {data.storePath} (owner-only permissions)
-            </Text>
           </View>
         ) : null}
 

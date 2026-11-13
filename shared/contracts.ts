@@ -125,6 +125,8 @@ export const VmListOutputSchema = z
 export const VmDetailInputSchema = z
   .object({
     name: z.string().min(1).max(128),
+    /** Optional generation id to disambiguate rows that share a name. */
+    id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -209,7 +211,6 @@ const SecretEntrySchema = z
 
 export const SecretsListOutputSchema = z
   .object({
-    storePath: z.string().min(1).max(4096),
     secrets: z.array(SecretEntrySchema),
   })
   .strict();
