@@ -30,6 +30,11 @@ export interface HostDirectoryLike {
   readonly hosts: readonly HostRegistrationLike[];
 }
 
+/** The subset of the parent host API the plugin uses. */
+export interface ParentHostsLike {
+  list(): Promise<HostDirectoryLike>;
+}
+
 export type RegistrationsView =
   | { readonly status: "available"; readonly hosts: readonly HostRegistrationLike[] }
   | { readonly status: "unavailable"; readonly error: SafeError };

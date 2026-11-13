@@ -12,12 +12,9 @@ import { loadManagedSandboxes, type SandboxInventory, type SandboxRuntime } from
 import {
   buildVmList,
   type HostDirectoryLike,
+  type ParentHostsLike,
   type RegistrationsView,
 } from "./status";
-
-export interface ParentHostsLike {
-  list(): Promise<HostDirectoryLike>;
-}
 
 export interface ReadContext {
   readonly hosts: ParentHostsLike;
@@ -114,11 +111,6 @@ export async function readVmDetail(
 
 function notImplemented(): never {
   throw new Error(safeError("not_implemented").message);
-}
-
-/** Task 3 replaces this with idempotent background creation. */
-export async function createVm(): Promise<never> {
-  notImplemented();
 }
 
 /** Task 4 replaces this with exact sandbox and registration removal. */
