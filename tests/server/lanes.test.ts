@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   abortableSleep,
+  bounded,
   createLifecycleLanes,
   LifecycleAbortedError,
+  LifecycleTimeoutError,
 } from "../../server/lanes";
 
 function deferred<T>() {
@@ -124,5 +126,57 @@ describe("lifecycle lanes", () => {
     await started.promise;
     await expect(lanes.settle(100)).resolves.toBeUndefined();
     await expect(active).rejects.toBeInstanceOf(LifecycleAbortedError);
+  });
+
+  it("permanently rejects new work after settle closes the lanes", async () => {
+    const lanes = createLifecycleLanes();
+    const ran: string[] = [];
+
+    await lanes.settle(100);
+
+    expect(lanes.closed).toBe(true);
+    await expect(
+      lanes.run("paseo-a", async () => {
+        ran.push("a");
+      }),
+    ).rejects.toBeInstanceOf(LifecycleAbortedError);
+    expect(ran).toEqual([]);
+  });
+
+  it("stops an already-running multi-name operation from queueing later names", async () => {
+    const lanes = createLifecycleLanes();
+    const started = deferred<void>();
+    const ran: string[] = [];
+
+    const operation = (async () => {
+      for (const name of ["paseo-a", "paseo-b"]) {
+        await lanes.run(name, async (token) => {
+          if (name === "paseo-a") {
+            started.resolve();
+            await abortableSleep(5_000, token.signal);
+          }
+          ran.push(name);
+        });
+      }
+    })().catch(() => undefined);
+
+    await started.promise;
+    await lanes.settle(100);
+    await operation;
+
+    expect(ran).toEqual([]);
+  });
+
+  it("bounds and aborts waits on external calls", async () => {
+    const never = new Promise<void>(() => {});
+
+    await expect(bounded(never, { timeoutMs: 5 })).rejects.toBeInstanceOf(
+      LifecycleTimeoutError,
+    );
+
+    const controller = new AbortController();
+    const waiting = bounded(never, { timeoutMs: 5_000, signal: controller.signal });
+    controller.abort();
+    await expect(waiting).rejects.toBeInstanceOf(LifecycleAbortedError);
   });
 });

@@ -1,4 +1,9 @@
-import type { VmDetailInput, VmDetailResult, VmListResult } from "../shared/contracts";
+import type {
+  VmChild,
+  VmDetailInput,
+  VmDetailResult,
+  VmListResult,
+} from "../shared/contracts";
 import type { CredentialName } from "../shared/constants";
 import { safeError, type SafeError } from "../shared/errors";
 import { persistedCredentialValues } from "./diagnostics";
@@ -32,13 +37,16 @@ type DirectoryLoad =
   | { readonly status: "available"; readonly directory: HostDirectoryLike }
   | { readonly status: "unavailable"; readonly error: SafeError };
 
-async function loadDirectory(hosts: ParentHostsLike): Promise<DirectoryLoad> {
+async function loadDirectory(
+  hosts: ParentHostsLike,
+  redaction: readonly string[],
+): Promise<DirectoryLoad> {
   try {
     return { status: "available", directory: await hosts.list() };
   } catch (error) {
     return {
       status: "unavailable",
-      error: safeError("registrations_unavailable", failureDetail(error)),
+      error: safeError("registrations_unavailable", failureDetail(error, redaction)),
     };
   }
 }
@@ -55,11 +63,11 @@ interface Projection {
 }
 
 async function readProjection(context: ReadContext): Promise<Projection> {
-  const loaded = await loadDirectory(context.hosts);
+  const redaction = credentialValues(context.env, context.storedSecrets);
+  const loaded = await loadDirectory(context.hosts, redaction);
   const registrations = registrationsView(loaded);
   const parentId = loaded.status === "available" ? loaded.directory.self.serverId : null;
 
-  const redaction = credentialValues(context.env, context.storedSecrets);
   const inventory: SandboxInventory = parentId
     ? await loadManagedSandboxes(context.runtime, parentId, redaction)
     : { status: "unavailable", error: safeError("inventory_unavailable") };
@@ -86,7 +94,7 @@ export async function readVmDetail(
   input: VmDetailInput,
 ): Promise<VmDetailResult> {
   const projection = await readProjection(context);
-  const child = projection.list.children.find((candidate) => candidate.name === input.name) ?? null;
+  const child = selectChild(projection.list.children, input);
 
   let logs: VmDetailResult["logs"] = {
     sandbox: unavailableLogBundle(),
@@ -120,4 +128,18 @@ export async function readVmDetail(
     child,
     logs,
   };
+}
+
+/**
+ * Rows can share a name (a settled failed attempt plus its leftover
+ * registration). An explicit id selects the exact generation; otherwise the
+ * first matching row wins.
+ */
+function selectChild(children: readonly VmChild[], input: VmDetailInput): VmChild | null {
+  const named = children.filter((candidate) => candidate.name === input.name);
+  if (named.length === 0) return null;
+  if (!input.id) return named[0] ?? null;
+  return (
+    named.find((candidate) => candidate.kind !== "pending" && candidate.id === input.id) ?? null
+  );
 }

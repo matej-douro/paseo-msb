@@ -1,7 +1,8 @@
 import type { VmReconcileInput, VmReconcileResult } from "../shared/contracts";
 import { safeError, type SafeError } from "../shared/errors";
+import { failureDetail } from "./diagnostics";
 import { credentialValues } from "./logs";
-import { LifecycleAbortedError, type LifecycleLanes, type LaneToken } from "./lanes";
+import { bounded, LifecycleAbortedError, type LifecycleLanes, type LaneToken } from "./lanes";
 import { reconcileName, type ReconcileContext } from "./reconciler";
 import { pluginRegistrations, SetupFailure } from "./registration";
 import {
@@ -24,7 +25,9 @@ export async function reconcileVm(
   context: ReconcileVmContext,
   input: VmReconcileInput,
 ): Promise<VmReconcileResult> {
-  const directory = await context.hosts.list().catch(() => {
+  const directory = await bounded(context.hosts.list(), {
+    timeoutMs: context.sdkCallTimeoutMs ?? 60_000,
+  }).catch(() => {
     throw new Error(safeError("registrations_unavailable").message);
   });
   const parentId = directory.self.serverId;
@@ -53,7 +56,7 @@ export async function reconcileVm(
     targets.add(input.name);
   } else {
     for (const loaded of inventory.sandboxes) targets.add(loaded.sandbox.name);
-    for (const registration of pluginRegistrations(parentId, directory.hosts)) {
+    for (const registration of pluginRegistrations(directory.hosts)) {
       const name = registration.metadata.name;
       if (typeof name === "string" && name.length > 0) targets.add(name);
     }
@@ -80,17 +83,22 @@ export async function reconcileVm(
       );
       if (outcome.repaired) repaired.add(name);
     } catch (error) {
-      if (error instanceof LifecycleAbortedError) continue;
-      errors.push({ name, error: toSafeError(error) });
+      // Lanes are permanently closed by plugin cleanup: stop the whole Repair
+      // rather than letting later names try to start.
+      if (error instanceof LifecycleAbortedError) break;
+      errors.push({ name, error: toSafeError(error, redactionValues) });
     }
   }
 
   return { repaired: [...repaired].sort(), errors };
 }
 
-function toSafeError(error: unknown): SafeError {
+function toSafeError(error: unknown, redaction: readonly string[]): SafeError {
   if (error instanceof SetupFailure) {
     return safeError(error.code, error.detail ?? null);
   }
-  return safeError("registration_failed");
+  return safeError(
+    "registration_failed",
+    failureDetail(error, redaction),
+  );
 }

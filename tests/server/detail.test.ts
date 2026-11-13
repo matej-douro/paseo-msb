@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { MAX_LOG_ENTRIES, MAX_LOG_LINE_BYTES } from "../../shared/constants";
+import {
+  REGISTRATION_PRODUCER_ID,
+  MAX_LOG_ENTRIES,
+  MAX_LOG_LINE_BYTES,
+} from "../../shared/constants";
 import { VmDetailOutputSchema } from "../../shared/contracts";
 import { boundLogLines } from "../../server/logs";
 import { readVmDetail } from "../../server/rpc";
@@ -10,6 +14,7 @@ import {
   fakeRuntime,
   fakeSandbox,
   failingRuntime,
+  PARENT_ID,
   SECRET_VALUE,
 } from "./fake-runtime";
 
@@ -202,5 +207,38 @@ describe("readVmDetail", () => {
 
     expect(detail.logs.sandbox.entries[0].text).toBe("token [redacted]");
     expect(JSON.stringify(detail)).not.toContain(storedValue);
+  });
+
+  it("selects an exact generation when a name has two rows", async () => {
+    const name = "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
+    const registration = fakeRegistration({
+      registrationId: "reg_1",
+      label: `${PARENT_ID}/${name}`,
+      source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_1" },
+      metadata: { source: "paseo-msb", name },
+    });
+    const failedPending = {
+      requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
+      name,
+      credentialNames: ["ANTHROPIC_API_KEY"] as const,
+      phase: "failed" as const,
+      createdAt: 1,
+      errorCode: "registration_failed" as const,
+      errorDetail: null,
+    };
+    const ctx: ReadContext = {
+      hosts: { list: async () => fakeHostDirectory([registration]) },
+      runtime: fakeRuntime([]),
+      pending: [failedPending],
+      env: {},
+      storedCredentials: [],
+      storedSecrets: new Map(),
+    };
+
+    const byName = await readVmDetail(ctx, { name });
+    expect(byName.child?.kind).toBe("pending");
+
+    const byId = await readVmDetail(ctx, { name, id: "sandbox_1" });
+    expect(byId.child).toMatchObject({ kind: "registration", id: "sandbox_1" });
   });
 });

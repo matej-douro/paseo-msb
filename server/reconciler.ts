@@ -12,8 +12,7 @@ import {
   waitForInstallJob,
   type InstallJobOutcome,
 } from "./jobs";
-import { LifecycleAbortedError, type LaneToken } from "./lanes";
-import type { PendingCreateStore } from "./pending";
+import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
 import {
   inspectPiInstall,
   piInstallSpec,
@@ -47,10 +46,12 @@ import {
 } from "./sandbox";
 import type { ResolvedSecret } from "./secrets";
 import type { SecretsStore } from "./secrets-store";
-import type { HostRegistrationLike } from "./status";
+import type { HostDirectoryLike, HostRegistrationLike } from "./status";
 
 const MAX_CREATE_ATTEMPTS = 3;
 const DEFAULT_INSTALL_TIMEOUT_MS = 600_000;
+/** Bound for one non-job SDK or parent call (lookup, connect, exec, create). */
+const DEFAULT_SDK_CALL_TIMEOUT_MS = 60_000;
 
 export interface ReconcileContext extends RegistrationContext {
   readonly hosts: RegistrationHostsLike;
@@ -58,19 +59,19 @@ export interface ReconcileContext extends RegistrationContext {
   readonly sandboxHost: SandboxHost;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly secretsStore: SecretsStore;
-  readonly pending: PendingCreateStore;
   /** Bounded wait for one detached Pi install; tests shorten it. */
   readonly installTimeoutMs?: number;
+  /** Bounded wait for one non-job SDK call; tests shorten it. */
+  readonly sdkCallTimeoutMs?: number;
 }
 
 export interface ReconcileRequest {
   readonly name: string;
-  /** Only `vm.create` may allocate an initial sandbox. */
+  /** Only a Create attempt may allocate an initial sandbox. */
   readonly allowCreate: boolean;
-  readonly requestId?: string;
-  /** Values resolved immediately before creation; only when creating. */
-  readonly credentials?: readonly ResolvedSecret[];
   readonly credentialNames?: readonly CredentialName[];
+  /** Resolves selected values only when an initial create is needed. */
+  readonly resolveCredentials?: () => readonly ResolvedSecret[];
   readonly redactionValues: readonly string[];
 }
 
@@ -100,18 +101,11 @@ export async function reconcileName(
 ): Promise<ReconcileOutcome> {
   token.throwIfAborted();
 
-  const directory = await context.hosts.list().catch((error) => {
-    throw new SetupFailure(
-      "registrations_unavailable",
-      failureDetail(error, request.redactionValues),
-    );
-  });
+  const directory = await readDirectory(context, request.redactionValues, token);
   const parentId = directory.self.serverId;
   if (!parentId) throw new SetupFailure("runtime_unavailable");
 
-  const handle = await context.sandboxHost.find(request.name).catch(() => {
-    throw new SetupFailure("runtime_unavailable");
-  });
+  const handle = await findSandbox(context, request.name, request.redactionValues, token);
 
   if (!handle) return reconcileAbsent(context, request, parentId, token);
 
@@ -124,52 +118,72 @@ async function reconcileAbsent(
   parentId: string,
   token: LaneToken,
 ): Promise<ReconcileOutcome> {
-  const directory = await context.hosts.list().catch((error) => {
-    throw new SetupFailure(
-      "registrations_unavailable",
-      failureDetail(error, request.redactionValues),
-    );
-  });
-  const registrations = registrationOnlyForName(parentId, request.name, directory.hosts);
+  token.throwIfAborted();
 
-  if (!request.allowCreate) {
-    if (registrations.length === 0) throw new SetupFailure("not_found");
-    await removeStaleRegistrations(context, registrations);
-    return {
-      name: request.name,
-      phase: "registering",
-      registration: null,
-      repaired: true,
-    };
-  }
+  const directory = await readDirectory(context, request.redactionValues, token);
+  const registrations = registrationOnlyForName(request.name, directory.hosts);
 
-  // A registration-only child means a Delete is still settling. Join that
-  // cleanup instead of creating a replacement generation.
   if (registrations.length > 0) {
-    await removeStaleRegistrations(context, registrations);
-    if (request.requestId) context.pending.remove(request.requestId);
-    return {
-      name: request.name,
-      phase: "registering",
-      registration: null,
-      repaired: true,
-    };
+    // A registration-only child means an earlier Delete is still settling.
+    // Remove only generations that are proven gone.
+    await removeStaleRegistrations(
+      context,
+      request.name,
+      registrations,
+      request.redactionValues,
+      token,
+    );
+
+    // A generation created between the absence check and the cleanup wins:
+    // advance it instead of allocating a second sandbox under the same name.
+    const appeared = await findSandbox(
+      context,
+      request.name,
+      request.redactionValues,
+      token,
+    );
+    if (appeared) {
+      return advanceSandbox(
+        context,
+        { ...request, allowCreate: false },
+        parentId,
+        appeared,
+        token,
+      );
+    }
+
+    if (!request.allowCreate) {
+      return {
+        name: request.name,
+        phase: "registering",
+        registration: null,
+        repaired: true,
+      };
+    }
+  } else if (!request.allowCreate) {
+    throw new SetupFailure("not_found");
   }
 
-  const credentials = request.credentials ?? [];
+  const credentials = request.resolveCredentials?.() ?? [];
   if (credentials.length === 0) throw new SetupFailure("missing_credentials");
 
   const created = await createWithPortRetry(
-    context.sandboxHost,
+    context,
     {
       name: request.name,
       parentId,
       secrets: credentials,
     },
     request.redactionValues,
+    token,
   );
 
-  const handle = await context.sandboxHost.find(request.name).catch(() => null);
+  const handle = await findSandbox(
+    context,
+    request.name,
+    request.redactionValues,
+    token,
+  );
   if (!handle) {
     throw new SetupFailure(
       "create_failed",
@@ -189,7 +203,6 @@ async function reconcileAbsent(
   if (ownership !== "owned") throw new SetupFailure("name_conflict");
 
   token.throwIfAborted();
-  if (request.requestId) context.pending.remove(request.requestId);
 
   return advanceSandbox(context, { ...request, allowCreate: false }, parentId, handle, token);
 }
@@ -206,20 +219,20 @@ async function advanceSandbox(
   if (ownership === "foreign") throw new SetupFailure("name_conflict");
   if (ownership === "unknown") throw new SetupFailure("invalid_config");
 
+  const redaction = mergeRedaction(request.redactionValues, handle);
+
   let decoded: DecodedSandbox | null;
   try {
-    decoded = decodeManagedSandbox(handle, parentId);
+    decoded = decodeManagedSandbox(handle, parentId, redaction);
   } catch (error) {
     throw new SetupFailure(isSandboxDecodeError(error) ? error.code : "invalid_config");
   }
   if (!decoded) throw new SetupFailure("name_conflict");
 
-  const redaction = mergeRedaction(request.redactionValues, handle);
-
   if (decoded.labels[PHASE_LABEL] === "deleting") {
     // Cleanup-only: never resume setup after a Delete tombstone. A reload that
     // observed the tombstone before destruction completes that exact deletion.
-    const cleaned = await completeDeletion(context, parentId, handle, token);
+    const cleaned = await completeDeletion(context, handle, redaction, token);
     return {
       name: request.name,
       phase: "deleting",
@@ -232,7 +245,14 @@ async function advanceSandbox(
     throw new SetupFailure("invalid_config");
   }
 
-  if (request.requestId) context.pending.remove(request.requestId);
+  // A repeated attempt must keep the names recorded for this generation. The
+  // check runs here, once, before any side effect.
+  if (
+    request.credentialNames &&
+    !credentialNamesMatch(sandboxCredentialNames(handle), request.credentialNames)
+  ) {
+    throw new SetupFailure("invalid_request");
+  }
 
   let phase = decoded.labels[PHASE_LABEL];
   let changed = false;
@@ -240,21 +260,19 @@ async function advanceSandbox(
   try {
     token.throwIfAborted();
 
-    const pi = await readPiState(context, handle, redaction);
+    const pi = await readPiState(context, handle, redaction, token);
     if (pi.status === "replaced") throw new SetupFailure("id_mismatch");
     if (pi.status === "unknown") {
       throw new SetupFailure("runtime_unavailable", pi.detail);
     }
 
     if (pi.status === "missing") {
-      // A legacy failed phase is read-only migration state. Actual Pi readiness
-      // above wins; otherwise do not replay side effects from the old model.
-      if (decoded.labels[PHASE_LABEL] === "failed") {
-        throw new SetupFailure("install_failed");
-      }
+      // Actual Pi readiness wins. When it is missing, one idempotent install
+      // pass inspects the complete job inventory first, so a legacy `failed`
+      // phase never hides a job that is still running or actually succeeded.
       phase = "installing";
       changed = (await ensurePiInstalled(context, handle, redaction, token)) || changed;
-      const after = await readPiState(context, handle, redaction);
+      const after = await readPiState(context, handle, redaction, token);
       if (after.status === "replaced") throw new SetupFailure("id_mismatch");
       if (after.status === "unknown") {
         throw new SetupFailure("runtime_unavailable", after.detail);
@@ -268,7 +286,7 @@ async function advanceSandbox(
 
     if (phase !== "ready") {
       phase = "registering";
-      if (await writePhase(handle, phase, token)) changed = true;
+      if (await writePhase(context, handle, phase, token)) changed = true;
     }
 
     const hostPort = readSandboxHostPort(handle);
@@ -283,14 +301,14 @@ async function advanceSandbox(
     if (ensured.changed) changed = true;
 
     if (
-      await removeStaleSameNameRegistrations(context, parentId, handle.name, handle.id)
+      await removeStaleSameNameRegistrations(context, request.name, handle.id, redaction, token)
     ) {
       changed = true;
     }
 
     if (phase !== "ready") {
       phase = "ready";
-      if (await writePhase(handle, phase, token)) changed = true;
+      if (await writePhase(context, handle, phase, token)) changed = true;
     }
 
     return {
@@ -301,8 +319,8 @@ async function advanceSandbox(
     };
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
-    const failure = asSetupFailure(error);
-    await recordFailure(handle, phase, failure);
+    const failure = asSetupFailure(error, redaction);
+    await recordFailure(context, handle, phase, failure, token);
     throw failure;
   }
 }
@@ -315,7 +333,7 @@ async function ensurePiInstalled(
 ): Promise<boolean> {
   token.throwIfAborted();
 
-  const inventory = await readInstallInventory(handle);
+  const inventory = await readInstallInventory(context, handle, token);
   if (inventory.active.length > 1) throw new SetupFailure("install_conflict");
 
   // A successful historical job wins over a missing legacy job label.
@@ -337,15 +355,20 @@ async function ensurePiInstalled(
   }
 
   token.throwIfAborted();
-  await writePhase(handle, "installing", token);
+  await writePhase(context, handle, "installing", token);
 
   let jobId: string;
   try {
-    const job = await context.sandboxHost.startInstall(handle, piInstallSpec());
+    const job = await bounded(context.sandboxHost.startInstall(handle, piInstallSpec()), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
     jobId = job.id;
   } catch (error) {
-    // A launch error may be uncertain. Re-list before deciding anything.
-    const after = await readInstallInventory(handle);
+    if (error instanceof LifecycleAbortedError) throw error;
+    // A launch error (or a hung launch) may be uncertain. Re-list before
+    // deciding anything; never start a second job on speculation.
+    const after = await readInstallInventory(context, handle, token);
     if (after.active.length > 1) throw new SetupFailure("install_conflict");
     if (after.succeeded.length > 0) return true;
     if (after.active.length === 1) {
@@ -378,10 +401,20 @@ async function ensurePiInstalled(
   return true;
 }
 
-async function readInstallInventory(handle: SandboxHandleLike) {
+async function readInstallInventory(
+  context: ReconcileContext,
+  handle: SandboxHandleLike,
+  token: LaneToken,
+) {
   try {
-    return classifyInstallJobs(await listAllJobs(handle));
-  } catch {
+    return classifyInstallJobs(
+      await listAllJobs(handle, undefined, {
+        timeoutMs: sdkTimeoutMs(context),
+        signal: token.signal,
+      }),
+    );
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     // Never start another install because inspection failed.
     throw new SetupFailure("job_inventory_unavailable");
   }
@@ -404,21 +437,30 @@ async function readPiState(
   context: ReconcileContext,
   handle: SandboxHandleLike,
   redaction: readonly string[],
+  token: LaneToken,
 ): Promise<PiState> {
   let connected: SandboxConnectHandleLike;
   try {
-    connected = await context.sandboxHost.connect(handle);
+    connected = await bounded(context.sandboxHost.connect(handle), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
   } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     return isSandboxReplacedError(error)
       ? { status: "replaced" }
       : { status: "unknown", detail: failureDetail(error, redaction) };
   }
 
   try {
-    const output = await connected.exec(piPathCheckSpec());
+    const output = await bounded(connected.exec(piPathCheckSpec()), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
     if (output.code !== 0) return { status: "missing" };
     return inspectPiInstall(output.stdout) ? { status: "ready" } : { status: "missing" };
   } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     return isSandboxReplacedError(error)
       ? { status: "replaced" }
       : { status: "unknown", detail: failureDetail(error, redaction) };
@@ -426,26 +468,43 @@ async function readPiState(
 }
 
 async function createWithPortRetry(
-  creator: ReconcileContext["sandboxHost"],
+  context: ReconcileContext,
   request: Omit<SandboxCreateRequest, "hostPort">,
   redaction: readonly string[],
+  token: LaneToken,
 ): Promise<SandboxCreateHandleLike> {
+  const creator = context.sandboxHost;
   let portFailures = 0;
   let lastFailure: unknown = null;
 
   for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt += 1) {
+    token.throwIfAborted();
+
     let hostPort: number;
     try {
-      hostPort = await creator.probePort();
-    } catch {
+      hostPort = await bounded(creator.probePort(), {
+        timeoutMs: sdkTimeoutMs(context),
+        signal: token.signal,
+      });
+    } catch (error) {
+      if (error instanceof LifecycleAbortedError) throw error;
       throw new SetupFailure("port_unavailable");
     }
 
     try {
-      return await creator.create({ ...request, hostPort });
+      return await bounded(creator.create({ ...request, hostPort }), {
+        timeoutMs: timeoutMs(context),
+        signal: token.signal,
+      });
     } catch (error) {
+      if (error instanceof LifecycleAbortedError) throw error;
       lastFailure = error;
-      const existing = await creator.find(request.name).catch(() => null);
+      const existing = await findSandbox(
+        context,
+        request.name,
+        redaction,
+        token,
+      ).catch(() => null);
       if (existing) {
         // A managed sandbox appeared; the caller continues through its exact handle.
         return { id: existing.id, name: existing.name };
@@ -470,15 +529,20 @@ function isPortFailure(error: unknown): boolean {
 }
 
 async function writePhase(
+  context: ReconcileContext,
   handle: SandboxHandleLike,
   phase: Phase,
   token: LaneToken,
 ): Promise<boolean> {
   token.throwIfAborted();
   try {
-    await markSandboxPhase(handle, phase);
+    await bounded(markSandboxPhase(handle, phase), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
     return true;
   } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     if (error instanceof SandboxGenerationError) throw new SetupFailure("id_mismatch");
     if (isSandboxReplacedError(error)) throw new SetupFailure("id_mismatch");
     // Phase is a progress hint; a failed write must not replay a side effect.
@@ -487,31 +551,43 @@ async function writePhase(
 }
 
 async function recordFailure(
+  context: ReconcileContext,
   handle: SandboxHandleLike,
   phase: Phase,
   failure: SetupFailure,
+  token: LaneToken,
 ): Promise<void> {
   const detail = failure.detail ?? null;
   try {
-    await markSandboxError(handle, phase, failure.code, detail);
+    await bounded(markSandboxError(handle, phase, failure.code, detail), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
   } catch {
     // Error labels are a diagnostic hint. Never mask the original failure.
   }
 }
 
 function registrationOnlyForName(
-  parentId: string,
   name: string,
   registrations: readonly HostRegistrationLike[],
 ): HostRegistrationLike[] {
-  return pluginRegistrations(parentId, registrations).filter(
+  return pluginRegistrations(registrations).filter(
     (registration) => registration.metadata.name === name,
   );
 }
 
+/**
+ * Removes registrations whose generation is proven gone. Absence observed
+ * earlier is not proof: the runtime is re-read at removal time, and a live row
+ * for the same generation is kept.
+ */
 async function removeStaleRegistrations(
   context: ReconcileContext,
+  name: string,
   registrations: readonly HostRegistrationLike[],
+  redaction: readonly string[],
+  token: LaneToken,
 ): Promise<void> {
   const byKey = new Map<string, HostRegistrationLike[]>();
   for (const registration of registrations) {
@@ -521,38 +597,58 @@ async function removeStaleRegistrations(
 
   for (const group of byKey.values()) {
     if (group.length > 1) throw new SetupFailure("registration_conflict");
-    await removeRegistration(context, group[0].registrationId).catch(() => {
-      throw new SetupFailure("registration_failed");
-    });
+    await removeIfGenerationGone(context, name, group[0], redaction, token);
   }
 }
 
 /**
  * A different live generation under the same name proves the other plugin-owned
- * registration is stale. Only exact producer/parent/name rows are considered.
+ * registration is stale. Only exact authenticated producer rows are considered.
  */
 async function removeStaleSameNameRegistrations(
   context: ReconcileContext,
-  parentId: string,
   name: string,
   currentId: string,
+  redaction: readonly string[],
+  token: LaneToken,
 ): Promise<boolean> {
-  const directory = await context.hosts.list().catch(() => {
-    throw new SetupFailure("registrations_unavailable");
-  });
+  const directory = await readDirectory(context, redaction, token);
 
-  const stale = pluginRegistrations(parentId, directory.hosts).filter(
+  const stale = pluginRegistrations(directory.hosts).filter(
     (registration) =>
       registration.metadata.name === name && registration.source?.key !== currentId,
   );
 
+  let removed = false;
   for (const registration of stale) {
-    await removeRegistration(context, registration.registrationId).catch(() => {
-      throw new SetupFailure("registration_failed");
-    });
+    if (await removeIfGenerationGone(context, name, registration, redaction, token)) removed = true;
   }
 
-  return stale.length > 0;
+  return removed;
+}
+
+/**
+ * Removes one registration only when a fresh exact lookup proves its
+ * generation is absent or that a different generation replaced it.
+ *
+ * The pinned SDK has no conditional remove; this revalidation is the strongest
+ * available guarantee against deleting a live replacement's registration.
+ */
+async function removeIfGenerationGone(
+  context: ReconcileContext,
+  name: string,
+  registration: HostRegistrationLike,
+  redaction: readonly string[],
+  token: LaneToken,
+): Promise<boolean> {
+  const key = registration.source?.key ?? null;
+  const handle = await findSandbox(context, name, redaction, token);
+  if (handle && handle.id === key) return false;
+
+  await removeRegistration(context, registration.registrationId).catch(() => {
+    throw new SetupFailure("registration_failed");
+  });
+  return true;
 }
 
 /**
@@ -561,40 +657,47 @@ async function removeStaleSameNameRegistrations(
  */
 async function completeDeletion(
   context: ReconcileContext,
-  parentId: string,
   handle: SandboxHandleLike,
+  redaction: readonly string[],
   token: LaneToken,
 ): Promise<boolean> {
   token.throwIfAborted();
 
   let current: SandboxHandleLike;
   try {
-    current = await handle.refresh();
-  } catch {
+    current = await bounded(handle.refresh(), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     throw new SetupFailure("delete_failed");
   }
   if (current.id !== handle.id) throw new SetupFailure("id_mismatch");
 
   token.throwIfAborted();
   try {
-    await context.sandboxHost.destroy(current);
-  } catch {
+    await bounded(context.sandboxHost.destroy(current), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     throw new SetupFailure("delete_failed");
   }
 
-  return cleanupGeneration(context, parentId, handle.id);
+  return cleanupGeneration(context, handle.id, redaction, token);
 }
 
 /** Removes only the registration for this exact generation. */
 async function cleanupGeneration(
   context: ReconcileContext,
-  parentId: string,
   sandboxId: string,
+  redaction: readonly string[],
+  token: LaneToken,
 ): Promise<boolean> {
-  const directory = await context.hosts.list().catch(() => {
-    throw new SetupFailure("registrations_unavailable");
-  });
-  const matches = matchingRegistrations(parentId, sandboxId, directory.hosts);
+  const directory = await readDirectory(context, redaction, token);
+  const matches = matchingRegistrations(sandboxId, directory.hosts);
   if (matches.length > 1) throw new SetupFailure("registration_conflict");
 
   const registration = matches[0];
@@ -637,9 +740,45 @@ export function mergeRedaction(
   );
 }
 
-function asSetupFailure(error: unknown): SetupFailure {
+function asSetupFailure(error: unknown, redaction: readonly string[]): SetupFailure {
   if (error instanceof SetupFailure) return error;
-  return new SetupFailure("runtime_unavailable", failureDetail(error));
+  return new SetupFailure("runtime_unavailable", failureDetail(error, redaction));
+}
+
+/** Reads the parent directory under a bound and the lane's abort signal. */
+async function readDirectory(
+  context: ReconcileContext,
+  redaction: readonly string[],
+  token: LaneToken,
+): Promise<HostDirectoryLike> {
+  try {
+    return await bounded(context.hosts.list(), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
+    throw new SetupFailure("registrations_unavailable", failureDetail(error, redaction));
+  }
+}
+
+/** Looks up the exact named sandbox under a bound and the lane's abort signal. */
+async function findSandbox(
+  context: ReconcileContext,
+  name: string,
+  redaction: readonly string[],
+  token: LaneToken,
+): Promise<SandboxHandleLike | null> {
+  token.throwIfAborted();
+  try {
+    return await bounded(context.sandboxHost.find(name), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
+    throw new SetupFailure("runtime_unavailable", failureDetail(error, redaction));
+  }
 }
 
 function isSandboxDecodeError(
@@ -654,4 +793,8 @@ function isSandboxDecodeError(
 
 function timeoutMs(context: ReconcileContext): number {
   return context.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
+}
+
+function sdkTimeoutMs(context: ReconcileContext): number {
+  return context.sdkCallTimeoutMs ?? DEFAULT_SDK_CALL_TIMEOUT_MS;
 }

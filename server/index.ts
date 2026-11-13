@@ -135,8 +135,10 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
   });
 
   // Paseo tears the old plugin down before starting the replacement and allows
-  // two seconds for cleanup. Abort and settle promptly; never wait for an
-  // install or registration timeout.
+  // two seconds for cleanup. `settle` permanently closes every lane before it
+  // waits, so no Create, recovery, Repair, or later Repair target can begin a
+  // side effect during or after teardown. Never wait for an install or
+  // registration timeout.
   return async () => {
     await lanes.settle(CLEANUP_SETTLE_MS);
   };

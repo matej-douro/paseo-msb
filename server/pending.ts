@@ -20,15 +20,41 @@ export interface PendingCreate {
   readonly errorDetail: string | null;
 }
 
+/**
+ * Synchronous reservation result. `reserved` means this caller owns the only
+ * attempt for the request and must settle it; `joined` means an identical
+ * attempt is already running; `conflict` means the request reuses a different
+ * credential selection.
+ */
+export type PendingReservation =
+  | { readonly status: "reserved"; readonly entry: PendingCreate }
+  | { readonly status: "joined"; readonly entry: PendingCreate }
+  | { readonly status: "conflict" };
+
 export interface PendingCreateStore {
   list(): readonly PendingCreate[];
   find(requestId: string): PendingCreate | null;
-  /** Adds the attempt, or returns the existing entry for a repeated request ID. */
-  ensure(requestId: string, credentialNames: readonly CredentialName[]): PendingCreate;
-  /** Restarts an empty pre-create failure under the same request ID. */
-  restart(requestId: string, credentialNames: readonly CredentialName[]): PendingCreate;
-  fail(requestId: string, code: SafeErrorCode, detail?: string | null): void;
-  remove(requestId: string): void;
+  /**
+   * Reserves the request without any external await. A failed entry is
+   * restarted under the same request ID; a running entry is joined.
+   */
+  reserve(
+    requestId: string,
+    credentialNames: readonly CredentialName[],
+  ): PendingReservation;
+  /** Settles a running attempt as failed. Never resurrects or replaces a newer entry. */
+  fail(
+    requestId: string,
+    code: SafeErrorCode,
+    detail?: string | null,
+    entry?: PendingCreate,
+  ): void;
+  /**
+   * Settles a running attempt as successful or cancelled. Passing the reserved
+   * entry prevents an old attempt's late settlement from removing a newer
+   * attempt that reused the same request ID.
+   */
+  settle(requestId: string, entry?: PendingCreate): void;
 }
 
 function initialEntry(
@@ -46,6 +72,15 @@ function initialEntry(
   };
 }
 
+function sameCredentialNames(
+  left: readonly CredentialName[],
+  right: readonly CredentialName[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const expected = new Set(left);
+  return right.every((name) => expected.has(name));
+}
+
 export function createPendingCreateStore(): PendingCreateStore {
   const entries = new Map<string, PendingCreate>();
 
@@ -60,22 +95,37 @@ export function createPendingCreateStore(): PendingCreateStore {
       return entries.get(requestId) ?? null;
     },
 
-    ensure(requestId, credentialNames) {
-      return entries.get(requestId) ?? insert(initialEntry(requestId, credentialNames));
-    },
-
-    restart(requestId, credentialNames) {
-      return insert(initialEntry(requestId, credentialNames));
-    },
-
-    fail(requestId, code, detail = null) {
+    reserve(requestId, credentialNames) {
       const existing = entries.get(requestId);
+
       if (existing) {
-        insert({ ...existing, phase: "failed", errorCode: code, errorDetail: detail });
+        if (!sameCredentialNames(existing.credentialNames, credentialNames)) {
+          return { status: "conflict" };
+        }
+        if (existing.phase !== "failed") return { status: "joined", entry: existing };
+        return {
+          status: "reserved",
+          entry: insert(initialEntry(requestId, credentialNames)),
+        };
       }
+
+      return {
+        status: "reserved",
+        entry: insert(initialEntry(requestId, credentialNames)),
+      };
     },
 
-    remove(requestId) {
+    fail(requestId, code, detail = null, entry) {
+      const existing = entries.get(requestId);
+      if (!existing) return;
+      if (entry && existing !== entry) return;
+      insert({ ...existing, phase: "failed", errorCode: code, errorDetail: detail });
+    },
+
+    settle(requestId, entry) {
+      const existing = entries.get(requestId);
+      if (!existing) return;
+      if (entry && existing !== entry) return;
       entries.delete(requestId);
     },
   };

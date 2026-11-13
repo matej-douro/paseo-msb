@@ -55,6 +55,56 @@ describe("buildVmList", () => {
     expect(VmListOutputSchema.parse(result)).toEqual(result);
   });
 
+  it("redacts persisted values from a legacy error detail label", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: "paseo-1",
+      phase: "failed",
+      error: "install_failed",
+      extraLabels: { "paseo-msb-error-detail": `leaked ${SECRET_VALUE}` },
+    });
+
+    const inventory = await loadManagedSandboxes(
+      fakeRuntime([sandbox]),
+      PARENT_ID,
+    );
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [],
+      env: {},
+    });
+
+    expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
+    expect(result.children[0]).toMatchObject({ errorDetail: "leaked [redacted]" });
+  });
+
+  it("keeps a registration-only child visible beside a failed pending attempt", () => {
+    const failedPending = {
+      ...PENDING,
+      phase: "failed" as const,
+      errorCode: "registration_failed" as const,
+    };
+    const registration = fakeRegistration({
+      metadata: { source: "paseo-msb", name: PENDING.name },
+    });
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory: { status: "available", sandboxes: [], failures: [] },
+      registrations: { status: "available", hosts: [registration] },
+      pending: [failedPending],
+      env: {},
+    });
+
+    expect(result.children.map((child) => child.kind).sort()).toEqual([
+      "pending",
+      "registration",
+    ]);
+  });
+
   it("does not join a registration owned by another source", async () => {
     const inventory = await loadManagedSandboxes(
       fakeRuntime([fakeSandbox({ id: "sandbox_1", name: "paseo-1" })]),

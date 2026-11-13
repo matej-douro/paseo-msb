@@ -5,7 +5,7 @@ import {
   registrationLabel,
 } from "../shared/constants";
 import type { SafeErrorCode } from "../shared/errors";
-import { abortableSleep } from "./lanes";
+import { abortableSleep, bounded, LifecycleAbortedError } from "./lanes";
 import type { HostDirectoryLike, HostRegistrationLike } from "./status";
 
 /** The parent host API used for registration, not just reads. */
@@ -97,53 +97,40 @@ function pollMs(context: RegistrationContext): number {
   return context.pollMs ?? DEFAULT_REGISTRATION_POLL_MS;
 }
 
-/** A registration belongs to this parent when its label starts with the parent ID. */
-export function isRegistrationForParent(
-  registration: HostRegistrationLike,
-  parentId: string,
-): boolean {
-  const label = registration.label;
-  return typeof label === "string" && label.startsWith(`${parentId}/`);
-}
-
 /**
- * The strict ownership predicate: authenticated producer plus the exact current
- * generation id. Metadata and labels never authorize ownership.
+ * The one ownership predicate: the parent directory this row came from plus the
+ * authenticated producer and exact generation id. Labels and metadata are
+ * mutable configuration and never authorize ownership or cleanup.
  */
 export function isOwnedRegistration(
   registration: HostRegistrationLike,
-  parentId: string,
   sandboxId: string,
 ): boolean {
   return (
     registration.source?.id === REGISTRATION_PRODUCER_ID &&
-    registration.source?.key === sandboxId &&
-    isRegistrationForParent(registration, parentId)
+    registration.source?.key === sandboxId
   );
 }
 
 export function matchingRegistrations(
-  parentId: string,
   sandboxId: string,
   registrations: readonly HostRegistrationLike[],
 ): HostRegistrationLike[] {
   return registrations.filter((registration) =>
-    isOwnedRegistration(registration, parentId, sandboxId),
+    isOwnedRegistration(registration, sandboxId),
   );
 }
 
 /**
- * Plugin-owned registrations for this parent whose metadata names a managed
- * child. Absence from sandbox inventory is not proof of deletion; callers must
- * confirm with an exact lookup before removing any of these.
+ * Plugin-owned registrations in this parent's directory whose metadata names a
+ * managed child. Absence from sandbox inventory is not proof of deletion;
+ * callers must confirm with an exact lookup before removing any of these.
  */
 export function pluginRegistrations(
-  parentId: string,
   registrations: readonly HostRegistrationLike[],
 ): HostRegistrationLike[] {
   return registrations.filter((registration) => {
     if (registration.source?.id !== REGISTRATION_PRODUCER_ID) return false;
-    if (!isRegistrationForParent(registration, parentId)) return false;
     const name = registration.metadata.name;
     return typeof name === "string" && name.startsWith(MANAGED_NAME_PREFIX);
   });
@@ -166,11 +153,9 @@ export async function ensureRegistration(
     metadata: registrationMetadata(sandbox),
   };
 
-  const directory = await context.hosts.list().catch(() => {
-    throw new SetupFailure("registration_failed");
-  });
+  const directory = await listDirectory(context);
 
-  const matches = matchingRegistrations(parentId, sandbox.id, directory.hosts);
+  const matches = matchingRegistrations(sandbox.id, directory.hosts);
   if (matches.length > 1) throw new SetupFailure("registration_conflict");
 
   let registration = matches[0] ?? null;
@@ -178,17 +163,21 @@ export async function ensureRegistration(
 
   if (!registration) {
     try {
-      registration = await context.hosts.add({
-        ...desired,
-        sourceKey: sandbox.id,
-      });
+      registration = await bounded(
+        context.hosts.add({
+          ...desired,
+          sourceKey: sandbox.id,
+        }),
+        { timeoutMs: timeoutMs(context), signal: context.signal },
+      );
       changed = true;
-    } catch {
+    } catch (error) {
+      if (error instanceof LifecycleAbortedError) throw error;
       // A lost response or a concurrent add is recoverable only by re-reading
       // the exact `(producer, source.key)` row.
-      const retryDirectory = await context.hosts.list().catch(() => null);
+      const retryDirectory = await listDirectory(context).catch(() => null);
       const retried = retryDirectory
-        ? matchingRegistrations(parentId, sandbox.id, retryDirectory.hosts)
+        ? matchingRegistrations(sandbox.id, retryDirectory.hosts)
         : [];
       if (retried.length === 1) {
         registration = retried[0];
@@ -202,17 +191,23 @@ export async function ensureRegistration(
   }
 
   if (registration.enabled === false || registration.status === "disabled") {
+    // Repair never re-enables a registration the user disabled.
     throw new SetupFailure("registration_failed");
   }
 
-  if (
-    registration.label !== desired.label ||
-    !metadataMatches(registration.metadata, desired.metadata)
-  ) {
+  // Connection, label, and metadata drift are repaired through one explicit
+  // update. The canonical connection is compared via the parent's own target
+  // description rather than a locally remembered port.
+  const patch = driftPatch(registration, desired);
+  if (patch) {
     try {
-      registration = await context.hosts.update(registration.registrationId, desired);
+      registration = await bounded(
+        context.hosts.update(registration.registrationId, patch),
+        { timeoutMs: timeoutMs(context), signal: context.signal },
+      );
       changed = true;
-    } catch {
+    } catch (error) {
+      if (error instanceof LifecycleAbortedError) throw error;
       throw new SetupFailure("registration_failed");
     }
   }
@@ -233,9 +228,7 @@ async function waitForOnline(
   while (Date.now() <= deadline) {
     context.signal?.throwIfAborted();
 
-    const directory = await context.hosts.list().catch(() => {
-      throw new SetupFailure("registration_failed");
-    });
+    const directory = await listDirectory(context);
     const entry = directory.hosts.find(
       (candidate) => candidate.registrationId === registrationId,
     );
@@ -253,20 +246,34 @@ async function waitForOnline(
 }
 
 async function confirmPi(context: RegistrationContext, serverId: string): Promise<void> {
-  const remote = await context.hosts.client(serverId).catch(() => {
+  const remote = await bounded(context.hosts.client(serverId), {
+    timeoutMs: timeoutMs(context),
+    signal: context.signal,
+  }).catch((error: unknown) => {
+    if (error instanceof LifecycleAbortedError) throw error;
     throw new SetupFailure("provider_unavailable");
   });
 
   try {
-    const refresh = await remote.providers
-      .refresh({ providers: ["pi"] })
-      .catch(() => null);
+    const refresh = await bounded(remote.providers.refresh({ providers: ["pi"] }), {
+      timeoutMs: timeoutMs(context),
+      signal: context.signal,
+    }).catch((error: unknown) => {
+      if (error instanceof LifecycleAbortedError) throw error;
+      return null;
+    });
     if (!refresh?.acknowledged) throw new SetupFailure("provider_unavailable");
 
     const deadline = Date.now() + timeoutMs(context);
     while (Date.now() <= deadline) {
       context.signal?.throwIfAborted();
-      const snapshot = await remote.providers.snapshot().catch(() => null);
+      const snapshot = await bounded(remote.providers.snapshot(), {
+        timeoutMs: timeoutMs(context),
+        signal: context.signal,
+      }).catch((error: unknown) => {
+        if (error instanceof LifecycleAbortedError) throw error;
+        return null;
+      });
       const pi = snapshot?.entries.find((entry) => entry.provider === "pi");
       if (pi?.status === "ready") return;
       await sleep(pollMs(context), context.signal);
@@ -274,7 +281,10 @@ async function confirmPi(context: RegistrationContext, serverId: string): Promis
 
     throw new SetupFailure("provider_unavailable");
   } finally {
-    await remote.dispose().catch(() => {});
+    await bounded(remote.dispose(), {
+      timeoutMs: timeoutMs(context),
+      signal: context.signal,
+    }).catch(() => {});
   }
 }
 
@@ -289,6 +299,44 @@ function metadataMatches(
   return desiredKeys.every((key) => actual[key] === desired[key]);
 }
 
+function driftPatch(
+  registration: HostRegistrationLike,
+  desired: {
+    readonly connection: string;
+    readonly label: string;
+    readonly metadata: Readonly<Record<string, string>>;
+  },
+): HostUpdateInput | null {
+  const patch: { connection?: string; label?: string; metadata?: Record<string, string> } = {};
+  if (registration.targetDescription !== desired.connection) {
+    patch.connection = desired.connection;
+  }
+  if (registration.label !== desired.label) patch.label = desired.label;
+  if (!metadataMatches(registration.metadata, desired.metadata)) {
+    patch.metadata = { ...desired.metadata };
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+/**
+ * Reads the parent directory with a bound and the lane's abort signal. A hung
+ * parent call must not block Delete or plugin teardown behind a lane.
+ */
+async function listDirectory(context: RegistrationContext): Promise<HostDirectoryLike> {
+  try {
+    return await bounded(context.hosts.list(), {
+      timeoutMs: timeoutMs(context),
+      signal: context.signal,
+      timeoutError: () => new SetupFailure("registration_failed"),
+    });
+  } catch (error) {
+    if (error instanceof SetupFailure || error instanceof LifecycleAbortedError) throw error;
+    throw new SetupFailure("registration_failed");
+  }
+}
+
+export { listDirectory };
+
 /**
  * Removing a registration is idempotent for this plugin: an error is treated as
  * success only when a fresh directory confirms the registration is gone.
@@ -298,10 +346,16 @@ export async function removeRegistration(
   registrationId: string,
 ): Promise<void> {
   try {
-    await context.hosts.remove(registrationId);
+    await bounded(context.hosts.remove(registrationId), {
+      timeoutMs: timeoutMs(context),
+      signal: context.signal,
+    });
     return;
   } catch {
-    const directory = await context.hosts.list().catch(() => null);
+    const directory = await bounded(context.hosts.list(), {
+      timeoutMs: timeoutMs(context),
+      signal: context.signal,
+    }).catch(() => null);
     const stillPresent =
       directory?.hosts.some((entry) => entry.registrationId === registrationId) ?? true;
     if (stillPresent) throw new SetupFailure("registration_failed");

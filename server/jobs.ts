@@ -1,5 +1,5 @@
 import { MAX_JOB_PAGES, MAX_JOB_PAGE_SIZE } from "../shared/constants";
-import { LifecycleAbortedError } from "./lanes";
+import { bounded, LifecycleAbortedError, LifecycleTimeoutError } from "./lanes";
 import { piInstallArgv } from "./pi-install";
 import type {
   SandboxHandleLike,
@@ -19,14 +19,28 @@ export class JobInventoryError extends Error {
 const ACTIVE_STATES = new Set(["starting", "running"]);
 const FAILED_STATES = new Set(["failed", "lost"]);
 
+/** Default bound for one detached-job SDK call. */
+export const DEFAULT_JOB_CALL_TIMEOUT_MS = 30_000;
+
+export interface JobCallOptions {
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+}
+
+function callTimeoutMs(options: JobCallOptions | undefined): number {
+  return options?.timeoutMs ?? DEFAULT_JOB_CALL_TIMEOUT_MS;
+}
+
 /**
  * Reads the complete detached job inventory. `listJobsWith` is a manual
- * pagination API: a single call returns only one page. A repeated cursor or an
- * unreasonable page count is an inspection failure, never "no jobs".
+ * pagination API: a single call returns only one page. A repeated cursor, an
+ * unreasonable page count, a timeout, or an abort is an inspection failure,
+ * never "no jobs".
  */
 export async function listAllJobs(
   handle: SandboxHandleLike,
   pageSize = MAX_JOB_PAGE_SIZE,
+  options?: JobCallOptions,
 ): Promise<readonly SandboxJobInfoLike[]> {
   const jobs: SandboxJobInfoLike[] = [];
   const seen = new Set<string>();
@@ -35,11 +49,15 @@ export async function listAllJobs(
   for (let page = 0; page < MAX_JOB_PAGES; page += 1) {
     let result: SandboxJobPageLike;
     try {
-      result = await handle.listJobsWith((builder) => {
-        const configured = builder.all(true).limit(pageSize);
-        return cursor ? configured.cursor(cursor) : configured;
-      });
-    } catch {
+      result = await bounded(
+        handle.listJobsWith((builder) => {
+          const configured = builder.all(true).limit(pageSize);
+          return cursor ? configured.cursor(cursor) : configured;
+        }),
+        { timeoutMs: callTimeoutMs(options), signal: options?.signal },
+      );
+    } catch (error) {
+      if (error instanceof LifecycleAbortedError) throw error;
       throw new JobInventoryError();
     }
 
@@ -95,8 +113,10 @@ export type InstallJobOutcome =
   | { readonly status: "unknown"; readonly id: string };
 
 /**
- * Bounds a wait for one active job. A timeout means the job is still running,
- * not that the install failed; the reconciler must not start another job.
+ * Bounds a wait for one active job. Every SDK call is inside the race, so a
+ * hung `getJob`, `wait`, or `inspect` cannot block Delete or shutdown. A
+ * timeout means the job is still running, not that the install failed; the
+ * reconciler must not start another job.
  */
 export async function waitForInstallJob(
   handle: SandboxHandleLike,
@@ -106,8 +126,9 @@ export async function waitForInstallJob(
 ): Promise<InstallJobOutcome> {
   let job: SandboxJobLike;
   try {
-    job = await handle.getJob(id);
-  } catch {
+    job = await bounded(handle.getJob(id), { timeoutMs, signal });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     return { status: "unknown", id };
   }
 
@@ -133,7 +154,15 @@ export async function waitForInstallJob(
     if (waited === "timeout") return { status: "running", id };
     if (waited === "unknown") return { status: "unknown", id };
 
-    return classifyJob(await job.inspect());
+    const inspected = await bounded(job.inspect(), {
+      timeoutMs,
+      signal,
+      timeoutError: () => new LifecycleTimeoutError(),
+    }).catch((error: unknown) => {
+      if (error instanceof LifecycleAbortedError) throw error;
+      return null;
+    });
+    return inspected ? classifyJob(inspected) : { status: "unknown", id };
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
     return { status: "unknown", id };
@@ -160,8 +189,9 @@ export function classifyJob(info: SandboxJobInfoLike): InstallJobOutcome {
 /** The newest pinned install job, used to show bounded job logs. */
 export async function findLatestInstallJob(
   handle: SandboxHandleLike,
+  options?: JobCallOptions,
 ): Promise<SandboxJobInfoLike | null> {
-  const jobs = (await listAllJobs(handle)).filter(isPiInstallJob);
+  const jobs = (await listAllJobs(handle, MAX_JOB_PAGE_SIZE, options)).filter(isPiInstallJob);
   if (jobs.length === 0) return null;
 
   const sorted = [...jobs].sort(

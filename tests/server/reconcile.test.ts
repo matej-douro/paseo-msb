@@ -6,8 +6,8 @@ import {
   SANDBOX_ID_LABEL,
 } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
-import { createLifecycleLanes } from "../../server/lanes";
-import { createPendingCreateStore } from "../../server/pending";
+import { deleteVm } from "../../server/delete";
+import { createLifecycleLanes, LifecycleAbortedError } from "../../server/lanes";
 import { reconcileVm, type ReconcileVmContext } from "../../server/reconcile";
 import {
   failingRuntime,
@@ -35,7 +35,6 @@ function reconcileContext(
     runtime,
     sandboxHost: creator,
     env: {},
-    pending: createPendingCreateStore(),
     secretsStore: memorySecretsStore(),
     lanes: createLifecycleLanes(),
     timeoutMs: 100,
@@ -231,7 +230,61 @@ describe("reconcileVm", () => {
     expect(hosts.removed).toEqual(["reg_owned"]);
   });
 
-  it("does not remove a registration labelled for another parent", async () => {
+  it("repairs a registration pointing at a stale connection", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "ready",
+      hostPort: 42_000,
+    });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox })),
+      INPUT,
+    );
+
+    expect(hosts.updated[0]?.patch).toEqual({ connection: "127.0.0.1:42000" });
+  });
+
+  it("revalidates runtime absence before removing a stale registration", async () => {
+    const reappeared = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+    const creator = new FakeSandboxCreator({
+      findSequence: [null, reappeared, reappeared],
+    });
+
+    const result = await reconcileVm(reconcileContext(fakeRuntime([]), hosts, creator), INPUT);
+
+    expect(hosts.removed).toEqual([]);
+    expect(result).toEqual({ repaired: [], errors: [] });
+  });
+
+  it("preserves a user-disabled registration instead of re-enabling it", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([
+        ownedRegistration({ enabled: false, status: "disabled" }),
+      ]),
+    });
+
+    const result = await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox })),
+      INPUT,
+    );
+
+    expect(result.errors).toEqual([
+      { name: NAME, error: safeError("registration_failed") },
+    ]);
+    expect(hosts.updated).toEqual([]);
+  });
+
+  it("repairs label drift without treating the label as ownership", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
     const hosts = new FakePaseoHosts({
       directory: fakeHostDirectory([
         ownedRegistration({
@@ -241,10 +294,14 @@ describe("reconcileVm", () => {
       ]),
     });
 
-    const result = await reconcileVm(reconcileContext(fakeRuntime([]), hosts), INPUT);
+    const result = await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox })),
+      INPUT,
+    );
 
-    expect(result).toEqual({ repaired: [], errors: [] });
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
     expect(hosts.removed).toEqual([]);
+    expect(hosts.updated[0]?.patch.label).toBe(`${PARENT_ID}/${NAME}`);
   });
 
   it("ignores foreign registrations and still restores the owned one", async () => {
@@ -315,7 +372,7 @@ describe("reconcileVm", () => {
     expect(hosts.removed).toEqual([]);
   });
 
-  it("leaves a legacy failed sandbox untouched and returns its safe code", async () => {
+  it("rediscovers an active job behind a legacy failed label", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
@@ -323,6 +380,32 @@ describe("reconcileVm", () => {
       phase: "failed",
       error: "install_failed",
       labelUpdates: labels,
+      jobState: "running",
+      jobStateAfterWait: "exited",
+      jobWaitCode: 0,
+    });
+    const hosts = new FakePaseoHosts();
+
+    const result = await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox })),
+      INPUT,
+    );
+
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(labels.filter((entry) => entry[PHASE_LABEL] === "ready")).toHaveLength(1);
+    expect(hosts.added).toHaveLength(1);
+  });
+
+  it("keeps a legacy failed label terminal when the install job confirms failure", async () => {
+    const labels: Record<string, string>[] = [];
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "failed",
+      error: "install_failed",
+      labelUpdates: labels,
+      jobState: "exited",
+      jobExitCode: 7,
     });
     const hosts = new FakePaseoHosts();
 
@@ -332,9 +415,32 @@ describe("reconcileVm", () => {
     );
 
     expect(result.repaired).toEqual([]);
-    expect(result.errors).toEqual([{ name: NAME, error: safeError("install_failed") }]);
-    expect(labels.filter((entry) => entry[PHASE_LABEL] === "ready")).toEqual([]);
+    expect(result.errors).toEqual([
+      {
+        name: NAME,
+        error: safeError("install_failed", "the recorded Pi install did not succeed"),
+      },
+    ]);
     expect(hosts.added).toEqual([]);
+  });
+
+  it("starts one install when a legacy failed label has no job history", async () => {
+    const labels: Record<string, string>[] = [];
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "failed",
+      error: "install_failed",
+      labelUpdates: labels,
+    });
+    const hosts = new FakePaseoHosts();
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+
+    const result = await reconcileVm(reconcileContext(fakeRuntime([sandbox]), hosts, creator), INPUT);
+
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(creator.execSpecs).toHaveLength(1);
+    expect(creator.createCount).toBe(0);
   });
 
   it("quarantines a mismatched legacy identity without writing", async () => {
@@ -492,4 +598,71 @@ describe("reconcileVm", () => {
 
     expect(result).toEqual({ repaired: [], errors: [] });
   });
+
+  it("resumes a deletion interrupted by plugin cleanup without creating a replacement", async () => {
+    const gate = deferred<void>();
+    const labelUpdates: Record<string, string>[] = [];
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "ready",
+      labelUpdates,
+    });
+    const creator = new FakeSandboxCreator({
+      existing: sandbox,
+      destroyGate: gate.promise,
+    });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    // First plugin instance: Delete tombstones the sandbox, then cleanup aborts
+    // the destroy wait. The tombstone is durable in the managed labels.
+    const lanes = createLifecycleLanes();
+    const deletion = lanes.run(
+      NAME,
+      (token) =>
+        deleteVm(
+          { hosts, sandboxHost: creator, timeoutMs: 100, pollMs: 1 },
+          { name: NAME, id: "sandbox_1", confirmName: NAME },
+          token,
+        ),
+      { abortPrevious: true },
+    );
+
+    await waitFor(() =>
+      labelUpdates.some((labels) => labels[PHASE_LABEL] === "deleting"),
+    );
+    await lanes.settle(100);
+    await expect(deletion).rejects.toBeInstanceOf(LifecycleAbortedError);
+
+    gate.resolve();
+    await waitFor(() => creator.destroyed.length === 1);
+
+    // Replacement plugin instance: recovery finishes cleanup, never setup.
+    const recovery = await reconcileVm(
+      reconcileContext(fakeRuntime([]), hosts, creator),
+      INPUT,
+    );
+
+    expect(recovery).toEqual({ repaired: [NAME], errors: [] });
+    expect(hosts.removed).toEqual(["reg_owned"]);
+    expect(creator.createCount).toBe(0);
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function waitFor(predicate: () => boolean, deadlineMs = 1_000): Promise<void> {
+  const deadline = Date.now() + deadlineMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("condition was not observed");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}

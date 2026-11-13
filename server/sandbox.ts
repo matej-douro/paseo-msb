@@ -25,7 +25,8 @@ import {
 } from "../shared/constants";
 import type { ManagedLabels } from "../shared/contracts";
 import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors";
-import { failureDetail } from "./diagnostics";
+import { failureDetail, persistedCredentialValues } from "./diagnostics";
+import { bounded } from "./lanes";
 import type { ResolvedSecret } from "./secrets";
 
 /**
@@ -274,12 +275,19 @@ const PhaseSchema = z.enum(PHASES);
 const RuntimeStatusSchema = z.enum(RUNTIME_STATUSES);
 const CREDENTIAL_SET: ReadonlySet<string> = new Set(CREDENTIAL_NAMES);
 
+/** Bound for one complete sandbox inventory read. */
+const SANDBOX_LIST_TIMEOUT_MS = 60_000;
+
 function normalizeRuntimeStatus(value: string): RuntimeStatus {
   const parsed = RuntimeStatusSchema.safeParse(value);
   return parsed.success ? parsed.data : "unknown";
 }
 
-function decodeLabels(labels: Readonly<Record<string, string>>, handle: SandboxHandleLike): DecodedSandbox {
+function decodeLabels(
+  labels: Readonly<Record<string, string>>,
+  handle: SandboxHandleLike,
+  redaction: readonly string[] = [],
+): DecodedSandbox {
   const phaseParsed = PhaseSchema.safeParse(labels[PHASE_LABEL]);
   const phase: Phase = phaseParsed.success ? phaseParsed.data : "failed";
 
@@ -290,7 +298,9 @@ function decodeLabels(labels: Readonly<Record<string, string>>, handle: SandboxH
   if (!phaseParsed.success) error = "invalid_config";
   if (phase === "failed" && !error) error = "invalid_config";
 
-  const detail = error ? failureDetail(labels[ERROR_DETAIL_LABEL]) : null;
+  // Persisted detail and legacy labels go through the same redaction boundary
+  // as live errors before they can appear in a DTO.
+  const detail = error ? failureDetail(labels[ERROR_DETAIL_LABEL], redaction) : null;
 
   const projected: ManagedLabels = {
     [MANAGED_LABEL]: PLUGIN_VERSION,
@@ -318,6 +328,7 @@ function decodeLabels(labels: Readonly<Record<string, string>>, handle: SandboxH
 export function decodeManagedSandbox(
   handle: SandboxHandleLike,
   parentId: string,
+  redaction: readonly string[] = [],
 ): DecodedSandbox | null {
   let rawConfig: unknown;
   try {
@@ -338,7 +349,7 @@ export function decodeManagedSandbox(
     throw new SandboxDecodeError("id_mismatch");
   }
 
-  return decodeLabels(labels, handle);
+  return decodeLabels(labels, handle, redaction);
 }
 
 export async function loadManagedSandboxes(
@@ -348,7 +359,9 @@ export async function loadManagedSandboxes(
 ): Promise<SandboxInventory> {
   let handles: readonly SandboxHandleLike[];
   try {
-    handles = await runtime.list(parentId);
+    handles = await bounded(runtime.list(parentId), {
+      timeoutMs: SANDBOX_LIST_TIMEOUT_MS,
+    });
   } catch (error) {
     return {
       status: "unavailable",
@@ -359,9 +372,14 @@ export async function loadManagedSandboxes(
   const sandboxes: LoadedSandbox[] = [];
   const failures: SandboxDecodeFailure[] = [];
 
+  // Inventory-wide decoding uses every managed VM's persisted credential values
+  // in addition to the current environment/store values, so a legacy label or
+  // malformed config cannot echo a creation-time secret.
+  const mergedRedaction = mergePersistedRedaction(redaction, handles);
+
   for (const handle of handles) {
     try {
-      const decoded = decodeManagedSandbox(handle, parentId);
+      const decoded = decodeManagedSandbox(handle, parentId, mergedRedaction);
       if (decoded) sandboxes.push({ sandbox: decoded, handle });
     } catch (error) {
       failures.push({
@@ -382,6 +400,21 @@ export async function loadManagedSandboxes(
 /** Guard used by tests and later lifecycle code. */
 export function isManagedSandboxName(name: string): boolean {
   return name.startsWith(MANAGED_NAME_PREFIX) && name.length > MANAGED_NAME_PREFIX.length;
+}
+
+function mergePersistedRedaction(
+  base: readonly string[],
+  handles: readonly SandboxHandleLike[],
+): string[] {
+  const values = new Set(base);
+  for (const handle of handles) {
+    try {
+      for (const value of persistedCredentialValues(handle.config())) values.add(value);
+    } catch {
+      // A config read failure contributes no values and is not fatal here.
+    }
+  }
+  return [...values].sort((left, right) => right.length - left.length);
 }
 
 function rawLabels(handle: SandboxHandleLike): Record<string, string> | null {

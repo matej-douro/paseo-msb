@@ -213,12 +213,18 @@ export function buildVmList(input: VmListInput): VmListResult {
   }
 
   if (input.parentId && input.registrations.status === "available") {
-    const known = new Set(pending.map((entry) => entry.name));
+    // A live sandbox already represents its registration. A pending attempt
+    // that has settled as failed no longer hides a leftover registration-only
+    // child, which stays visible and actionable.
+    const activePending = new Set(
+      pending.filter((entry) => entry.phase !== "failed").map((entry) => entry.name),
+    );
+    const known = new Set<string>();
     for (const registration of input.registrations.hosts) {
       if (registration.source?.id !== REGISTRATION_PRODUCER_ID) continue;
       const name = registration.metadata.name;
       if (typeof name !== "string" || name.length === 0) continue;
-      if (sandboxNames.has(name) || known.has(name)) continue;
+      if (sandboxNames.has(name) || activePending.has(name) || known.has(name)) continue;
       const child = registrationChild(registration);
       if (child) {
         known.add(name);

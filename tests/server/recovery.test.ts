@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { PHASE_LABEL, REGISTRATION_PRODUCER_ID } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
 import { createLifecycleLanes } from "../../server/lanes";
-import { createPendingCreateStore } from "../../server/pending";
 import { recoverManagedSandboxes, type RecoveryContext } from "../../server/recovery";
 import {
   failingRuntime,
@@ -37,7 +36,6 @@ function recoveryContext(
     runtime,
     sandboxHost: new FakeSandboxCreator(),
     env: {},
-    pending: createPendingCreateStore(),
     secretsStore: memorySecretsStore(),
     lanes: createLifecycleLanes(),
     timeoutMs: 100,

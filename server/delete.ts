@@ -1,6 +1,6 @@
 import type { VmDeleteInput, VmDeleteResult } from "../shared/contracts";
 import { safeError } from "../shared/errors";
-import type { LaneToken } from "./lanes";
+import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
 import {
   matchingRegistrations,
   removeRegistration,
@@ -16,6 +16,9 @@ import {
   type SandboxHost,
 } from "./sandbox";
 
+/** Bound for one parent/runtime call made by Delete. */
+const DELETE_CALL_TIMEOUT_MS = 60_000;
+
 export interface DeleteContext extends RegistrationContext {
   readonly hosts: RegistrationContext["hosts"];
   readonly sandboxHost: SandboxHost;
@@ -25,6 +28,9 @@ export interface DeleteContext extends RegistrationContext {
  * `vm.delete` runs in the same per-name lane as Create/Repair. It persists a
  * `deleting` tombstone before destruction, uses the exact generation handle, and
  * removes only the `(producer, id)` registration. Missing resources are success.
+ *
+ * Every parent/runtime call is bounded and carries the lane's abort signal, so
+ * Delete can never stall plugin teardown or a queued same-name operation.
  */
 export async function deleteVm(
   context: DeleteContext,
@@ -39,17 +45,13 @@ export async function deleteVm(
 
   // Registrations must be readable before anything is destroyed, so an
   // unavailable daemon never leaves an unmanaged running VM behind.
-  const directory = await context.hosts.list().catch(() => {
-    throw new Error(safeError("registrations_unavailable").message);
-  });
+  const directory = await listDirectory(context, token);
   const parentId = directory.self.serverId;
 
-  const handle = await context.sandboxHost.find(input.name).catch(() => {
-    throw new Error(safeError("runtime_unavailable").message);
-  });
+  const handle = await findSandbox(context, input.name, token);
 
   if (!handle) {
-    await removeRegistrationWithoutSandbox(context, parentId, input);
+    await removeRegistrationWithoutSandbox(context, input, token);
     return { name: input.name, removed: true };
   }
 
@@ -70,28 +72,34 @@ export async function deleteVm(
 
   // Tombstone first. If this cannot be written, the VM is not destroyed.
   try {
-    await markSandboxPhase(handle, "deleting");
-  } catch {
+    await bounded(markSandboxPhase(handle, "deleting"), {
+      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     throw new Error(safeError("delete_failed").message);
   }
 
   // Re-read the exact generation after the tombstone write. The SDK's
   // `modify()` can hit a replacement, so never destroy without this check.
-  const current = await refreshExact(handle);
+  const current = await refreshExact(handle, token);
   token.throwIfAborted();
 
   try {
-    await context.sandboxHost.destroy(current);
-  } catch {
+    await bounded(context.sandboxHost.destroy(current), {
+      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     throw new Error(safeError("delete_failed").message);
   }
 
   // After destruction, remove only this generation's registration. A failure
   // leaves a visible registration-only child for Repair/Delete.
-  const after = await context.hosts.list().catch(() => {
-    throw new Error(safeError("registration_failed").message);
-  });
-  const matches = matchingRegistrations(parentId, input.id, after.hosts);
+  const after = await listDirectory(context, token);
+  const matches = matchingRegistrations(input.id, after.hosts);
   if (matches.length > 1) {
     throw new Error(safeError("registration_conflict").message);
   }
@@ -109,14 +117,12 @@ export async function deleteVm(
 
 async function removeRegistrationWithoutSandbox(
   context: DeleteContext,
-  parentId: string,
   input: VmDeleteInput,
+  token: LaneToken,
 ): Promise<void> {
-  const directory = await context.hosts.list().catch(() => {
-    throw new Error(safeError("registrations_unavailable").message);
-  });
+  const directory = await listDirectory(context, token);
 
-  const matches = matchingRegistrations(parentId, input.id, directory.hosts).filter(
+  const matches = matchingRegistrations(input.id, directory.hosts).filter(
     (registration) => registration.metadata.name === input.name,
   );
 
@@ -133,12 +139,47 @@ async function removeRegistrationWithoutSandbox(
   }
 }
 
-async function refreshExact(handle: SandboxHandleLike): Promise<SandboxHandleLike> {
+async function listDirectory(context: DeleteContext, token: LaneToken) {
   try {
-    const current = await handle.refresh();
+    return await bounded(context.hosts.list(), {
+      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
+    throw new Error(safeError("registrations_unavailable").message);
+  }
+}
+
+async function findSandbox(
+  context: DeleteContext,
+  name: string,
+  token: LaneToken,
+): Promise<SandboxHandleLike | null> {
+  try {
+    return await bounded(context.sandboxHost.find(name), {
+      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
+    throw new Error(safeError("runtime_unavailable").message);
+  }
+}
+
+async function refreshExact(
+  handle: SandboxHandleLike,
+  token: LaneToken,
+): Promise<SandboxHandleLike> {
+  try {
+    const current = await bounded(handle.refresh(), {
+      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      signal: token.signal,
+    });
     if (current.id !== handle.id) throw new SandboxGenerationError("id_mismatch");
     return current;
   } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
     if (error instanceof SandboxGenerationError || isSandboxReplacedError(error)) {
       throw new Error(safeError("id_mismatch").message);
     }

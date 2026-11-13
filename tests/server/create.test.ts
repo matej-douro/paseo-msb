@@ -179,11 +179,11 @@ describe("createVm", () => {
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const context = createContext(creator);
 
-    const first = await startCreate(context, INPUT);
+    const first = startCreate(context, INPUT);
 
-    await expect(
-      startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] }),
-    ).rejects.toThrow(safeError("invalid_request").message);
+    expect(() => startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] })).toThrow(
+      safeError("invalid_request").message,
+    );
 
     gate.resolve();
     await first.started;
@@ -201,9 +201,13 @@ describe("createVm", () => {
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
 
-    await expect(
-      startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] }),
-    ).rejects.toThrow(safeError("invalid_request").message);
+    const attempt = startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] });
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "invalid_request",
+    });
   });
 
   it("reports a pre-create failure and retries it under the same request ID", async () => {
@@ -281,19 +285,21 @@ describe("createVm", () => {
     });
   });
 
-  it("rejects a create whose selected credentials are absent", async () => {
+  it("settles a create whose selected credentials are absent without any sandbox work", async () => {
     const creator = new FakeSandboxCreator();
     const context = createContext(creator);
 
-    await expect(
-      createVm(context, {
-        requestId: REQUEST_ID,
-        secretEnvVars: ["GEMINI_API_KEY"],
-      }),
-    ).rejects.toThrow(safeError("missing_credentials").message);
+    const attempt = startCreate(context, {
+      requestId: REQUEST_ID,
+      secretEnvVars: ["GEMINI_API_KEY"],
+    });
+    await attempt.started;
 
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "missing_credentials",
+    });
     expect(creator.createCount).toBe(0);
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
   });
 
   it("resolves a plugin-stored credential before the parent environment", async () => {
@@ -321,9 +327,13 @@ describe("createVm", () => {
       secretsStore: unavailableSecretsStore(),
     });
 
-    await expect(createVm(context, INPUT)).rejects.toThrow(
-      safeError("secrets_unavailable").message,
-    );
+    const attempt = startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "secrets_unavailable",
+    });
     expect(creator.createCount).toBe(0);
   });
 
@@ -390,6 +400,23 @@ describe("createVm", () => {
     });
     expect(persisted).not.toContain(SECRET_VALUE);
     expect(persisted).toContain("[redacted]");
+  });
+
+  it("settles a cancelled pending attempt so a later Create can work", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator({ createGate: gate.promise });
+    const context = createContext(creator);
+
+    const attempt = startCreate(context, INPUT);
+    await waitFor(() => creator.createCount === 1);
+
+    await context.lanes.settle(100);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.lanes.closed).toBe(true);
+
+    gate.resolve();
   });
 
   it("keeps a pending create visible through the list projection", async () => {

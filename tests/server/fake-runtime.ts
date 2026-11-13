@@ -519,6 +519,8 @@ export class FakePaseoHosts implements RegistrationHostsLike {
 export interface FakeCreatorOptions {
   existing?: SandboxHandleLike | null;
   findError?: Error;
+  /** Optional scripted exact-lookup results, consumed one per call. */
+  findSequence?: readonly (SandboxHandleLike | null | Error)[];
   createFailures?: readonly Error[];
   createGate?: Promise<void>;
   sandboxId?: string;
@@ -531,6 +533,7 @@ export interface FakeCreatorOptions {
   execDetachedError?: Error;
   modifyError?: Error;
   destroyError?: Error;
+  destroyGate?: Promise<void>;
   hostPorts?: readonly number[];
   probeError?: Error;
 }
@@ -550,14 +553,22 @@ export class FakeSandboxCreator implements SandboxHost {
 
   private readonly failures: Error[];
   private readonly sandboxes = new Map<string, SandboxHandleLike>();
+  private readonly findSequence: (SandboxHandleLike | null | Error)[] | undefined;
 
   constructor(private readonly options: FakeCreatorOptions = {}) {
     this.failures = [...(options.createFailures ?? [])];
+    this.findSequence = options.findSequence ? [...options.findSequence] : undefined;
     if (options.existing) this.sandboxes.set(options.existing.name, options.existing);
   }
 
   async find(name: string): Promise<SandboxHandleLike | null> {
     if (this.options.findError) throw this.options.findError;
+    const scripted = this.findSequence;
+    if (scripted && scripted.length > 0) {
+      const next = scripted.shift();
+      if (next instanceof Error) throw next;
+      return next ?? null;
+    }
     return this.sandboxes.get(name) ?? null;
   }
 
@@ -631,6 +642,7 @@ export class FakeSandboxCreator implements SandboxHost {
 
   async destroy(handle: SandboxHandleLike): Promise<void> {
     if (this.options.destroyError) throw this.options.destroyError;
+    if (this.options.destroyGate) await this.options.destroyGate;
     this.destroyed.push(handle.id);
     this.sandboxes.delete(handle.name);
   }

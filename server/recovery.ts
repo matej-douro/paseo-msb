@@ -1,5 +1,5 @@
 import { credentialValues } from "./logs";
-import { LifecycleAbortedError, type LifecycleLanes } from "./lanes";
+import { LifecycleAbortedError, bounded, type LifecycleLanes } from "./lanes";
 import {
   reconcileName,
   type ReconcileContext,
@@ -22,7 +22,9 @@ export interface RecoveryContext extends ReconcileContext {
 export async function recoverManagedSandboxes(
   context: RecoveryContext,
 ): Promise<void> {
-  const directory = await context.hosts.list().catch(() => null);
+  const directory = await bounded(context.hosts.list(), {
+    timeoutMs: context.sdkCallTimeoutMs ?? 60_000,
+  }).catch(() => null);
   if (!directory) throw new Error("registrations unavailable");
 
   const parentId = directory.self.serverId;
@@ -43,7 +45,7 @@ export async function recoverManagedSandboxes(
 
   const names = new Set<string>();
   for (const loaded of inventory.sandboxes) names.add(loaded.sandbox.name);
-  for (const registration of pluginRegistrations(parentId, directory.hosts)) {
+  for (const registration of pluginRegistrations(directory.hosts)) {
     const name = registration.metadata.name;
     if (typeof name === "string" && name.length > 0) names.add(name);
   }

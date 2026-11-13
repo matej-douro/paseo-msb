@@ -6,8 +6,12 @@ import {
   type CredentialName,
 } from "../shared/constants";
 import type { LogBundle, LogLine } from "../shared/contracts";
+import { bounded } from "./lanes";
 
 type LogStream = LogLine["stream"];
+
+/** Bound for one log SDK call; a hung read must not stall a detail RPC. */
+const LOG_CALL_TIMEOUT_MS = 30_000;
 
 const LOG_STREAMS = new Set<string>(["stdout", "stderr", "output", "system"]);
 const encoder = new TextEncoder();
@@ -113,10 +117,13 @@ export async function readSandboxLogs(
   secrets: readonly string[],
 ): Promise<LogBundle> {
   try {
-    const entries = await handle.logs({
-      tail: MAX_LOG_ENTRIES,
-      sources: ["stdout", "stderr", "output"],
-    });
+    const entries = await bounded(
+      handle.logs({
+        tail: MAX_LOG_ENTRIES,
+        sources: ["stdout", "stderr", "output"],
+      }),
+      { timeoutMs: LOG_CALL_TIMEOUT_MS },
+    );
 
     const lines: LogLine[] = entries.map((entry) => {
       let text: string;
@@ -154,8 +161,12 @@ export async function readJobLogs(
   secrets: readonly string[],
 ): Promise<LogBundle> {
   try {
-    const job = await handle.getJob(jobId);
-    const entries = await job.logs({ tail: MAX_LOG_ENTRIES });
+    const job = await bounded(handle.getJob(jobId), {
+      timeoutMs: LOG_CALL_TIMEOUT_MS,
+    });
+    const entries = await bounded(job.logs({ tail: MAX_LOG_ENTRIES }), {
+      timeoutMs: LOG_CALL_TIMEOUT_MS,
+    });
     const lines: LogLine[] = entries.map((entry) => {
       let text: string;
       try {
