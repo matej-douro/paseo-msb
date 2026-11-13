@@ -15,12 +15,10 @@ import { createMicrosandboxRuntime } from "./runtime";
  * handlers fail with a safe not-implemented error until tasks 3 and 4.
  */
 export function registerRpcHandlers(server: PluginServerContext): () => void {
-  const runtime = createMicrosandboxRuntime();
-
   function readContext(paseo: PluginHandlerContext["paseo"]): ReadContext {
     return {
       hosts: paseo.hosts,
-      runtime,
+      runtime: createMicrosandboxRuntime(paseo),
       pending: listPendingCreates(),
       env: process.env,
     };

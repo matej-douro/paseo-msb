@@ -154,6 +154,12 @@ The script records the values in the table above from `msb --version`,
   the stable sandbox ID, not the child `serverId`, for ownership checks.
 - A parent-daemon restart reconnects the saved registration automatically; the
   plugin does not need to re-add it on startup.
+- Paseo compiles plugin server code to CommonJS, which turns `import.meta.url`
+  into `undefined`. The `microsandbox` ESM SDK uses `import.meta.url` to resolve
+  its native binding, so a static import fails plugin load with
+  `The argument 'filename' must be a file URL object... Received undefined`.
+  Load the installed package at runtime from the plugin directory (readable via
+  `paseo.config.get()`) instead of bundling it.
 
 ## Scope
 
