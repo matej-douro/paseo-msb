@@ -2,9 +2,12 @@ import { Loading, Modal, TextInput } from "@getpaseo/plugin/client/ui";
 import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import type { CredentialName } from "../shared/constants";
-import type { SecretsListResult } from "../shared/contracts";
-import { errorMessage, secretSource } from "./state";
-import { ActionButton, Notice, StatusPill, type PluginTheme } from "./ui";
+import type { SecretEntry, SecretsListResult } from "../shared/contracts";
+import { errorMessage } from "./state";
+import { ActionButton, IconButton, Notice, type PluginTheme } from "./ui";
+
+/** A stored value is never returned; a fixed dot run stands in for it. */
+const STORED_PLACEHOLDER = "••••••••";
 
 export interface ManageSecretsProps {
   open: boolean;
@@ -83,7 +86,7 @@ export function ManageSecrets({
       <Modal.Content>
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
           Values are stored once in the plugin and offered to new VMs by name. Stored values
-          override the parent environment. They are never returned to this screen.
+          override the parent environment.
         </Text>
 
         {loading && !data ? <Loading /> : null}
@@ -98,101 +101,29 @@ export function ManageSecrets({
         {actionError ? <Notice text={actionError} tone="danger" theme={theme} /> : null}
 
         {data ? (
-          <View style={{ gap: 10 }}>
-            {data.secrets.map((entry) => {
-              const source = secretSource(entry);
-              const draft = drafts[entry.name] ?? "";
-              const busy = pending === entry.name;
-
-              return (
-                <View
-                  key={entry.name}
-                  style={{
-                    backgroundColor: theme.colors.surface1,
-                    borderColor: theme.colors.border,
-                    borderWidth: 1,
-                    borderRadius: 8,
-                    padding: 10,
-                    gap: 8,
-                  }}
-                >
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 8,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: theme.colors.foreground,
-                        fontSize: 12,
-                        fontWeight: "600",
-                        flexShrink: 1,
-                      }}
-                    >
-                      {entry.name}
-                    </Text>
-                    <StatusPill label={source.label} tone={source.tone} theme={theme} />
-                  </View>
-
-                  <View
-                    style={{
-                      flexDirection: compact ? "column" : "row",
-                      alignItems: compact ? "stretch" : "center",
-                      gap: 8,
-                    }}
-                  >
-                    <TextInput
-                      value={draft}
-                      onChangeText={(text) =>
-                        setDrafts((current) => ({ ...current, [entry.name]: text }))
-                      }
-                      placeholder={entry.stored ? "Replace stored value" : "Paste value"}
-                      placeholderTextColor={theme.colors.foregroundMuted}
-                      secureTextEntry
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      editable={!busy}
-                      onSubmitEditing={() => void save(entry.name)}
-                      style={{
-                        flex: 1,
-                        color: theme.colors.foreground,
-                        backgroundColor: theme.colors.surface2,
-                        borderColor: theme.colors.border,
-                        borderWidth: 1,
-                        borderRadius: 6,
-                        paddingVertical: 6,
-                        paddingHorizontal: 8,
-                        fontSize: 12,
-                      }}
-                    />
-                    <View style={{ flexDirection: "row", gap: 8 }}>
-                      <ActionButton
-                        label={busy ? "Saving…" : "Save"}
-                        theme={theme}
-                        variant="primary"
-                        onPress={() => void save(entry.name)}
-                        disabled={busy || draft.trim().length === 0}
-                        compact
-                      />
-                      {entry.stored ? (
-                        <ActionButton
-                          label="Remove"
-                          theme={theme}
-                          variant="danger"
-                          onPress={() => void remove(entry.name)}
-                          disabled={busy}
-                          compact
-                        />
-                      ) : null}
-                    </View>
-                  </View>
-                </View>
-              );
-            })}
-
+          <View
+            style={{
+              borderColor: theme.colors.border,
+              borderWidth: 1,
+              borderRadius: 8,
+            }}
+          >
+            {data.secrets.map((entry, index) => (
+              <SecretRow
+                key={entry.name}
+                entry={entry}
+                draft={drafts[entry.name] ?? ""}
+                busy={pending === entry.name}
+                last={index === data.secrets.length - 1}
+                theme={theme}
+                compact={compact}
+                onChangeText={(text) =>
+                  setDrafts((current) => ({ ...current, [entry.name]: text }))
+                }
+                onSave={() => void save(entry.name)}
+                onRemove={() => void remove(entry.name)}
+              />
+            ))}
           </View>
         ) : null}
 
@@ -201,5 +132,108 @@ export function ManageSecrets({
         </View>
       </Modal.Content>
     </Modal>
+  );
+}
+
+function SecretRow({
+  entry,
+  draft,
+  busy,
+  last,
+  theme,
+  compact,
+  onChangeText,
+  onSave,
+  onRemove,
+}: {
+  entry: SecretEntry;
+  draft: string;
+  busy: boolean;
+  last: boolean;
+  theme: PluginTheme;
+  compact: boolean;
+  onChangeText(text: string): void;
+  onSave(): void;
+  onRemove(): void;
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        paddingVertical: 8,
+        paddingHorizontal: compact ? 8 : 10,
+        borderBottomColor: theme.colors.border,
+        borderBottomWidth: last ? 0 : 1,
+      }}
+    >
+      <Text
+        style={{
+          flex: 1,
+          color: theme.colors.foreground,
+          fontSize: 11,
+          fontWeight: "600",
+        }}
+      >
+        {entry.name}
+      </Text>
+
+      {/* The field is the cell: its actions live inside the same border. */}
+      <View
+        style={{
+          flex: 1.6,
+          minHeight: 28,
+          flexDirection: "row",
+          alignItems: "center",
+          backgroundColor: theme.colors.surface2,
+          borderColor: theme.colors.border,
+          borderWidth: 1,
+          borderRadius: 6,
+          paddingLeft: 8,
+          paddingRight: 2,
+        }}
+      >
+        <TextInput
+          value={draft}
+          onChangeText={onChangeText}
+          placeholder={entry.stored ? STORED_PLACEHOLDER : "Paste value"}
+          placeholderTextColor={theme.colors.foregroundMuted}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!busy}
+          onSubmitEditing={onSave}
+          style={{
+            flex: 1,
+            color: theme.colors.foreground,
+            fontSize: 11,
+            paddingVertical: 5,
+          }}
+        />
+        <IconButton
+          icon="Check"
+          label={busy ? "Saving…" : `Save ${entry.name}`}
+          theme={theme}
+          variant="ghost"
+          tone="accent"
+          size={22}
+          onPress={onSave}
+          disabled={busy || draft.trim().length === 0}
+        />
+        {entry.stored ? (
+          <IconButton
+            icon="Trash2"
+            label={busy ? "Removing…" : `Remove stored ${entry.name}`}
+            theme={theme}
+            variant="ghost"
+            tone="danger"
+            size={22}
+            onPress={onRemove}
+            disabled={busy}
+          />
+        ) : null}
+      </View>
+    </View>
   );
 }
