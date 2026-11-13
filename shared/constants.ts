@@ -93,7 +93,13 @@ export const CREDENTIALS = CREDENTIAL_NAMES.map((envVar) => ({
 
 /** Registration metadata used to join sandboxes with parent registrations. */
 export const REGISTRATION_SOURCE = PLUGIN_ID;
-export const MANAGED_NAME_PREFIX = `${PLUGIN_ID}-`;
+
+/**
+ * Child sandbox names are `paseo-<requestId>`, per DESIGN.md. This is
+ * deliberately shorter than the plugin ID; ownership is still proven by the
+ * managed, parent, and stable-ID labels.
+ */
+export const MANAGED_NAME_PREFIX = "paseo-";
 
 export function sandboxName(requestId: string): string {
   return `${MANAGED_NAME_PREFIX}${requestId}`;

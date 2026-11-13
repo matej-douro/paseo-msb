@@ -13,6 +13,13 @@ export const SAFE_ERROR_CODES = [
   "logs_unavailable",
   "not_found",
   "not_implemented",
+  "missing_credentials",
+  "runtime_unavailable",
+  "name_conflict",
+  "create_failed",
+  "port_unavailable",
+  "install_failed",
+  "path_unverified",
 ] as const;
 
 export type SafeErrorCode = (typeof SAFE_ERROR_CODES)[number];
@@ -26,6 +33,13 @@ export const SAFE_ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   logs_unavailable: "Logs are unavailable.",
   not_found: "The child was not found.",
   not_implemented: "This operation is not available yet.",
+  missing_credentials: "One or more selected credentials are unavailable.",
+  runtime_unavailable: "The parent runtime is unavailable.",
+  name_conflict: "A sandbox with this name already exists.",
+  create_failed: "The sandbox could not be created.",
+  port_unavailable: "No loopback port could be published.",
+  install_failed: "Pi installation failed.",
+  path_unverified: "Pi is not available on the child PATH.",
 };
 
 export const SafeErrorSchema = z
