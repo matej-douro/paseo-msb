@@ -20,6 +20,21 @@ describe("failureDetail", () => {
     expect(detail).toBe("npm failed here");
   });
 
+  it("includes nested causes in the redacted detail", () => {
+    const root = new Error("Cannot find module './microsandbox.darwin-arm64.node'");
+    const middle = new Error(
+      "dlopen failed: mapping process and mapped file have different Team IDs",
+      { cause: root },
+    );
+    const top = new Error("Cannot find native binding", { cause: middle });
+
+    const detail = failureDetail(top);
+
+    expect(detail).toContain("Cannot find native binding");
+    expect(detail).toContain("different Team IDs");
+    expect(detail).toContain("Cannot find module");
+  });
+
   it("bounds long text", () => {
     const detail = failureDetail(new Error("x".repeat(MAX_ERROR_DETAIL_CHARS + 500)));
     expect(detail).not.toBeNull();

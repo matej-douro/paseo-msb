@@ -78,12 +78,11 @@ function describe(error: unknown): string {
   }
 
   if (error instanceof Error) {
-    const cause =
-      error.cause instanceof Error ? `: ${error.cause.message}` : "";
     const message = error.message.length > 0 ? error.message : error.name;
-    return message === error.name
-      ? `${error.name}${cause}`
-      : `${error.name}: ${message}${cause}`;
+    const head =
+      message === error.name ? error.name : `${error.name}: ${message}`;
+    const causes = causeChain(error);
+    return causes.length > 0 ? `${head}: ${causes.join(" <- ")}` : head;
   }
 
   if (typeof error === "string") return error;
@@ -94,6 +93,19 @@ function describe(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function causeChain(error: Error, limit = 4): string[] {
+  const messages: string[] = [];
+  let current: unknown = error.cause;
+
+  while (current instanceof Error && messages.length < limit) {
+    const message = current.message || current.name;
+    if (message.length > 0 && !messages.includes(message)) messages.push(message);
+    current = current.cause;
+  }
+
+  return messages;
 }
 
 function bound(text: string): string {
