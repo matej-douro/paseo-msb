@@ -9,12 +9,13 @@ import {
 } from "../shared/constants";
 import type { VmCreateInput } from "../shared/contracts";
 import { newRequestId } from "./request-id";
-import { canCreate, errorMessage, toggleCredential } from "./state";
-import { ActionButton, type PluginTheme } from "./ui";
+import { canCreate, credentialSourceLabel, errorMessage, toggleCredential } from "./state";
+import { ActionButton, StatusPill, type PluginTheme } from "./ui";
 
 export interface CreateChildProps {
   open: boolean;
   credentials: readonly CredentialName[];
+  storedCredentials: readonly CredentialName[];
   theme: PluginTheme;
   compact: boolean;
   onOpenChange(open: boolean): void;
@@ -28,6 +29,7 @@ export interface CreateChildProps {
 export function CreateChild({
   open,
   credentials,
+  storedCredentials,
   theme,
   compact,
   onOpenChange,
@@ -38,6 +40,8 @@ export function CreateChild({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const availableSelection = selected.filter((name) => credentials.includes(name));
+
   useEffect(() => {
     if (!open) return;
     setSelected([]);
@@ -47,7 +51,8 @@ export function CreateChild({
   }, [open]);
 
   const submit = async () => {
-    if (!canCreate(selected) || pending) return;
+    const chosen = selected.filter((name) => credentials.includes(name));
+    if (!canCreate(chosen) || pending) return;
 
     const id = requestId ?? newRequestId();
     setRequestId(id);
@@ -55,7 +60,7 @@ export function CreateChild({
     setError(null);
 
     try {
-      await onCreate({ requestId: id, secretEnvVars: selected });
+      await onCreate({ requestId: id, secretEnvVars: chosen });
       setRequestId(null);
       setSelected([]);
       onOpenChange(false);
@@ -90,8 +95,8 @@ export function CreateChild({
 
           {credentials.length === 0 ? (
             <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
-              No parent credentials are available. Add one of the supported keys to the parent
-              environment before creating a child.
+              No credentials are available. Add one in Manage secrets or the parent environment
+              before creating a child.
             </Text>
           ) : (
             <View style={{ gap: 2 }}>
@@ -129,13 +134,18 @@ export function CreateChild({
                       ) : null}
                     </View>
                     <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{name}</Text>
+                    <StatusPill
+                      label={credentialSourceLabel(name, storedCredentials)}
+                      tone={storedCredentials.includes(name) ? "accent" : "muted"}
+                      theme={theme}
+                    />
                   </Pressable>
                 );
               })}
             </View>
           )}
 
-          {!canCreate(selected) ? (
+          {!canCreate(availableSelection) ? (
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
               Select at least one credential.
             </Text>
@@ -167,7 +177,7 @@ export function CreateChild({
               theme={theme}
               variant="primary"
               onPress={() => void submit()}
-              disabled={!canCreate(selected) || pending}
+              disabled={!canCreate(availableSelection) || pending}
             />
           </View>
         </View>

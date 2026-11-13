@@ -1,9 +1,11 @@
 import { useRpc, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Text, View, type ViewStyle } from "react-native";
-import { CPUS, MEMORY_MIB, PI_VERSION } from "../shared/constants";
+import { CPUS, MEMORY_MIB, PI_VERSION, type CredentialName } from "../shared/constants";
 import {
+  secretsDeleteRpc,
+  secretsSetRpc,
   vmCreateRpc,
   vmDeleteRpc,
   vmReconcileRpc,
@@ -13,8 +15,10 @@ import {
 import { ChildDetail } from "./ChildDetail";
 import { ChildList } from "./ChildList";
 import { CreateChild } from "./CreateChild";
+import { useSecrets } from "./hooks/useSecrets";
 import { useVmDetail } from "./hooks/useVmDetail";
 import { useVmList } from "./hooks/useVmList";
+import { ManageSecrets } from "./ManageSecrets";
 import { ActionButton } from "./ui";
 
 /**
@@ -27,11 +31,19 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
   const [selectedName, setSelectedName] = useState<string | null>(params.name ?? null);
   const detail = useVmDetail(selectedName);
   const [createOpen, setCreateOpen] = useState(false);
+  const [secretsOpen, setSecretsOpen] = useState(false);
 
   const create = useRpc(vmCreateRpc);
   const reconcile = useRpc(vmReconcileRpc);
   const remove = useRpc(vmDeleteRpc);
+  const secrets = useSecrets();
+  const setSecret = useRpc(secretsSetRpc);
+  const removeSecret = useRpc(secretsDeleteRpc);
   const toast = useToast();
+
+  const refreshSecrets = useCallback(() => {
+    void secrets.refresh();
+  }, [secrets.refresh]);
 
   // Reconnect to the child named in the screen params after navigation.
   useEffect(() => {
@@ -55,6 +67,18 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
     await remove(input);
     setSelectedName(null);
     await list.refresh();
+  };
+
+  const handleSetSecret = async (name: CredentialName, value: string) => {
+    await setSecret({ name, value });
+    await Promise.all([secrets.refresh(), list.refresh()]);
+    toast.show(`Saved ${name}.`, { variant: "success" });
+  };
+
+  const handleDeleteSecret = async (name: CredentialName) => {
+    await removeSecret({ name });
+    await Promise.all([secrets.refresh(), list.refresh()]);
+    toast.show(`Removed stored ${name}.`, { variant: "info" });
   };
 
   const styles = useMemo<Record<string, ViewStyle>>(
@@ -95,13 +119,21 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
           {CPUS} vCPU · {MEMORY_MIB} MiB · Pi {PI_VERSION} · loopback only
         </Text>
       </View>
-      <ActionButton
-        label="Create child"
-        theme={theme}
-        variant="primary"
-        onPress={() => setCreateOpen(true)}
-        compact={compact}
-      />
+      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+        <ActionButton
+          label="Manage secrets"
+          theme={theme}
+          onPress={() => setSecretsOpen(true)}
+          compact={compact}
+        />
+        <ActionButton
+          label="Create child"
+          theme={theme}
+          variant="primary"
+          onPress={() => setCreateOpen(true)}
+          compact={compact}
+        />
+      </View>
     </View>
   );
 
@@ -166,10 +198,24 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       <CreateChild
         open={createOpen}
         credentials={list.data?.credentials ?? []}
+        storedCredentials={list.data?.storedCredentials ?? []}
         theme={theme}
         compact={compact}
         onOpenChange={setCreateOpen}
         onCreate={handleCreate}
+      />
+
+      <ManageSecrets
+        open={secretsOpen}
+        data={secrets.data}
+        loading={secrets.loading}
+        error={secrets.error}
+        theme={theme}
+        compact={compact}
+        onOpenChange={setSecretsOpen}
+        onRefresh={refreshSecrets}
+        onSet={handleSetSecret}
+        onDelete={handleDeleteSecret}
       />
     </View>
   );
