@@ -112,7 +112,7 @@ Public DTOs use allowlists and structured safe errors. Any intentionally exposed
 
 ## 6. Repair and deletion
 
-`vm.reconcile` is the single Repair mutation and uses the reconciler in section 4. It resumes unambiguous install/registration work, restores missing registrations, and removes confirmed stale plugin-owned registrations. It does not create or delete sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed failed-install state.
+`vm.reconcile` is the single Repair mutation and uses the reconciler in section 4. It resumes unambiguous install/registration work, restores missing registrations, and removes confirmed stale plugin-owned registrations. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed failed-install state. It does not initiate deletion; completing an existing `deleting` tombstone is Delete cleanup, not a new Repair deletion.
 
 Absence from managed, decoded, label-filtered inventory is not proof of deletion. Stale-registration removal requires either:
 

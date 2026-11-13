@@ -1,8 +1,19 @@
 # Lifecycle and identity findings
 
-Review snapshot: `e247bb0`. This document expands review findings 3 and 5 and the related identity/transaction issues. No implementation fixes have landed yet.
+Review snapshot: `e247bb0`. This document expands review findings 3 and 5 and the related identity/transaction issues.
 
-Resolution: [DESIGN.md](./DESIGN.md) now selects the name-based model and is the authoritative plan; [TASKS.md](./TASKS.md) task 7 tracks the remaining work. This file is supporting analysis, not a competing design.
+Resolution: [DESIGN.md](./DESIGN.md) selects the name-based model, and [TASKS.md](./TASKS.md) task 7 implements it. This file remains supporting analysis of the original failures, not a competing design.
+
+Task 7 additionally verified two runtime behaviors not known at review time:
+
+- `SandboxHandle.modify()` does **not** reject a same-name replacement; it applies
+the write to the replacement. Every label write therefore refreshes the handle and
+compares the exact generation first (see `server/sandbox.ts` `guardedModify`).
+- A changed `hosts.add` for an existing `(producer, source.key)` raises
+`source_conflict`; an unchanged add returns the existing registration. The
+reconciler lists first and only adds when the exact row is absent.
+
+Full spike results: [docs/spikes/identity-lifecycle.md](./docs/spikes/identity-lifecycle.md).
 
 ## API facts that affect the design
 

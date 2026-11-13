@@ -66,33 +66,62 @@ The create confirmation shows the fixed image and resources and lists available
 credential names as **Stored** or **Environment**. It requires at least one
 name and never accepts or displays a value.
 
-The child name is generated from one UUID per logical create attempt. The RPC
-returns immediately; the plugin then:
+The child name is generated from one UUID per logical create attempt
+(`paseo-<requestId>`). The name is the logical identity; the current microsandbox
+generation is its exact `handle.id`. The RPC returns immediately; one idempotent
+reconciler per name then:
 
 1. creates a detached, fixed `2 CPU` / `2048 MiB` sandbox from the pinned image
    with a loopback-only published child port;
-2. installs Pi as the non-root `paseo` user in a detached job;
-3. registers the child with the parent and waits for routed online;
+2. installs Pi as the non-root `paseo` user in one detached job, rediscovered by
+   its exact pinned argv rather than a durable job label;
+3. registers the exact generation with the parent and waits for routed online;
 4. refreshes Pi in the child and marks the child `ready`.
 
-Progress is read from sandbox labels, so list/detail polling can observe it and
-can be stopped without stopping host work.
+Progress is a phase label (`creating`, `installing`, `registering`, `ready`,
+`deleting`), so list/detail polling can observe it and can be stopped without
+stopping host work. Phase is a hint, not proof that a side effect happened.
+
+New sandboxes do not write stable-ID or job-ID labels. A repeated create for the
+same request joins the same reconciliation and must use the original credential
+names. Reusing a request after a fully confirmed Delete creates a new generation.
+Retryable failures keep the actionable phase and add a safe error code; only a
+confirmed unsuccessful install is terminal. A failed pending create can be
+retried from its detail with the original request ID and credential names.
 
 ### Repair
 
-Repair (`vm.reconcile`) resumes an unambiguous interrupted install or
-registration using the persisted sandbox and job IDs, restores a missing
-registration for a Pi-ready sandbox, and removes a plugin-owned registration
-whose sandbox is gone. It never creates, starts, adopts, or deletes a sandbox,
-and it reports ambiguous or foreign state instead of guessing.
+Repair (`vm.reconcile`) runs the same reconciler. It resumes an unambiguous
+interrupted install or registration, restores a missing registration for a
+Pi-ready sandbox, and removes a confirmed stale plugin-owned registration. It
+never creates, starts, adopts, or initiates deletion and reports ambiguous or
+foreign state instead of guessing. A child already carrying a `deleting`
+tombstone has that Delete cleanup completed.
+
+Job recovery reads the complete detached-job inventory with checked pagination
+and matches the exact pinned install argv. Zero active matches permits one
+install, one is awaited, and multiple active matches are a conflict. Inventory
+or inspection failures never launch another install. Registration identity is
+the authenticated producer `plugin:paseo-msb` plus the exact generation id;
+metadata and labels are configuration, not ownership proof. A user-disabled
+registration is preserved, not re-enabled.
+
+Registration-only children remain visible and actionable. While one remains,
+a same-request Create joins its cleanup instead of allocating a replacement.
 
 ### Delete
 
-Delete requires the exact generated name and stable sandbox ID, destroys that
-sandbox, and removes its matching registration. Already-missing resources count
-as success, so repeated deletes are safe. Failed or incomplete children can be
-deleted without CLI cleanup. If removal fails after the sandbox is destroyed,
-the leftover registration can be removed by Repair.
+Delete requires the exact generated name and current generation id. In the same
+per-name lane it persists `deleting` before destruction, re-reads the exact
+handle, destroys that generation, and removes only the matching
+`(plugin:paseo-msb, id)` registration. A stale id cannot destroy a newer
+same-name generation. If the tombstone cannot be written, the VM is not
+destroyed.
+
+Already-missing resources count as success, so repeated deletes are safe. Failed
+and incomplete children can be deleted without CLI cleanup. If removal fails
+after the sandbox is destroyed, a registration-only child remains for Repair or
+Delete. Reload during deletion resumes cleanup, never setup.
 
 ### Use
 
@@ -103,10 +132,16 @@ plugin-specific copy, shell, metrics, start/stop, or custom provider controls.
 
 List and detail show the fixed safe code plus a bounded, redacted reason when
 the plugin has one, for example an image pull, Pi install, registration, or
-native-runtime error. The same text is stored on failed sandboxes as the
-`paseo-msb-error-detail` label. Credential values are redacted before the text
-enters pending state, a label, an RPC response, or a log, and control
-characters are stripped and the length is capped.
+native-runtime error. Setup errors keep the actionable phase and store the same
+text as the `paseo-msb-error-detail` label.
+
+Redaction is centralized and covers current environment and store values plus
+relevant values from managed VM config, so removing or replacing a stored value
+does not disable redaction for an existing VM. Credential values are redacted
+before text enters pending state, a label, an RPC response, or a log; control
+characters are stripped and the length is capped. Retryable codes include
+`install_pending`, `install_conflict`, `job_inventory_unavailable`,
+`registration_failed`, `registration_timeout`, and `provider_unavailable`.
 
 ## Trust boundary
 
@@ -120,13 +155,21 @@ microsandbox responsibilities.
 
 Labelled sandboxes, detached Pi install jobs, and parent registrations survive
 plugin and parent-daemon restarts. On first use after a plugin reload, recovery
-rediscovers labelled sandboxes and resumes only setup whose persisted IDs make
-the next step unambiguous.
+rediscovers labelled sandboxes and plugin-owned registrations and feeds each
+name to the same reconciler. It does not create, start, or adopt a VM. The only
+destroy it performs is completing an explicit `deleting` tombstone.
 
-A reload before a sandbox exists can lose the empty pending create; retrying
-that request ID is safe. A stopped VM is not started automatically, and there is
-no operation history. Uncertain interrupted setup remains failed until Repair or
-Delete.
+Plugin cleanup aborts in-flight lanes promptly instead of waiting for install or
+registration timeouts. A reload before a sandbox exists can lose the empty
+pending create; retrying that request ID is safe. A stopped VM is not started
+automatically, and there is no operation history. Uncertain setup keeps its
+actionable phase and a safe error until Repair or Delete.
+
+Legacy `paseo-msb-id` and `paseo-msb-job` labels are read only for migration. A
+matching legacy ID is tolerated; a mismatched legacy ID quarantines the VM as
+`id_mismatch` instead of adopting it. Legacy `failed` phases are not replayed;
+actual Pi readiness still wins. Existing registrations are updated to the current
+metadata shape on their next successful reconciliation.
 
 ## Development
 
@@ -153,8 +196,9 @@ through the plugin RPCs. It also:
   microsandbox secret entry with header-only substitution, and verifies it never
   appears in RPC output, plugin logs, sandbox logs, pending state, or test
   artifacts;
-- restores a missing registration and removes a stale one without creating a
-  second VM;
+- restores a missing registration, then removes an orphaned plugin-owned
+  registration by creating a second child, destroying its sandbox behind the
+  plugin, and confirming Repair removes only the registration;
 - deletes the exact sandbox and registration, then repeats delete and Repair
   safely.
 

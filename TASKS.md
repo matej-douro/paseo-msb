@@ -142,23 +142,33 @@ failure sequences and API evidence.
 ### Acceptance
 
 
-- [ ] Pass the exact-handle, paginated job-recovery, and real-plugin registration spikes required
+- [x] Pass the exact-handle, paginated job-recovery, and real-plugin registration spikes required
   by `DESIGN.md` section 8 before changing lifecycle code.
-- [ ] Replace separate Create/recovery/Repair runners with the per-name reconciler. Fault injection
+- [x] Replace separate Create/recovery/Repair runners with the per-name reconciler. Fault injection
   and concurrent operations cannot corrupt state or leave late work after Delete/reload.
-- [ ] Remove new VM dependence on durable ID/job labels and duplicate registration metadata while
+- [x] Remove new VM dependence on durable ID/job labels and duplicate registration metadata while
   quarantining mismatched legacy IDs. Same-request retries preserve credential names and verify
   exact handles so stale generation IDs cannot mutate replacements; registration-only children
   remain actionable.
-- [ ] Implement structured job outcomes and retryable registration/provider failures. Every crash
+- [x] Implement structured job outcomes and retryable registration/provider failures. Every crash
   window has a UI recovery path, with at most one current VM, active install, and registration per
   logical attempt and no CLI cleanup.
-- [ ] Implement tombstoned Delete and fail-closed stale-registration cleanup. Malformed config,
+- [x] Implement tombstoned Delete and fail-closed stale-registration cleanup. Malformed config,
   missing labels, lookup failures, and bad pagination never authorize destructive cleanup.
-- [ ] Centralize safe diagnostics/redaction across current and creation-time credentials, keep DTOs
+- [x] Centralize safe diagnostics/redaction across current and creation-time credentials, keep DTOs
   allowlisted, and verify canaries against public output and raw microsandbox logs.
-- [ ] Update affected contracts, UI, migration notes, and `README.md`. `npm run typecheck`,
+- [x] Update affected contracts, UI, migration notes, and `README.md`. `npm run typecheck`,
   `npm run lint`, `npm test`, and `npm run test:release` pass on the verified pins.
+
+Result: the exact-handle matrix, paginated job recovery, and real-plugin producer
+semantics are recorded in [docs/spikes/identity-lifecycle.md](./docs/spikes/identity-lifecycle.md).
+The spike found that the pinned SDK's `modify()` applies to a same-name replacement,
+so every label write now refreshes and compares the exact generation first. The
+reconciler in `server/reconciler.ts` is the only setup path; `server/lanes.ts`
+serializes per name, aborts on Delete/reload, and skips cancelled queued work.
+Structured job outcomes, list-before-add registration, stale-registration exact
+lookups, tombstoned Delete, redaction of persisted VM values, registration-only
+children, and legacy label quarantine are covered by unit and release tests.
 
 Files: `shared/`, `server/`, `client/`, `tests/`, `scripts/spikes/`, `docs/spikes/`,
 `README.md`
