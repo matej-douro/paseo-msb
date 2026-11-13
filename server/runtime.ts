@@ -34,7 +34,7 @@ async function importMicrosandbox(paseo: PaseoApi): Promise<MicrosandboxModule> 
   const { config } = await paseo.config.get();
   const plugin = config.plugins?.[PLUGIN_ID];
 
-  if (!plugin || plugin.source !== "directory" || !plugin.path) {
+  if (plugin?.source !== "directory" || !plugin.path) {
     throw new Error("plugin directory is unavailable");
   }
 
@@ -153,9 +153,9 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
         .labels({ ...plan.labels });
 
       builder = builder.network((network) => {
-        let configured: any = network;
+        let configured: NetworkBuilderLike = network;
         for (const secret of plan.secrets) {
-          configured = configured.secret((entry: any) => {
+          configured = configured.secret((entry) => {
             let configuredEntry = entry
               .env(secret.envVar)
               .value(secret.value)
@@ -176,6 +176,29 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
   };
 }
 
+/** The subset of the SDK secret builder chained when applying plan secrets. */
+interface SecretBuilderLike {
+  env(envVar: string): SecretBuilderLike;
+  value(value: string): SecretBuilderLike;
+  substituteInHeaders(enabled: boolean): SecretBuilderLike;
+  substituteInQuery(enabled: boolean): SecretBuilderLike;
+  substituteInBody(enabled: boolean): SecretBuilderLike;
+  allow(host: string): SecretBuilderLike;
+}
+
+/** The subset of the SDK network builder chained when applying plan secrets. */
+interface NetworkBuilderLike {
+  secret(configure: (entry: SecretBuilderLike) => SecretBuilderLike): NetworkBuilderLike;
+}
+
+/** The subset of the SDK exec-options builder chained by `applyExecSpec`. */
+interface ExecOptionsBuilderLike {
+  args(args: readonly string[]): ExecOptionsBuilderLike;
+  user(user: string): ExecOptionsBuilderLike;
+  env(key: string, value: string): ExecOptionsBuilderLike;
+  stdinNull(): ExecOptionsBuilderLike;
+}
+
 /** Structural view of the SDK sandbox returned by a strict create. */
 interface SdkSandboxLike {
   readonly id: string;
@@ -183,9 +206,12 @@ interface SdkSandboxLike {
   modify(options: { labels: Record<string, string> }): Promise<unknown>;
   execDetachedWith(
     command: string,
-    configure: (builder: any) => any,
+    configure: (builder: ExecOptionsBuilderLike) => ExecOptionsBuilderLike,
   ): Promise<SandboxJobHandleLike>;
-  execWith(command: string, configure: (builder: any) => any): Promise<{
+  execWith(
+    command: string,
+    configure: (builder: ExecOptionsBuilderLike) => ExecOptionsBuilderLike,
+  ): Promise<{
     readonly code: number;
     stdout(): string;
   }>;
@@ -203,7 +229,7 @@ function isSandboxNotFound(error: unknown): boolean {
   );
 }
 
-function applyExecSpec(builder: any, spec: ExecSpec): any {
+function applyExecSpec(builder: ExecOptionsBuilderLike, spec: ExecSpec): ExecOptionsBuilderLike {
   let configured = builder.args([...spec.args]).user(spec.user);
   for (const [key, value] of Object.entries(spec.env ?? {})) {
     configured = configured.env(key, value);

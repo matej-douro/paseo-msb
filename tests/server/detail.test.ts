@@ -10,7 +10,6 @@ import {
   fakeRuntime,
   fakeSandbox,
   failingRuntime,
-  PARENT_ID,
   SECRET_VALUE,
 } from "./fake-runtime";
 

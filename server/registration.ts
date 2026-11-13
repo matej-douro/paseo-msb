@@ -3,7 +3,7 @@ import {
   REGISTRATION_SOURCE,
   registrationLabel,
 } from "../shared/constants";
-import { type SafeErrorCode } from "../shared/errors";
+import type { SafeErrorCode } from "../shared/errors";
 import {
   isManagedRegistration,
   type HostDirectoryLike,

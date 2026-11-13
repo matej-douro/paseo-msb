@@ -44,7 +44,7 @@ function describe(error: unknown): string {
 
 function bound(text: string): string {
   const normalized = text
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\p{Cc}+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 

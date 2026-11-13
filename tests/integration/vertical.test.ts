@@ -302,7 +302,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(detailPhases.size).toBeGreaterThanOrEqual(2);
 
       const child = finalList.children.find((entry) => entry.name === name);
-      if (!child || child.kind !== "sandbox") {
+      if (child?.kind !== "sandbox") {
         throw new Error(`child ${name} is not a sandbox after readiness`);
       }
 

@@ -63,6 +63,8 @@ export function ChildDetail({
 
   const child = data?.child ?? null;
   const sandbox = child?.kind === "sandbox" ? child : null;
+  const childError = child ? childErrorText(child) : null;
+  const logs = data?.logs ?? null;
 
   const repair = async () => {
     if (repairing) return;
@@ -186,9 +188,7 @@ export function ChildDetail({
               />
             ) : null}
 
-            {childErrorText(child) ? (
-              <Notice text={childErrorText(child)!} tone="danger" theme={theme} />
-            ) : null}
+            {childError ? <Notice text={childError} tone="danger" theme={theme} /> : null}
 
             {sandbox ? (
               <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
@@ -222,10 +222,10 @@ export function ChildDetail({
               <Notice text={repairError} tone="danger" theme={theme} />
             ) : null}
 
-            {sandbox ? (
+            {sandbox && logs ? (
               <View style={{ gap: 12 }}>
-                <LogSection title="Sandbox logs" bundle={data!.logs.sandbox} theme={theme} />
-                <LogSection title="Pi install logs" bundle={data!.logs.job} theme={theme} />
+                <LogSection title="Sandbox logs" bundle={logs.sandbox} theme={theme} />
+                <LogSection title="Pi install logs" bundle={logs.job} theme={theme} />
               </View>
             ) : null}
           </>
@@ -308,6 +308,7 @@ function LogSection({
 
       {bundle.entries.map((entry, index) => (
         <View
+          // biome-ignore lint/suspicious/noArrayIndexKey: entries are append-only, no stable id
           key={`${entry.timestamp}-${index}`}
           style={{
             flexDirection: "row",

@@ -206,7 +206,9 @@ export function findValuePaths(value: unknown, needle: string): string[] {
       return;
     }
     if (Array.isArray(current)) {
-      current.forEach((item, index) => visit(item, `${location}[${index}]`));
+      for (const [index, item] of current.entries()) {
+        visit(item, `${location}[${index}]`);
+      }
       return;
     }
     if (typeof current === "object" && current !== null) {
