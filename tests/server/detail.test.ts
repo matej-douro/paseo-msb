@@ -107,6 +107,7 @@ describe("readVmDetail", () => {
       phase: "creating" as const,
       createdAt: 1,
       errorCode: null,
+      errorDetail: null,
     };
 
     const detail = await readVmDetail(context(failingRuntime(), [pending]), {
@@ -118,6 +119,7 @@ describe("readVmDetail", () => {
       name: pending.name,
       phase: "creating",
       error: null,
+      errorDetail: null,
     });
     expect(detail.logs.sandbox.available).toBe(false);
     expect(detail.logs.job.available).toBe(false);

@@ -168,7 +168,12 @@ function ChildRow({
       </View>
 
       {error ? (
-        <Text style={{ color: theme.colors.statusDanger, fontSize: 11 }}>{error}</Text>
+        <Text
+          numberOfLines={3}
+          style={{ color: theme.colors.statusDanger, fontSize: 11 }}
+        >
+          {error}
+        </Text>
       ) : null}
     </Pressable>
   );

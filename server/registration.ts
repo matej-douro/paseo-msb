@@ -44,9 +44,12 @@ export interface RegistrationHostsLike {
   client(serverId: string): Promise<RoutedPaseoLike>;
 }
 
-/** A setup step failed with a fixed, safe code. Raw upstream text never crosses. */
+/** A setup step failed with a fixed, safe code and optional safe detail. */
 export class SetupFailure extends Error {
-  constructor(readonly code: SafeErrorCode) {
+  constructor(
+    readonly code: SafeErrorCode,
+    readonly detail?: string | null,
+  ) {
     super(code);
     this.name = "SetupFailure";
   }

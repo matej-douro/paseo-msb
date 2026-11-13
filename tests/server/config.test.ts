@@ -24,7 +24,14 @@ describe("decodeManagedSandbox", () => {
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
 
     expect(decoded).not.toBeNull();
-    expect(Object.keys(decoded!).sort()).toEqual(["id", "labels", "name", "runtimeStatus"]);
+    expect(Object.keys(decoded!).sort()).toEqual([
+      "errorDetail",
+      "id",
+      "labels",
+      "name",
+      "runtimeStatus",
+    ]);
+    expect(decoded!.errorDetail).toBeNull();
     expect(decoded!.id).toBe("sbx_1");
     expect(decoded!.name).toBe("paseo-1");
     expect(decoded!.runtimeStatus).toBe("running");

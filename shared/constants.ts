@@ -42,6 +42,11 @@ export const SANDBOX_ID_LABEL = "paseo-msb-id";
 export const PHASE_LABEL = "paseo-msb-phase";
 export const JOB_LABEL = "paseo-msb-job";
 export const ERROR_LABEL = "paseo-msb-error";
+/** Bounded, redacted diagnostic text. Never contains a credential value. */
+export const ERROR_DETAIL_LABEL = "paseo-msb-error-detail";
+
+/** Upper bound for diagnostic text exposed in DTOs, pending state, and labels. */
+export const MAX_ERROR_DETAIL_CHARS = 1_000;
 
 export const PHASES = ["creating", "installing", "registering", "ready", "failed"] as const;
 export type Phase = (typeof PHASES)[number];

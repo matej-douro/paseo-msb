@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_ERROR_DETAIL_CHARS } from "./constants";
 
 /**
  * Every error that crosses the RPC boundary uses one of these fixed codes
@@ -58,13 +59,19 @@ export const SafeErrorSchema = z
   .object({
     code: z.enum(SAFE_ERROR_CODES),
     message: z.string().max(200),
+    /** Bounded, redacted diagnostic text for the user. Never a raw secret. */
+    detail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).optional(),
   })
   .strict();
 
 export type SafeError = z.infer<typeof SafeErrorSchema>;
 
-export function safeError(code: SafeErrorCode): SafeError {
-  return { code, message: SAFE_ERROR_MESSAGES[code] };
+export function safeError(code: SafeErrorCode, detail?: string | null): SafeError {
+  return {
+    code,
+    message: SAFE_ERROR_MESSAGES[code],
+    ...(detail ? { detail } : {}),
+  };
 }
 
 export function isSafeErrorCode(value: string): value is SafeErrorCode {

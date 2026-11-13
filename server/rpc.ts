@@ -7,6 +7,7 @@ import {
   readSandboxLogs,
   unavailableLogBundle,
 } from "./logs";
+import { failureDetail } from "./diagnostics";
 import type { PendingCreate } from "./pending";
 import { loadManagedSandboxes, type SandboxInventory, type SandboxRuntime } from "./sandbox";
 import {
@@ -32,8 +33,11 @@ type DirectoryLoad =
 async function loadDirectory(hosts: ParentHostsLike): Promise<DirectoryLoad> {
   try {
     return { status: "available", directory: await hosts.list() };
-  } catch {
-    return { status: "unavailable", error: safeError("registrations_unavailable") };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      error: safeError("registrations_unavailable", failureDetail(error)),
+    };
   }
 }
 

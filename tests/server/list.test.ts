@@ -17,6 +17,7 @@ const PENDING = {
   phase: "creating" as const,
   createdAt: 1,
   errorCode: null,
+  errorDetail: null,
 };
 
 describe("buildVmList", () => {
@@ -125,6 +126,7 @@ describe("buildVmList", () => {
       name: PENDING.name,
       phase: "creating",
       error: null,
+      errorDetail: null,
     });
     expect(VmListOutputSchema.parse(result)).toEqual(result);
   });

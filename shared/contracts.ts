@@ -5,6 +5,7 @@ import {
   ERROR_LABEL,
   JOB_LABEL,
   MANAGED_LABEL,
+  MAX_ERROR_DETAIL_CHARS,
   PARENT_LABEL,
   PHASES,
   PHASE_LABEL,
@@ -55,6 +56,8 @@ const PendingChildSchema = z
     name: z.string().min(1).max(128),
     phase: PhaseSchema,
     error: SafeErrorSchema.nullable(),
+    /** Bounded, redacted reason when the attempt failed. */
+    errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
   })
   .strict();
 
@@ -66,6 +69,8 @@ const SandboxChildSchema = z
     labels: ManagedLabelsSchema,
     runtimeStatus: RuntimeStatusSchema,
     registration: RegistrationSchema.nullable(),
+    /** Bounded, redacted reason when the child failed. */
+    errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
   })
   .strict();
 

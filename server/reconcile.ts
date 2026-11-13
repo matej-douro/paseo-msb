@@ -44,7 +44,10 @@ export async function reconcileVm(
       const changed = await repairSandbox(context, parentId, directory.hosts, loaded);
       if (changed) repaired.add(loaded.sandbox.name);
     } catch (error) {
-      errors.push({ name: loaded.sandbox.name, error: safeError(errorCode(error)) });
+      errors.push({
+        name: loaded.sandbox.name,
+        error: safeError(errorCode(error), errorDetail(error)),
+      });
     }
   }
 
@@ -59,7 +62,7 @@ export async function reconcileVm(
       await removeRegistration(context, registration.registrationId);
       repaired.add(name);
     } catch (error) {
-      errors.push({ name, error: safeError(errorCode(error)) });
+      errors.push({ name, error: safeError(errorCode(error), errorDetail(error)) });
     }
   }
 
@@ -101,7 +104,10 @@ async function repairSandbox(
       return false;
 
     case "failed":
-      throw new SetupFailure(sandbox.labels[ERROR_LABEL] ?? "invalid_config");
+      throw new SetupFailure(
+        sandbox.labels[ERROR_LABEL] ?? "invalid_config",
+        sandbox.errorDetail,
+      );
 
     default:
       throw new SetupFailure("create_failed");
@@ -110,4 +116,8 @@ async function repairSandbox(
 
 function errorCode(error: unknown): SafeErrorCode {
   return error instanceof SetupFailure ? error.code : "registration_failed";
+}
+
+function errorDetail(error: unknown): string | null {
+  return error instanceof SetupFailure ? (error.detail ?? null) : null;
 }

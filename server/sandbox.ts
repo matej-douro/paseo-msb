@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   CPUS,
+  ERROR_DETAIL_LABEL,
   ERROR_LABEL,
   GUEST_IMAGE,
   GUEST_INIT_ARGS,
@@ -23,6 +24,7 @@ import {
 } from "../shared/constants";
 import type { ManagedLabels } from "../shared/contracts";
 import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors";
+import { failureDetail } from "./diagnostics";
 import type { ResolvedSecret } from "./secrets";
 
 /**
@@ -183,6 +185,8 @@ export interface DecodedSandbox {
   readonly name: string;
   readonly runtimeStatus: RuntimeStatus;
   readonly labels: ManagedLabels;
+  /** Bounded, redacted diagnostic for a failed sandbox. */
+  readonly errorDetail: string | null;
 }
 
 export interface LoadedSandbox {
@@ -260,6 +264,10 @@ function decodeLabels(
       ? error
       : undefined
     : "id_mismatch";
+  const detail =
+    idMatches && phase === "failed"
+      ? failureDetail(labels[ERROR_DETAIL_LABEL])
+      : null;
 
   const projected: ManagedLabels = {
     [MANAGED_LABEL]: PLUGIN_VERSION,
@@ -275,6 +283,7 @@ function decodeLabels(
     name: handle.name,
     runtimeStatus: normalizeRuntimeStatus(handle.status),
     labels: projected,
+    errorDetail: detail,
   };
 }
 
@@ -311,8 +320,11 @@ export async function loadManagedSandboxes(
   let handles: readonly SandboxHandleLike[];
   try {
     handles = await runtime.list(parentId);
-  } catch {
-    return { status: "unavailable", error: safeError("inventory_unavailable") };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      error: safeError("inventory_unavailable", failureDetail(error)),
+    };
   }
 
   const sandboxes: LoadedSandbox[] = [];
@@ -425,13 +437,20 @@ export function readSandboxHostPort(handle: SandboxHandleLike): number | null {
   return null;
 }
 
-/** Writes only a fixed safe code; raw errors are dropped. */
+/** Writes only a fixed safe code and bounded, redacted detail. */
 export async function markSandboxFailed(
   handle: SandboxLabelHandleLike,
   code: SafeErrorCode,
+  detail: string | null = null,
 ): Promise<void> {
   try {
-    await handle.modify({ labels: { [PHASE_LABEL]: "failed", [ERROR_LABEL]: code } });
+    await handle.modify({
+      labels: {
+        [PHASE_LABEL]: "failed",
+        [ERROR_LABEL]: code,
+        ...(detail ? { [ERROR_DETAIL_LABEL]: detail } : {}),
+      },
+    });
   } catch {
     // The sandbox stays visible as failed/incomplete through its stable ID.
   }

@@ -7,7 +7,7 @@ import type { SafeErrorCode } from "../shared/errors";
  * creates stay visible across UI navigation.
  *
  * A pending entry never carries credential values: only the request ID, the
- * generated name, a phase, and a safe error code.
+ * generated name, a phase, a safe error code, and bounded redacted detail.
  */
 export interface PendingCreate {
   readonly requestId: string;
@@ -15,6 +15,7 @@ export interface PendingCreate {
   readonly phase: Phase;
   readonly createdAt: number;
   readonly errorCode: SafeErrorCode | null;
+  readonly errorDetail: string | null;
 }
 
 export interface PendingCreateStore {
@@ -24,7 +25,7 @@ export interface PendingCreateStore {
   ensure(requestId: string): PendingCreate;
   /** Restarts an empty pre-create failure under the same request ID. */
   restart(requestId: string): PendingCreate;
-  fail(requestId: string, code: SafeErrorCode): void;
+  fail(requestId: string, code: SafeErrorCode, detail?: string | null): void;
   remove(requestId: string): void;
 }
 
@@ -35,6 +36,7 @@ function initialEntry(requestId: string): PendingCreate {
     phase: "creating",
     createdAt: Date.now(),
     errorCode: null,
+    errorDetail: null,
   };
 }
 
@@ -60,9 +62,11 @@ export function createPendingCreateStore(): PendingCreateStore {
       return insert(initialEntry(requestId));
     },
 
-    fail(requestId, code) {
+    fail(requestId, code, detail = null) {
       const existing = entries.get(requestId);
-      if (existing) insert({ ...existing, phase: "failed", errorCode: code });
+      if (existing) {
+        insert({ ...existing, phase: "failed", errorCode: code, errorDetail: detail });
+      }
     },
 
     remove(requestId) {

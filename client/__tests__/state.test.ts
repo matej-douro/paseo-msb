@@ -102,17 +102,26 @@ describe("child presentation", () => {
     );
   });
 
-  it("uses only safe error text", () => {
+  it("uses only safe error text plus bounded detail", () => {
     expect(childErrorText(PENDING)).toBeNull();
     expect(
       childErrorText({ ...PENDING, phase: "failed", error: safeError("create_failed") }),
     ).toBe(safeError("create_failed").message);
     expect(
       childErrorText({
+        ...PENDING,
+        phase: "failed",
+        error: safeError("create_failed"),
+        errorDetail: "image pull failed",
+      }),
+    ).toBe(`${safeError("create_failed").message} image pull failed`);
+    expect(
+      childErrorText({
         ...SANDBOX,
         labels: { ...SANDBOX.labels, [PHASE_LABEL]: "failed", [ERROR_LABEL]: "install_failed" },
+        errorDetail: "npm exited 1",
       }),
-    ).toBe(safeError("install_failed").message);
+    ).toBe(`${safeError("install_failed").message} npm exited 1`);
   });
 
   it("finds a child by name", () => {
@@ -123,14 +132,14 @@ describe("child presentation", () => {
 });
 
 describe("list states", () => {
-  it("explains partial availability", () => {
+  it("explains partial availability and includes detail", () => {
     expect(inventoryNotice({ status: "available" })).toBeNull();
     expect(
       inventoryNotice({
         status: "unavailable",
-        error: safeError("inventory_unavailable"),
+        error: safeError("inventory_unavailable", "native binding failed"),
       }),
-    ).toContain("inventory is unavailable");
+    ).toContain("native binding failed");
     expect(registrationsNotice({ status: "available" })).toBeNull();
     expect(
       registrationsNotice({
@@ -173,6 +182,12 @@ describe("repair and delete text", () => {
         errors: [{ name: "paseo-a", error: safeError("registration_conflict") }],
       }),
     ).toBe(`paseo-a: ${safeError("registration_conflict").message}`);
+    expect(
+      reconcileFailureMessage({
+        repaired: [],
+        errors: [{ name: "paseo-a", error: safeError("install_failed", "npm exited 1") }],
+      }),
+    ).toBe(`paseo-a: ${safeError("install_failed").message} npm exited 1`);
     expect(
       reconcileFailureMessage({
         repaired: [],

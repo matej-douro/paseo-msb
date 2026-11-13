@@ -103,23 +103,37 @@ export function childTone(child: VmChild): Tone {
   return "accent";
 }
 
-/** Safe text only; both pending and sandbox errors are fixed server codes. */
+/** Safe text plus bounded, redacted detail when the server has one. */
 export function childErrorText(child: VmChild): string | null {
-  if (child.kind === "pending") return child.error?.message ?? null;
+  if (child.kind === "pending") {
+    if (!child.error) return child.errorDetail ?? null;
+    return withDetail(child.error.message, child.error.detail ?? child.errorDetail);
+  }
+
   const code = child.labels[ERROR_LABEL];
-  return code ? SAFE_ERROR_MESSAGES[code] : null;
+  const message = code ? SAFE_ERROR_MESSAGES[code] : null;
+  if (message) return withDetail(message, child.errorDetail);
+  return child.errorDetail ?? null;
+}
+
+function withDetail(message: string, detail: string | null | undefined): string {
+  return detail ? `${message} ${detail}` : message;
 }
 
 export function inventoryNotice(availability: Availability): string | null {
-  return availability.status === "unavailable"
-    ? "Microsandbox inventory is unavailable. Pending creates are still shown."
-    : null;
+  if (availability.status === "available") return null;
+  return withDetail(
+    "Microsandbox inventory is unavailable. Pending creates are still shown.",
+    availability.error.detail,
+  );
 }
 
 export function registrationsNotice(availability: Availability): string | null {
-  return availability.status === "unavailable"
-    ? "Parent registrations are unavailable. Registration state may be stale."
-    : null;
+  if (availability.status === "available") return null;
+  return withDetail(
+    "Parent registrations are unavailable. Registration state may be stale.",
+    availability.error.detail,
+  );
 }
 
 export function isEmptyInventory(data: VmListResult): boolean {
@@ -130,10 +144,13 @@ export function reconcileFailureMessage(result: VmReconcileResult): string | nul
   const first = result.errors[0];
   if (!first) return null;
 
+  const reason = first.error.detail
+    ? `${first.error.message} ${first.error.detail}`
+    : first.error.message;
   const remaining = result.errors.length - 1;
   return remaining > 0
-    ? `${first.name}: ${first.error.message} (${remaining} more)`
-    : `${first.name}: ${first.error.message}`;
+    ? `${first.name}: ${reason} (${remaining} more)`
+    : `${first.name}: ${reason}`;
 }
 
 export function reconcileSuccessMessage(result: VmReconcileResult): string {

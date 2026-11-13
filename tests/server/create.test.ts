@@ -6,6 +6,7 @@ import {
   GUEST_PATH,
   JOB_LABEL,
   MANAGED_LABEL,
+  MAX_ERROR_DETAIL_CHARS,
   PARENT_LABEL,
   PHASE_LABEL,
   SANDBOX_ID_LABEL,
@@ -243,7 +244,11 @@ describe("createVm", () => {
     expect(creator.labelUpdates).toEqual([
       { [SANDBOX_ID_LABEL]: "sandbox_1", [PHASE_LABEL]: "installing" },
       { [JOB_LABEL]: "job_1" },
-      { [PHASE_LABEL]: "failed", "paseo-msb-error": "install_failed" },
+      {
+        [PHASE_LABEL]: "failed",
+        "paseo-msb-error": "install_failed",
+        "paseo-msb-error-detail": "the Pi install job did not exit successfully",
+      },
     ]);
   });
 
@@ -258,6 +263,7 @@ describe("createVm", () => {
     expect(creator.labelUpdates.at(-1)).toEqual({
       [PHASE_LABEL]: "failed",
       "paseo-msb-error": "install_failed",
+      "paseo-msb-error-detail": "Error: job backend unavailable",
     });
   });
 
@@ -270,6 +276,7 @@ describe("createVm", () => {
     expect(creator.labelUpdates.at(-1)).toEqual({
       [PHASE_LABEL]: "failed",
       "paseo-msb-error": "path_unverified",
+      "paseo-msb-error-detail": "pi did not resolve on the daemon user PATH",
     });
   });
 
@@ -383,7 +390,7 @@ describe("createVm", () => {
     expect(context.pending.find(REQUEST_ID)?.errorCode).toBe("port_unavailable");
   });
 
-  it("reports an unavailable parent directory without touching the runtime", async () => {
+  it("reports an unavailable parent directory with a bounded detail", async () => {
     const creator = new FakeSandboxCreator();
     const context = createContext(creator, {
       hosts: new FakePaseoHosts({ listError: new Error("parent directory unavailable: leaked detail") }),
@@ -392,8 +399,10 @@ describe("createVm", () => {
     await startCreate(context, INPUT).started;
 
     expect(creator.createCount).toBe(0);
-    expect(context.pending.find(REQUEST_ID)?.errorCode).toBe("runtime_unavailable");
-    expect(JSON.stringify(context.pending.list())).not.toContain("leaked detail");
+    const pending = context.pending.find(REQUEST_ID);
+    expect(pending?.errorCode).toBe("runtime_unavailable");
+    expect(pending?.errorDetail).toContain("parent directory unavailable");
+    expect(pending!.errorDetail!.length).toBeLessThanOrEqual(MAX_ERROR_DETAIL_CHARS);
   });
 
   it("never writes credential values into pending state or labels", async () => {
@@ -409,7 +418,8 @@ describe("createVm", () => {
       labels: creator.labelUpdates,
     });
     expect(persisted).not.toContain(SECRET_VALUE);
-    expect(persisted).not.toContain("pull failed");
+    expect(persisted).toContain("[redacted]");
+    expect(persisted).toContain("pull failed");
 
     const retryCreator = new FakeSandboxCreator();
     const retryContext = createContext(retryCreator);
@@ -441,6 +451,7 @@ describe("createVm", () => {
       name: NAME,
       phase: "creating",
       error: null,
+      errorDetail: null,
     });
 
     gate.resolve();
