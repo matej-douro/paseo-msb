@@ -1,20 +1,29 @@
 import { z } from "zod";
 import {
+  CPUS,
   ERROR_LABEL,
+  GUEST_IMAGE,
+  GUEST_INIT_ARGS,
+  GUEST_INIT_COMMAND,
+  GUEST_PATH,
+  GUEST_PORT,
   JOB_LABEL,
   MANAGED_LABEL,
   MANAGED_NAME_PREFIX,
+  MEMORY_MIB,
   PARENT_LABEL,
   PHASE_LABEL,
   PHASES,
   PLUGIN_VERSION,
   RUNTIME_STATUSES,
   SANDBOX_ID_LABEL,
+  type CredentialName,
   type Phase,
   type RuntimeStatus,
 } from "../shared/constants";
 import type { ManagedLabels } from "../shared/contracts";
 import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors";
+import type { ResolvedSecret } from "./secrets";
 
 /**
  * Structural handles keep the decoder testable with fake sandboxes. The real
@@ -50,6 +59,101 @@ export interface SandboxHandleLike {
 
 export interface SandboxRuntime {
   list(parentId: string): Promise<readonly SandboxHandleLike[]>;
+}
+
+/** One guest command the create runner needs to run with an explicit user. */
+export interface ExecSpec {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly user: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly stdinNull?: boolean;
+}
+
+/** A detached guest job, reduced to what the create runner observes. */
+export interface SandboxJobHandleLike {
+  readonly id: string;
+  wait(): Promise<{ readonly code: number }>;
+  inspect(): Promise<{ readonly state: string }>;
+}
+
+/** The handle returned by a strict create, with the guest operations it needs. */
+export interface SandboxCreateHandleLike {
+  readonly id: string;
+  readonly name: string;
+  modify(options: { readonly labels: Readonly<Record<string, string>> }): Promise<void>;
+  execDetached(spec: ExecSpec): Promise<SandboxJobHandleLike>;
+  exec(spec: ExecSpec): Promise<string>;
+}
+
+export interface SandboxCreateRequest {
+  readonly name: string;
+  readonly parentId: string;
+  readonly hostPort: number;
+  readonly secrets: readonly ResolvedSecret[];
+}
+
+/**
+ * The fixed sandbox shape and secret policy handed to the SDK adapter. Keeping
+ * it pure lets fake-runtime tests verify the pinned image, resources, init,
+ * loopback port, PATH, labels, and header-only substitution.
+ */
+export interface SandboxCreatePlan {
+  readonly name: string;
+  readonly image: string;
+  readonly cpus: number;
+  readonly memoryMib: number;
+  readonly detached: true;
+  readonly init: { readonly command: string; readonly args: readonly string[] };
+  readonly hostPort: number;
+  readonly guestPort: number;
+  readonly env: Readonly<Record<string, string>>;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly secrets: readonly SandboxSecretPlan[];
+}
+
+export interface SandboxSecretPlan {
+  readonly envVar: CredentialName;
+  readonly value: string;
+  readonly allowedHosts: readonly string[];
+  readonly substitution: {
+    readonly headers: true;
+    readonly query: false;
+    readonly body: false;
+  };
+}
+
+export interface SandboxCreator {
+  /** Strict lookup by name; null only when no sandbox has that name. */
+  find(name: string): Promise<SandboxHandleLike | null>;
+  /** Probes a free loopback port; the runtime does not allocate host port 0. */
+  probePort(): Promise<number>;
+  create(request: SandboxCreateRequest): Promise<SandboxCreateHandleLike>;
+}
+
+export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCreatePlan {
+  return {
+    name: request.name,
+    image: GUEST_IMAGE,
+    cpus: CPUS,
+    memoryMib: MEMORY_MIB,
+    detached: true,
+    init: { command: GUEST_INIT_COMMAND, args: GUEST_INIT_ARGS },
+    hostPort: request.hostPort,
+    guestPort: GUEST_PORT,
+    env: { PATH: GUEST_PATH },
+    labels: {
+      [MANAGED_LABEL]: PLUGIN_VERSION,
+      [PARENT_LABEL]: request.parentId,
+      [PHASE_LABEL]: "creating",
+    },
+    secrets: request.secrets.map((secret) => ({
+      envVar: secret.envVar,
+      value: secret.value,
+      allowedHosts: secret.allowedHosts,
+      substitution: { headers: true, query: false, body: false },
+    })),
+  };
 }
 
 export interface DecodedSandbox {
@@ -215,4 +319,28 @@ export async function loadManagedSandboxes(
 /** Guard used by tests and later create/recovery code. */
 export function isManagedSandboxName(name: string): boolean {
   return name.startsWith(MANAGED_NAME_PREFIX) && name.length > MANAGED_NAME_PREFIX.length;
+}
+
+function rawManagedLabels(handle: SandboxHandleLike): Record<string, string> | null {
+  try {
+    const parsed = RawConfigSchema.safeParse(handle.config());
+    return parsed.success ? (parsed.data.labels ?? {}) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ownership requires the managed label, this parent, and a stable-ID label that
+ * matches the live handle. A same-name replacement therefore never inherits an
+ * earlier attempt.
+ */
+export function ownsSandbox(handle: SandboxHandleLike, parentId: string): boolean {
+  const labels = rawManagedLabels(handle);
+  return (
+    labels !== null &&
+    labels[MANAGED_LABEL] === PLUGIN_VERSION &&
+    labels[PARENT_LABEL] === parentId &&
+    labels[SANDBOX_ID_LABEL] === handle.id
+  );
 }
