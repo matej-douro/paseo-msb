@@ -29,29 +29,52 @@ describe("RPC contracts", () => {
     );
   });
 
-  it("accepts a strict create request with fixed credential names only", () => {
+  it("accepts a strict create request with a provider plan", () => {
     const parsed = VmCreateInputSchema.safeParse({
       requestId,
-      secretEnvVars: ["ANTHROPIC_API_KEY", "GH_TOKEN"],
+      plan: {
+        providers: [
+          { provider: "claude", llms: ["anthropic-api-key"] },
+          { provider: "pi", llms: ["neuralwatt"] },
+        ],
+        integrations: ["github-cli"],
+      },
     });
     expect(parsed.success).toBe(true);
   });
 
   it("rejects empty, unknown, duplicate, and extra create fields", () => {
-    expect(VmCreateInputSchema.safeParse({ requestId, secretEnvVars: [] }).success).toBe(false);
-    expect(
-      VmCreateInputSchema.safeParse({ requestId, secretEnvVars: ["CUSTOM_TOKEN"] }).success,
-    ).toBe(false);
     expect(
       VmCreateInputSchema.safeParse({
         requestId,
-        secretEnvVars: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
+        plan: { providers: [], integrations: [] },
       }).success,
     ).toBe(false);
     expect(
       VmCreateInputSchema.safeParse({
         requestId,
-        secretEnvVars: ["ANTHROPIC_API_KEY"],
+        plan: {
+          providers: [{ provider: "unknown", llms: ["neuralwatt"] }],
+          integrations: [],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      VmCreateInputSchema.safeParse({
+        requestId,
+        plan: {
+          providers: [{ provider: "pi", llms: ["neuralwatt", "neuralwatt"] }],
+          integrations: [],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      VmCreateInputSchema.safeParse({
+        requestId,
+        plan: {
+          providers: [{ provider: "pi", llms: ["neuralwatt"] }],
+          integrations: [],
+        },
         value: "must-not-be-accepted",
       }).success,
     ).toBe(false);

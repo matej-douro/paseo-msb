@@ -111,7 +111,7 @@ function pendingChild(pending: PendingCreate): VmChild {
     kind: "pending",
     name: pending.name,
     requestId: pending.requestId,
-    credentialNames: [...pending.credentialNames],
+    plan: pending.plan,
     phase: pending.phase,
     error: pending.errorCode ? safeError(pending.errorCode) : null,
     errorDetail: pending.errorDetail,
@@ -125,6 +125,7 @@ function sandboxChild(sandbox: LoadedSandbox, registrations: RegistrationsView):
     id: sandbox.sandbox.id,
     labels: sandbox.sandbox.labels,
     runtimeStatus: sandbox.sandbox.runtimeStatus,
+    plan: sandbox.sandbox.plan,
     registration: registrationFor(sandbox, registrations),
     errorDetail: sandbox.sandbox.errorDetail,
   };
@@ -143,6 +144,7 @@ function failedChild(parentId: string, failure: SandboxDecodeFailure): VmChild {
     id: failure.id,
     labels,
     runtimeStatus: failure.runtimeStatus,
+    plan: null,
     registration: null,
     errorDetail: null,
   };

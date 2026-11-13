@@ -15,6 +15,11 @@ import type {
   VmReconcileResult,
 } from "../shared/contracts";
 import { SAFE_ERROR_MESSAGES, isSafeErrorCode, type SafeErrorCode } from "../shared/errors";
+import {
+  INTEGRATION_CATALOG,
+  PROVIDER_CATALOG,
+  type CanonicalPlan,
+} from "../shared/provisioning";
 
 export type Tone = "success" | "warning" | "danger" | "muted" | "accent";
 
@@ -58,7 +63,7 @@ export function phaseText(phase: Phase): string {
     case "creating":
       return "Creating";
     case "installing":
-      return "Installing Pi";
+      return "Provisioning";
     case "registering":
       return "Registering";
     case "ready":
@@ -107,6 +112,34 @@ export function childPhase(child: VmChild): Phase {
   return child.phase;
 }
 
+/** The persisted plan for a pending or sandbox child; null for registration rows. */
+export function childPlan(child: VmChild): CanonicalPlan | null {
+  if (child.kind === "registration") return null;
+  return child.plan;
+}
+
+/** Human-readable provider, LLM, and integration labels. */
+export function planSummary(plan: CanonicalPlan | null): string {
+  if (!plan) return "Legacy Pi-only";
+
+  const parts: string[] = [];
+  for (const selection of plan.providers) {
+    const entry = PROVIDER_CATALOG.find((candidate) => candidate.id === selection.provider);
+    if (!entry) continue;
+    const llms = selection.llms.map(
+      (llm) => entry.llms.find((candidate) => candidate.id === llm)?.label ?? llm,
+    );
+    parts.push(llms.length > 0 ? `${entry.label} (${llms.join(", ")})` : entry.label);
+  }
+
+  for (const integration of plan.integrations) {
+    const entry = INTEGRATION_CATALOG.find((candidate) => candidate.id === integration);
+    if (entry) parts.push(entry.label);
+  }
+
+  return parts.length > 0 ? parts.join(" · ") : "Nothing selected";
+}
+
 export interface Pill {
   readonly label: string;
   readonly tone: Tone;
@@ -128,9 +161,12 @@ const SETUP_ERROR_PILLS: Partial<Record<SafeErrorCode, Pill>> = {
   install_failed: { label: "Install failed", tone: "danger" },
   install_pending: { label: "Install pending", tone: "warning" },
   install_conflict: { label: "Install conflict", tone: "warning" },
+  provision_failed: { label: "Provisioning failed", tone: "danger" },
+  provision_pending: { label: "Provisioning pending", tone: "warning" },
+  provision_conflict: { label: "Provisioning conflict", tone: "warning" },
   job_inventory_unavailable: { label: "Install unconfirmed", tone: "warning" },
   path_unverified: { label: "Pi missing on PATH", tone: "danger" },
-  provider_unavailable: { label: "Pi not ready", tone: "warning" },
+  provider_unavailable: { label: "Provider not ready", tone: "warning" },
   registration_failed: { label: "Registration failed", tone: "warning" },
   registration_timeout: { label: "Registration pending", tone: "warning" },
   registration_conflict: { label: "Registration conflict", tone: "danger" },

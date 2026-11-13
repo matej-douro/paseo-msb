@@ -32,6 +32,7 @@ describe("decodeManagedSandbox", () => {
       "legacyId",
       "legacyJobId",
       "name",
+      "plan",
       "runtimeStatus",
     ]);
     expect(decoded!.errorDetail).toBeNull();

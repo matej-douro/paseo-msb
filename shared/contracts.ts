@@ -13,6 +13,7 @@ import {
   RUNTIME_STATUSES,
 } from "./constants";
 import { SafeErrorSchema, SAFE_ERROR_CODES } from "./errors";
+import { ProvisionPlanSchema } from "./provisioning";
 
 const CredentialNameSchema = z.enum(CREDENTIAL_NAMES);
 const PhaseSchema = z.enum(PHASES);
@@ -52,8 +53,8 @@ const PendingChildSchema = z
     name: z.string().min(1).max(128),
     /** Original identify for an idempotent retry. */
     requestId: z.string().uuid(),
-    /** Original credential names; retries must preserve them. */
-    credentialNames: z.array(CredentialNameSchema),
+    /** Original provider/integration selection; retries must preserve it. */
+    plan: ProvisionPlanSchema,
     phase: PhaseSchema,
     error: SafeErrorSchema.nullable(),
     /** Bounded, redacted reason when the attempt failed. */
@@ -68,6 +69,8 @@ const SandboxChildSchema = z
     id: z.string().min(1),
     labels: ManagedLabelsSchema,
     runtimeStatus: RuntimeStatusSchema,
+    /** Persisted plan; null for pre-provisioning legacy Pi-only children. */
+    plan: ProvisionPlanSchema.nullable(),
     registration: RegistrationSchema.nullable(),
     /** Bounded, redacted reason when the child failed. */
     errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
@@ -147,13 +150,7 @@ export const VmDetailOutputSchema = z
 export const VmCreateInputSchema = z
   .object({
     requestId: z.string().uuid(),
-    secretEnvVars: z
-      .array(CredentialNameSchema)
-      .min(1)
-      .max(CREDENTIAL_NAMES.length)
-      .refine((names) => new Set(names).size === names.length, {
-        message: "secretEnvVars must not contain duplicates",
-      }),
+    plan: ProvisionPlanSchema,
   })
   .strict();
 

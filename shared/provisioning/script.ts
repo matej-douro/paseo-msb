@@ -85,6 +85,10 @@ export function provisionScriptPath(hash: string): string {
   return `${PROVISIONING_STATE_DIR}/provision-${hash}.sh`;
 }
 
+export function provisionStatusPath(): string {
+  return `${PROVISIONING_STATE_DIR}/status.json`;
+}
+
 export function provisionArgv(hash: string): readonly string[] {
   return ["/bin/sh", provisionScriptPath(hash), hash];
 }

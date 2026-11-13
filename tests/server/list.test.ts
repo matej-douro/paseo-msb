@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { VmListOutputSchema } from "../../shared/contracts";
+import type { CanonicalPlan } from "../../shared/provisioning";
 import { loadManagedSandboxes } from "../../server/sandbox";
 import { buildVmList } from "../../server/status";
 import {
@@ -11,10 +12,15 @@ import {
   SECRET_VALUE,
 } from "./fake-runtime";
 
+const PENDING_PLAN: CanonicalPlan = {
+  providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+  integrations: [],
+};
+
 const PENDING = {
   requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
   name: "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
-  credentialNames: ["ANTHROPIC_API_KEY"] as const,
+  plan: PENDING_PLAN,
   phase: "creating" as const,
   createdAt: 1,
   errorCode: null,
@@ -177,7 +183,7 @@ describe("buildVmList", () => {
       kind: "pending",
       name: PENDING.name,
       requestId: PENDING.requestId,
-      credentialNames: PENDING.credentialNames,
+      plan: PENDING.plan,
       phase: "creating",
       error: null,
       errorDetail: null,

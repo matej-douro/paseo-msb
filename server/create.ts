@@ -1,4 +1,10 @@
 import type { VmCreateInput, VmCreateResult } from "../shared/contracts";
+import { PROVISIONING_CREDENTIAL_NAMES } from "../shared/provisioning";
+import {
+  availableCredentialSet,
+  parseProvisionPlan,
+  resolveProvisionPlan,
+} from "../shared/provisioning";
 import { safeError } from "../shared/errors";
 import { failureDetail } from "./diagnostics";
 import { credentialValues } from "./logs";
@@ -47,7 +53,12 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
     throw new Error(safeError("runtime_unavailable").message);
   }
 
-  const reservation = context.pending.reserve(input.requestId, input.secretEnvVars);
+  const parsed = parseProvisionPlan(input.plan);
+  if (!parsed.ok) {
+    throw new Error(safeError("invalid_request").message);
+  }
+
+  const reservation = context.pending.reserve(input.requestId, parsed.plan);
   if (reservation.status === "conflict") {
     throw new Error(safeError("invalid_request").message);
   }
@@ -101,17 +112,33 @@ async function createInLane(
   const redactionValues = credentialValues(context.env, stored.values);
   onRedaction(redactionValues);
 
+  const available = availableCredentialSet(
+    PROVISIONING_CREDENTIAL_NAMES.filter(
+      (name) => stored.values.has(name) || (context.env[name]?.trim().length ?? 0) > 0,
+    ),
+  );
+  const resolution = resolveProvisionPlan(entry.plan, available);
+  if (!resolution.ok) {
+    throw new SetupFailure(
+      resolution.code === "missing_credentials" ? "missing_credentials" : "invalid_request",
+    );
+  }
+
   await reconcileName(
     context,
     {
       name: entry.name,
       allowCreate: true,
-      credentialNames: entry.credentialNames,
+      plan: resolution.plan,
       redactionValues,
       resolveCredentials: () => {
-        const resolution = resolveSelectedSecrets(entry.credentialNames, context.env, stored.values);
-        if (resolution.status === "missing") throw new SetupFailure("missing_credentials");
-        return resolution.secrets;
+        const selected = resolveSelectedSecrets(
+          resolution.requiredCredentials,
+          context.env,
+          stored.values,
+        );
+        if (selected.status === "missing") throw new SetupFailure("missing_credentials");
+        return selected.secrets;
       },
     },
     token,

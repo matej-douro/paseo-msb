@@ -124,6 +124,7 @@ describe("secrets store", () => {
 
     expect(result.secrets).toEqual([
       { name: "ANTHROPIC_API_KEY", stored: false, environment: false },
+      { name: "CLAUDE_CODE_OAUTH_TOKEN", stored: false, environment: false },
       { name: "OPENAI_API_KEY", stored: true, environment: false },
       { name: "GEMINI_API_KEY", stored: false, environment: false },
       { name: "NEURALWATT_API_KEY", stored: false, environment: false },

@@ -7,9 +7,11 @@ import {
   MANAGED_LABEL,
   PARENT_LABEL,
   PHASE_LABEL,
+  PLAN_ENV_VAR,
   PLUGIN_VERSION,
 } from "../../shared/constants";
 import type { VmCreateInput } from "../../shared/contracts";
+import type { CanonicalPlan } from "../../shared/provisioning";
 import { safeError } from "../../shared/errors";
 import { createVm, startCreate, type CreateContext } from "../../server/create";
 import { createLifecycleLanes } from "../../server/lanes";
@@ -33,7 +35,17 @@ const NAME = `paseo-${REQUEST_ID}`;
 
 const INPUT: VmCreateInput = {
   requestId: REQUEST_ID,
-  secretEnvVars: ["ANTHROPIC_API_KEY"],
+  plan: { providers: [{ provider: "pi", llms: ["anthropic-api-key"] }], integrations: [] },
+};
+
+const OTHER_PLAN: CanonicalPlan = {
+  providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+  integrations: ["github-cli"],
+};
+
+const GEMINI_PLAN: CanonicalPlan = {
+  providers: [{ provider: "pi", llms: ["gemini-api-key"] }],
+  integrations: [],
 };
 
 function deferred<T>() {
@@ -87,7 +99,7 @@ describe("createVm", () => {
     expect(attempt.name).toBe(NAME);
     expect(context.pending.find(REQUEST_ID)).toMatchObject({
       name: NAME,
-      credentialNames: ["ANTHROPIC_API_KEY"],
+      plan: INPUT.plan,
       phase: "creating",
       errorCode: null,
     });
@@ -181,7 +193,7 @@ describe("createVm", () => {
 
     const first = startCreate(context, INPUT);
 
-    expect(() => startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] })).toThrow(
+    expect(() => startCreate(context, { ...INPUT, plan: OTHER_PLAN })).toThrow(
       safeError("invalid_request").message,
     );
 
@@ -201,7 +213,7 @@ describe("createVm", () => {
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
 
-    const attempt = startCreate(context, { ...INPUT, secretEnvVars: ["GH_TOKEN"] });
+    const attempt = startCreate(context, { ...INPUT, plan: OTHER_PLAN });
     await attempt.started;
 
     expect(context.pending.find(REQUEST_ID)).toMatchObject({
@@ -232,7 +244,7 @@ describe("createVm", () => {
     expect(creator.createCount).toBe(2);
   });
 
-  it("marks the sandbox with a retryable error when the Pi install exits non-zero", async () => {
+  it("marks the sandbox with a fatal provisioning error when a step exits non-zero", async () => {
     const creator = new FakeSandboxCreator({ jobExitCode: 7 });
     const context = createContext(creator);
 
@@ -243,7 +255,7 @@ describe("createVm", () => {
     expect(created!.config()).toMatchObject({
       labels: {
         [PHASE_LABEL]: "installing",
-        "paseo-msb-error": "install_failed",
+        "paseo-msb-error": "provision_failed",
       },
     });
     expect(creator.labelUpdates).toContainEqual({
@@ -251,7 +263,7 @@ describe("createVm", () => {
     });
   });
 
-  it("keeps a launch failure retryable instead of starting a second job", async () => {
+  it("keeps a launch failure pending instead of starting a second job", async () => {
     const creator = new FakeSandboxCreator({
       execDetachedError: new Error("job launch failed"),
     });
@@ -264,23 +276,7 @@ describe("createVm", () => {
     expect(created!.config()).toMatchObject({
       labels: {
         [PHASE_LABEL]: "installing",
-        "paseo-msb-error": "install_pending",
-      },
-    });
-  });
-
-  it("marks the sandbox path_unverified when Pi is not on the daemon PATH", async () => {
-    const creator = new FakeSandboxCreator({ execOutput: "not-pi\n0.0.1\n" });
-    const context = createContext(creator);
-
-    const attempt = await startCreate(context, INPUT);
-    await attempt.started;
-
-    const created = await creator.find(NAME);
-    expect(created!.config()).toMatchObject({
-      labels: {
-        [PHASE_LABEL]: "installing",
-        "paseo-msb-error": "path_unverified",
+        "paseo-msb-error": "provision_pending",
       },
     });
   });
@@ -291,7 +287,7 @@ describe("createVm", () => {
 
     const attempt = startCreate(context, {
       requestId: REQUEST_ID,
-      secretEnvVars: ["GEMINI_API_KEY"],
+      plan: GEMINI_PLAN,
     });
     await attempt.started;
 
@@ -456,29 +452,33 @@ describe("sandbox create plan", () => {
     );
     if (resolution.status !== "ok") throw new Error("expected resolved secrets");
 
-    const plan = buildSandboxCreatePlan({
+    const createdPlan = buildSandboxCreatePlan({
       name: NAME,
       parentId: PARENT_ID,
       hostPort: 43_000,
+      plan: INPUT.plan,
       secrets: resolution.secrets,
     });
 
-    expect(plan.name).toBe(NAME);
-    expect(plan.image).toBe(GUEST_IMAGE);
-    expect(plan.cpus).toBe(2);
-    expect(plan.memoryMib).toBe(2048);
-    expect(plan.detached).toBe(true);
-    expect(plan.init).toEqual({ command: GUEST_INIT_COMMAND, args: GUEST_INIT_ARGS });
-    expect(plan.hostPort).toBe(43_000);
-    expect(plan.guestPort).toBe(6767);
-    expect(plan.env).toEqual({ PATH: GUEST_PATH });
-    expect(plan.labels).toEqual({
+    expect(createdPlan.name).toBe(NAME);
+    expect(createdPlan.image).toBe(GUEST_IMAGE);
+    expect(createdPlan.cpus).toBe(2);
+    expect(createdPlan.memoryMib).toBe(4096);
+    expect(createdPlan.detached).toBe(true);
+    expect(createdPlan.init).toEqual({ command: GUEST_INIT_COMMAND, args: GUEST_INIT_ARGS });
+    expect(createdPlan.hostPort).toBe(43_000);
+    expect(createdPlan.guestPort).toBe(6767);
+    expect(createdPlan.env).toEqual({
+      PATH: GUEST_PATH,
+      [PLAN_ENV_VAR]: JSON.stringify(INPUT.plan),
+    });
+    expect(createdPlan.labels).toEqual({
       [MANAGED_LABEL]: PLUGIN_VERSION,
       [PARENT_LABEL]: PARENT_ID,
       [PHASE_LABEL]: "creating",
     });
 
-    for (const secret of plan.secrets) {
+    for (const secret of createdPlan.secrets) {
       expect(secret.substitution).toEqual({ headers: true, query: false, body: false });
     }
   });

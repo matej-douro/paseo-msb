@@ -23,9 +23,9 @@ export interface ManageSecretsProps {
 }
 
 /**
- * Shared credential store for new VMs. The five fixed names stay the only
- * allowed values; stored values override the parent environment for create and
- * are never rendered back.
+ * Shared credential store for new VMs. The fixed names stay the only allowed
+ * values; stored values override the parent environment for create and are
+ * never rendered back.
  */
 export function ManageSecrets({
   open,

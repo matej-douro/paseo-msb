@@ -5,6 +5,7 @@ import {
   MAX_LOG_LINE_BYTES,
 } from "../../shared/constants";
 import { VmDetailOutputSchema } from "../../shared/contracts";
+import type { CanonicalPlan } from "../../shared/provisioning";
 import { boundLogLines } from "../../server/logs";
 import { readVmDetail } from "../../server/rpc";
 import type { ReadContext } from "../../server/rpc";
@@ -126,10 +127,14 @@ describe("readVmDetail", () => {
   });
 
   it("returns a pending create without attempting logs", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: [],
+    };
     const pending = {
       requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       name: "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
-      credentialNames: ["ANTHROPIC_API_KEY"] as const,
+      plan,
       phase: "creating" as const,
       createdAt: 1,
       errorCode: null,
@@ -144,7 +149,7 @@ describe("readVmDetail", () => {
       kind: "pending",
       name: pending.name,
       requestId: pending.requestId,
-      credentialNames: pending.credentialNames,
+      plan,
       phase: "creating",
       error: null,
       errorDetail: null,
@@ -220,7 +225,10 @@ describe("readVmDetail", () => {
     const failedPending = {
       requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       name,
-      credentialNames: ["ANTHROPIC_API_KEY"] as const,
+      plan: {
+        providers: [{ provider: "pi" as const, llms: ["anthropic-api-key" as const] }],
+        integrations: [],
+      },
       phase: "failed" as const,
       createdAt: 1,
       errorCode: "registration_failed" as const,

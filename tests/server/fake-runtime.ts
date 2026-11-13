@@ -5,6 +5,7 @@ import {
   PHASE_LABEL,
   PI_PREFIX,
   PI_VERSION,
+  PLAN_ENV_VAR,
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
@@ -36,6 +37,7 @@ import type {
   HostRegistrationLike,
 } from "../../server/status";
 import type { SecretsStore } from "../../server/secrets-store";
+import type { CanonicalPlan, ProvisionStatus } from "../../shared/provisioning";
 
 export const PARENT_ID = "srv_parent";
 export const SECRET_VALUE = "fake-anthropic-secret-value-123";
@@ -137,9 +139,18 @@ export interface FakeSandboxOptions {
   jobWaitError?: Error;
   jobInspectError?: Error;
   getJobError?: Error;
+  /** Persisted provisioning plan for decode and provisioning tests. */
+  plan?: CanonicalPlan;
+  /** Pre-existing provision status, for resume tests. */
+  provisionStatus?: ProvisionStatus | null;
 }
 
 const PI_COMMAND = ["npm", "install", "-g", "--ignore-scripts", "--prefix", PI_PREFIX, `@earendil-works/pi-coding-agent@${PI_VERSION}`];
+
+const provisionStatusSetters = new WeakMap<
+  SandboxHandleLike,
+  (status: ProvisionStatus | null) => void
+>();
 
 function jobList(options: FakeSandboxOptions): FakeJobOptions[] {
   const jobs = options.jobs ?? [];
@@ -170,10 +181,17 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
   };
 
   const jobs = jobList(options);
+  let provisionStatus: ProvisionStatus | null = options.provisionStatus ?? null;
 
   const config = {
     image: "ghcr.io/getpaseo/paseo:0.15.4",
-    env: [{ name: "ANTHROPIC_API_KEY", value: SECRET_VALUE }],
+    env: [
+      { name: "PATH", value: "/home/paseo/.local/bin:/usr/local/bin:/usr/bin:/bin" },
+      ...(options.plan
+        ? [{ name: PLAN_ENV_VAR, value: JSON.stringify(options.plan) }]
+        : []),
+      { name: "ANTHROPIC_API_KEY", value: SECRET_VALUE },
+    ],
     network: {
       ports: [
         {
@@ -221,6 +239,18 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
   const connectHandle: SandboxConnectHandleLike = {
     async exec(spec) {
       if (options.execError) throw options.execError;
+      if (spec.command === "cat" && spec.args.some((arg) => arg.endsWith("status.json"))) {
+        return provisionStatus
+          ? { code: 0, stdout: JSON.stringify(provisionStatus) }
+          : { code: 1, stdout: "" };
+      }
+      if (
+        spec.command === "sh" &&
+        spec.args[0] === "-c" &&
+        spec.args.some((arg) => arg.includes("provision-"))
+      ) {
+        return { code: 0, stdout: "" };
+      }
       if (spec.command === "sh" && spec.args.some((arg) => arg.includes("command -v pi"))) {
         if (!piInstalled()) return { code: 1, stdout: "" };
         return {
@@ -297,6 +327,9 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
     },
   };
 
+  provisionStatusSetters.set(handle, (status) => {
+    provisionStatus = status;
+  });
   handleJobs.set(handle, jobs);
   return handle;
 }
@@ -391,6 +424,8 @@ export interface FakePaseoHostsOptions {
   snapshotError?: Error;
   providerStatus?: string;
   providerMissing?: boolean;
+  /** Selected Paseo providers returned by the snapshot. Defaults to Pi. */
+  providers?: readonly string[];
 }
 
 /** Recording parent host API with the real producer and conflict semantics. */
@@ -496,7 +531,10 @@ export class FakePaseoHosts implements RegistrationHostsLike {
 
     const entries = this.options.providerMissing
       ? []
-      : [{ provider: "pi", status: this.options.providerStatus ?? "ready" }];
+      : (this.options.providers ?? ["pi"]).map((provider) => ({
+          provider,
+          status: this.options.providerStatus ?? "ready",
+        }));
 
     return {
       providers: {
@@ -594,6 +632,7 @@ export class FakeSandboxCreator implements SandboxHost {
       name: request.name,
       phase: "creating",
       hostPort: request.hostPort,
+      plan: request.plan,
       labelUpdates: this.labelUpdates,
       modifyError: this.options.modifyError,
       execError: this.options.execError,
@@ -625,6 +664,18 @@ export class FakeSandboxCreator implements SandboxHost {
       exitCode: this.options.jobExitCode ?? 0,
     });
     handleJobs.set(handle, jobs);
+
+    if (spec.command === "/bin/sh" && spec.args[0]?.includes("/provision-")) {
+      const planHash = spec.args[1] ?? "";
+      const failed = (this.options.jobExitCode ?? 0) !== 0;
+      provisionStatusSetters.get(handle)?.({
+        planHash,
+        ok: !failed,
+        steps: [],
+        failedStep: failed ? "provision" : null,
+        error: failed ? "provisioning step provision failed" : null,
+      });
+    }
 
     return {
       id,

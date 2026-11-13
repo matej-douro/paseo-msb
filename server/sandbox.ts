@@ -16,6 +16,7 @@ import {
   PARENT_LABEL,
   PHASE_LABEL,
   PHASES,
+  PLAN_ENV_VAR,
   PLUGIN_VERSION,
   RUNTIME_STATUSES,
   SANDBOX_ID_LABEL,
@@ -25,6 +26,7 @@ import {
 } from "../shared/constants";
 import type { ManagedLabels } from "../shared/contracts";
 import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors";
+import { parseProvisionPlan, type CanonicalPlan } from "../shared/provisioning";
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
 import { bounded } from "./lanes";
 import type { ResolvedSecret } from "./secrets";
@@ -131,6 +133,7 @@ export interface SandboxCreateRequest {
   readonly name: string;
   readonly parentId: string;
   readonly hostPort: number;
+  readonly plan: CanonicalPlan;
   readonly secrets: readonly ResolvedSecret[];
 }
 
@@ -195,7 +198,7 @@ export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCr
     init: { command: GUEST_INIT_COMMAND, args: GUEST_INIT_ARGS },
     hostPort: request.hostPort,
     guestPort: GUEST_PORT,
-    env: { PATH: GUEST_PATH },
+    env: { PATH: GUEST_PATH, [PLAN_ENV_VAR]: JSON.stringify(request.plan) },
     labels: {
       [MANAGED_LABEL]: PLUGIN_VERSION,
       [PARENT_LABEL]: request.parentId,
@@ -215,6 +218,8 @@ export interface DecodedSandbox {
   readonly name: string;
   readonly runtimeStatus: RuntimeStatus;
   readonly labels: ManagedLabels;
+  /** Persisted plan; null for pre-provisioning legacy Pi-only children. */
+  readonly plan: CanonicalPlan | null;
   /** Bounded, redacted diagnostic for a failed or retrying sandbox. */
   readonly errorDetail: string | null;
   /** Legacy stable-ID label, read only for migration. */
@@ -314,6 +319,7 @@ function decodeLabels(
     name: handle.name,
     runtimeStatus: normalizeRuntimeStatus(handle.status),
     labels: projected,
+    plan: null,
     errorDetail: detail,
     legacyId: labels[SANDBOX_ID_LABEL] ?? null,
     legacyJobId: labels[JOB_LABEL] ?? null,
@@ -349,7 +355,10 @@ export function decodeManagedSandbox(
     throw new SandboxDecodeError("id_mismatch");
   }
 
-  return decodeLabels(labels, handle, redaction);
+  return {
+    ...decodeLabels(labels, handle, redaction),
+    plan: readPlanFromEnv(parsedConfig.data.env),
+  };
 }
 
 export async function loadManagedSandboxes(
@@ -446,6 +455,47 @@ export function ownershipOf(handle: SandboxHandleLike, parentId: string): Sandbo
 
 export function ownsSandbox(handle: SandboxHandleLike, parentId: string): boolean {
   return ownershipOf(handle, parentId) === "owned";
+}
+
+/**
+ * Normalizes the SDK's array-shaped env and the CLI's record-shaped env.
+ * Values are only used for the non-secret plan variable and credential names.
+ */
+function readEnvRecord(env: unknown): Readonly<Record<string, string>> {
+  if (Array.isArray(env)) {
+    const record: Record<string, string> = {};
+    for (const entry of env) {
+      const item = asRecord(entry);
+      const name = item?.name;
+      const value = item?.value;
+      if (typeof name === "string" && typeof value === "string") record[name] = value;
+    }
+    return record;
+  }
+
+  const record = asRecord(env);
+  if (!record) return {};
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(record)) {
+    if (typeof value === "string") result[name] = value;
+  }
+  return result;
+}
+
+function readPlanFromEnv(env: unknown): CanonicalPlan | null {
+  const value = readEnvRecord(env)[PLAN_ENV_VAR];
+  if (value === undefined) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new SandboxDecodeError("invalid_config");
+  }
+
+  const plan = parseProvisionPlan(parsed);
+  if (!plan.ok) throw new SandboxDecodeError("invalid_config");
+  return plan.plan;
 }
 
 /**

@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { ERROR_LABEL, MANAGED_LABEL, PARENT_LABEL, PHASE_LABEL } from "../../shared/constants";
 import type { VmChild } from "../../shared/contracts";
 import { safeError } from "../../shared/errors";
+import type { CanonicalPlan } from "../../shared/provisioning";
 import {
-  canCreate,
   childErrorText,
   childPhase,
+  childPlan,
   credentialSourceLabel,
   deleteConfirmationText,
   findChild,
@@ -15,6 +16,7 @@ import {
   logLineCountLabel,
   logTimestamp,
   phaseText,
+  planSummary,
   reconcileFailureMessage,
   reconcileSuccessMessage,
   registrationText,
@@ -23,15 +25,19 @@ import {
   runtimeText,
   secretSource,
   setupPill,
-  toggleCredential,
   vmPill,
 } from "../state";
 
-const PENDING: VmChild = {
+const PLAN: CanonicalPlan = {
+  providers: [{ provider: "pi", llms: ["neuralwatt"] }],
+  integrations: [],
+};
+
+const PENDING: Extract<VmChild, { kind: "pending" }> = {
   kind: "pending",
   name: "paseo-pending",
   requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
-  credentialNames: ["ANTHROPIC_API_KEY"],
+  plan: PLAN,
   phase: "creating",
   error: null,
 };
@@ -48,6 +54,7 @@ const SANDBOX: SandboxChild = {
     [PHASE_LABEL]: "ready",
   },
   runtimeStatus: "running",
+  plan: PLAN,
   registration: { registrationId: "reg_1", status: "online", serverId: "srv_child" },
 };
 
@@ -62,17 +69,22 @@ const REGISTRATION: VmChild = {
   error: null,
 };
 
-describe("create selection", () => {
-  it("toggles credential names without duplicates", () => {
-    const once = toggleCredential([], "ANTHROPIC_API_KEY");
-    expect(once).toEqual(["ANTHROPIC_API_KEY"]);
-    expect(toggleCredential(once, "GH_TOKEN")).toEqual(["ANTHROPIC_API_KEY", "GH_TOKEN"]);
-    expect(toggleCredential(once, "ANTHROPIC_API_KEY")).toEqual([]);
+describe("plan presentation", () => {
+  it("summarizes providers, LLM options, and integrations", () => {
+    expect(planSummary(PLAN)).toBe("Pi (NeuralWatt)");
+    expect(planSummary(null)).toBe("Legacy Pi-only");
+    expect(
+      planSummary({
+        providers: [{ provider: "claude", llms: ["anthropic-oauth"] }],
+        integrations: ["github-cli"],
+      }),
+    ).toBe("Claude (Claude subscription) · GitHub CLI");
   });
 
-  it("requires at least one credential", () => {
-    expect(canCreate([])).toBe(false);
-    expect(canCreate(["GH_TOKEN"])).toBe(true);
+  it("returns the persisted plan for pending and sandbox children", () => {
+    expect(childPlan(PENDING)).toEqual(PLAN);
+    expect(childPlan(SANDBOX)).toEqual(PLAN);
+    expect(childPlan(REGISTRATION)).toBeNull();
   });
 
   it("labels where a credential value comes from", () => {
@@ -95,7 +107,7 @@ describe("create selection", () => {
 
 describe("child presentation", () => {
   it("labels phases, runtime, and registration", () => {
-    expect(phaseText("installing")).toBe("Installing Pi");
+    expect(phaseText("installing")).toBe("Provisioning");
     expect(phaseText("deleting")).toBe("Deleting");
     expect(phaseText("ready")).toBe("Ready");
     expect(runtimeText("running")).toBe("Running");
@@ -120,7 +132,7 @@ describe("child presentation", () => {
     expect(setupPill(SANDBOX)).toEqual({ label: "Ready", tone: "success" });
     expect(
       setupPill(sandbox({ labels: { ...SANDBOX.labels, [PHASE_LABEL]: "installing" } })),
-    ).toEqual({ label: "Installing Pi", tone: "accent" });
+    ).toEqual({ label: "Provisioning", tone: "accent" });
     expect(
       setupPill(
         sandbox({

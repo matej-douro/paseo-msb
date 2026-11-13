@@ -23,7 +23,7 @@ export const PI_VERSION = "1.1.0";
 
 /** Fixed child shape. */
 export const CPUS = 2;
-export const MEMORY_MIB = 2048;
+export const MEMORY_MIB = 4096;
 export const GUEST_PORT = 6767;
 
 /** Verified guest user, paths, and the image's explicit tini init. */
@@ -50,6 +50,9 @@ export const SANDBOX_ID_LABEL = "paseo-msb-id";
 export const JOB_LABEL = "paseo-msb-job";
 /** Bounded, redacted diagnostic text. Never contains a credential value. */
 export const ERROR_DETAIL_LABEL = "paseo-msb-error-detail";
+
+/** Sandbox environment variable holding the canonical provisioning plan. */
+export const PLAN_ENV_VAR = "PASEO_MSB_PLAN";
 
 /** Upper bound for diagnostic text exposed in DTOs, pending state, and labels. */
 export const MAX_ERROR_DETAIL_CHARS = 1_000;
@@ -94,6 +97,7 @@ export type RegistrationStatus = (typeof REGISTRATION_STATUSES)[number];
 /** The only parent environment credentials v1 passes through. */
 export const CREDENTIAL_NAMES = [
   "ANTHROPIC_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
   "NEURALWATT_API_KEY",
@@ -103,6 +107,7 @@ export type CredentialName = (typeof CREDENTIAL_NAMES)[number];
 
 export const CREDENTIAL_ALLOWED_HOSTS: Record<CredentialName, readonly string[]> = {
   ANTHROPIC_API_KEY: ["api.anthropic.com"],
+  CLAUDE_CODE_OAUTH_TOKEN: ["api.anthropic.com"],
   OPENAI_API_KEY: ["api.openai.com"],
   GEMINI_API_KEY: ["generativelanguage.googleapis.com"],
   NEURALWATT_API_KEY: ["api.neuralwatt.com"],

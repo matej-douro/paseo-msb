@@ -28,7 +28,7 @@ export interface ProviderEntryLike {
   readonly status: string;
 }
 
-/** The routed child client slice needed to confirm Pi. */
+/** The routed child client slice needed to confirm selected providers. */
 export interface RoutedPaseoLike {
   readonly providers: {
     refresh(options?: { readonly providers?: readonly string[] }): Promise<{
@@ -146,6 +146,7 @@ export async function ensureRegistration(
   parentId: string,
   sandbox: SandboxIdentity,
   hostPort: number,
+  providers: readonly string[],
 ): Promise<{ readonly registration: HostRegistrationLike; readonly changed: boolean }> {
   const desired = {
     connection: `127.0.0.1:${hostPort}`,
@@ -215,7 +216,7 @@ export async function ensureRegistration(
   const online = await waitForOnline(context, registration.registrationId);
   if (!online.serverId) throw new SetupFailure("registration_failed");
 
-  await confirmPi(context, online.serverId);
+  await confirmProviders(context, online.serverId, providers);
   return { registration: online, changed };
 }
 
@@ -245,7 +246,12 @@ async function waitForOnline(
   throw new SetupFailure("registration_timeout");
 }
 
-async function confirmPi(context: RegistrationContext, serverId: string): Promise<void> {
+async function confirmProviders(
+  context: RegistrationContext,
+  serverId: string,
+  providers: readonly string[],
+): Promise<void> {
+  const selected = providers.length > 0 ? [...new Set(providers)] : ["pi"];
   const remote = await bounded(context.hosts.client(serverId), {
     timeoutMs: timeoutMs(context),
     signal: context.signal,
@@ -255,7 +261,7 @@ async function confirmPi(context: RegistrationContext, serverId: string): Promis
   });
 
   try {
-    const refresh = await bounded(remote.providers.refresh({ providers: ["pi"] }), {
+    const refresh = await bounded(remote.providers.refresh({ providers: selected }), {
       timeoutMs: timeoutMs(context),
       signal: context.signal,
     }).catch((error: unknown) => {
@@ -274,8 +280,12 @@ async function confirmPi(context: RegistrationContext, serverId: string): Promis
         if (error instanceof LifecycleAbortedError) throw error;
         return null;
       });
-      const pi = snapshot?.entries.find((entry) => entry.provider === "pi");
-      if (pi?.status === "ready") return;
+      const ready = selected.every((provider) =>
+        snapshot?.entries.some(
+          (entry) => entry.provider === provider && entry.status === "ready",
+        ),
+      );
+      if (ready) return;
       await sleep(pollMs(context), context.signal);
     }
 

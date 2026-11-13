@@ -1,4 +1,4 @@
-import { GUEST_HOME, GUEST_PATH, PI_PACKAGE, PI_PREFIX } from "../constants";
+import { CREDENTIAL_NAMES, GUEST_HOME, GUEST_PATH, PI_PACKAGE, PI_PREFIX } from "../constants";
 
 /**
  * Shared, data-only provisioning catalog.
@@ -10,18 +10,10 @@ import { GUEST_HOME, GUEST_PATH, PI_PACKAGE, PI_PREFIX } from "../constants";
  */
 
 /**
- * Provisioning credentials are the five fixed v1 names plus
- * `CLAUDE_CODE_OAUTH_TOKEN`. The extra name stays local until the create path
- * is wired, so this preparatory layer does not change live behavior.
+ * Provisioning uses the same fixed credential set as the live create path.
+ * Values never appear here; entries only declare the names they require.
  */
-export const PROVISIONING_CREDENTIAL_NAMES = [
-  "ANTHROPIC_API_KEY",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "OPENAI_API_KEY",
-  "GEMINI_API_KEY",
-  "NEURALWATT_API_KEY",
-  "GH_TOKEN",
-] as const;
+export const PROVISIONING_CREDENTIAL_NAMES = CREDENTIAL_NAMES;
 export type ProvisioningCredential = (typeof PROVISIONING_CREDENTIAL_NAMES)[number];
 
 export const PROVIDER_IDS = ["claude", "pi"] as const;

@@ -1,4 +1,6 @@
-import { sandboxName, type CredentialName, type Phase } from "../shared/constants";
+import { sandboxName, type Phase } from "../shared/constants";
+import type { CanonicalPlan } from "../shared/provisioning";
+import { canonicalizePlan, plansEqual } from "../shared/provisioning";
 import type { SafeErrorCode } from "../shared/errors";
 
 /**
@@ -7,13 +9,13 @@ import type { SafeErrorCode } from "../shared/errors";
  * creates stay visible across UI navigation.
  *
  * A pending entry never carries credential values: only the request ID, the
- * generated name, the selected credential **names**, a phase, a safe error code,
- * and bounded redacted detail.
+ * generated name, the canonical provider/integration plan, a phase, a safe
+ * error code, and bounded redacted detail.
  */
 export interface PendingCreate {
   readonly requestId: string;
   readonly name: string;
-  readonly credentialNames: readonly CredentialName[];
+  readonly plan: CanonicalPlan;
   readonly phase: Phase;
   readonly createdAt: number;
   readonly errorCode: SafeErrorCode | null;
@@ -40,7 +42,7 @@ export interface PendingCreateStore {
    */
   reserve(
     requestId: string,
-    credentialNames: readonly CredentialName[],
+    plan: CanonicalPlan,
   ): PendingReservation;
   /** Settles a running attempt as failed. Never resurrects or replaces a newer entry. */
   fail(
@@ -59,26 +61,17 @@ export interface PendingCreateStore {
 
 function initialEntry(
   requestId: string,
-  credentialNames: readonly CredentialName[],
+  plan: CanonicalPlan,
 ): PendingCreate {
   return {
     requestId,
     name: sandboxName(requestId),
-    credentialNames: [...credentialNames],
+    plan: canonicalizePlan(plan),
     phase: "creating",
     createdAt: Date.now(),
     errorCode: null,
     errorDetail: null,
   };
-}
-
-function sameCredentialNames(
-  left: readonly CredentialName[],
-  right: readonly CredentialName[],
-): boolean {
-  if (left.length !== right.length) return false;
-  const expected = new Set(left);
-  return right.every((name) => expected.has(name));
 }
 
 export function createPendingCreateStore(): PendingCreateStore {
@@ -95,23 +88,23 @@ export function createPendingCreateStore(): PendingCreateStore {
       return entries.get(requestId) ?? null;
     },
 
-    reserve(requestId, credentialNames) {
+    reserve(requestId, plan) {
       const existing = entries.get(requestId);
 
       if (existing) {
-        if (!sameCredentialNames(existing.credentialNames, credentialNames)) {
+        if (!plansEqual(existing.plan, plan)) {
           return { status: "conflict" };
         }
         if (existing.phase !== "failed") return { status: "joined", entry: existing };
         return {
           status: "reserved",
-          entry: insert(initialEntry(requestId, credentialNames)),
+          entry: insert(initialEntry(requestId, plan)),
         };
       }
 
       return {
         status: "reserved",
-        entry: insert(initialEntry(requestId, credentialNames)),
+        entry: insert(initialEntry(requestId, plan)),
       };
     },
 

@@ -5,6 +5,7 @@ import type {
   VmListResult,
 } from "../shared/contracts";
 import type { CredentialName } from "../shared/constants";
+import { buildProvisionScript, legacyPiPlan } from "../shared/provisioning";
 import { safeError, type SafeError } from "../shared/errors";
 import { persistedCredentialValues } from "./diagnostics";
 import { findLatestInstallJob } from "./jobs";
@@ -16,6 +17,7 @@ import {
 } from "./logs";
 import { failureDetail } from "./diagnostics";
 import type { PendingCreate } from "./pending";
+import { findLatestProvisionJob } from "./provision";
 import { loadManagedSandboxes, type SandboxInventory, type SandboxRuntime } from "./sandbox";
 import {
   buildVmList,
@@ -112,7 +114,10 @@ export async function readVmDetail(
         ...credentialValues(context.env, context.storedSecrets),
         ...persistedCredentialValues(sandbox.handle.config()),
       ];
-      const job = await findLatestInstallJob(sandbox.handle).catch(() => null);
+      const provision = buildProvisionScript(sandbox.sandbox.plan ?? legacyPiPlan());
+      const job =
+        (await findLatestProvisionJob(sandbox.handle, provision.argv).catch(() => null)) ??
+        (await findLatestInstallJob(sandbox.handle).catch(() => null));
       logs = {
         sandbox: await readSandboxLogs(sandbox.handle, secrets),
         job: job

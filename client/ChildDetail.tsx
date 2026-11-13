@@ -12,9 +12,11 @@ import type {
 import {
   childErrorText,
   childPhase,
+  childPlan,
   deleteConfirmationText,
   errorMessage,
   phaseText,
+  planSummary,
   reconcileFailureMessage,
   reconcileSuccessMessage,
   registrationText,
@@ -107,7 +109,7 @@ export function ChildDetail({
     try {
       await onRetryCreate({
         requestId: child.requestId,
-        secretEnvVars: child.credentialNames,
+        plan: child.plan,
       });
       toast.show(`Retrying ${child.name}.`, { variant: "info" });
     } catch (retryFailure) {
@@ -209,6 +211,7 @@ export function ChildDetail({
 
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
               <DetailRow theme={theme} label="Phase" value={phaseText(childPhase(child))} />
+              <DetailRow theme={theme} label="Setup" value={planSummary(childPlan(child))} />
               {sandbox ? (
                 <>
                   <DetailRow
@@ -272,7 +275,7 @@ export function ChildDetail({
                   defaultOpen={logsDefaultOpen}
                 />
                 <LogBlock
-                  title="Pi install logs"
+                  title="Provisioning logs"
                   bundle={logs.job}
                   theme={theme}
                   defaultOpen={logsDefaultOpen}

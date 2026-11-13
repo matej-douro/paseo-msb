@@ -1,23 +1,19 @@
 import {
   ERROR_LABEL,
   PHASE_LABEL,
-  type CredentialName,
   type Phase,
 } from "../shared/constants";
+import {
+  legacyPiPlan,
+  paseoProviderIds,
+  planMatchesCredentialNames,
+  plansEqual,
+  type CanonicalPlan,
+} from "../shared/provisioning";
 
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
-import {
-  classifyInstallJobs,
-  listAllJobs,
-  waitForInstallJob,
-  type InstallJobOutcome,
-} from "./jobs";
 import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
-import {
-  inspectPiInstall,
-  piInstallSpec,
-  piPathCheckSpec,
-} from "./pi-install";
+import { ensureProvisioned } from "./provision";
 import {
   ensureRegistration,
   matchingRegistrations,
@@ -30,7 +26,6 @@ import {
 import {
   decodeManagedSandbox,
   isSandboxReplacedError,
-  type SandboxConnectHandleLike,
   markSandboxError,
   markSandboxPhase,
   ownershipOf,
@@ -69,7 +64,8 @@ export interface ReconcileRequest {
   readonly name: string;
   /** Only a Create attempt may allocate an initial sandbox. */
   readonly allowCreate: boolean;
-  readonly credentialNames?: readonly CredentialName[];
+  /** Present for Create; absent for recovery and Repair. */
+  readonly plan?: CanonicalPlan;
   /** Resolves selected values only when an initial create is needed. */
   readonly resolveCredentials?: () => readonly ResolvedSecret[];
   readonly redactionValues: readonly string[];
@@ -82,12 +78,6 @@ export interface ReconcileOutcome {
   /** True when this operation advanced or cleaned up the child. */
   readonly repaired: boolean;
 }
-
-type PiState =
-  | { readonly status: "ready" }
-  | { readonly status: "missing" }
-  | { readonly status: "replaced" }
-  | { readonly status: "unknown"; readonly detail: string | null };
 
 /**
  * The single idempotent reconciler for background Create, startup recovery, and
@@ -164,6 +154,9 @@ async function reconcileAbsent(
     throw new SetupFailure("not_found");
   }
 
+  const plan = request.plan;
+  if (!plan) throw new SetupFailure("invalid_request");
+
   const credentials = request.resolveCredentials?.() ?? [];
   if (credentials.length === 0) throw new SetupFailure("missing_credentials");
 
@@ -172,6 +165,7 @@ async function reconcileAbsent(
     {
       name: request.name,
       parentId,
+      plan,
       secrets: credentials,
     },
     request.redactionValues,
@@ -245,14 +239,11 @@ async function advanceSandbox(
     throw new SetupFailure("invalid_config");
   }
 
-  // A repeated attempt must keep the names recorded for this generation. The
-  // check runs here, once, before any side effect.
-  if (
-    request.credentialNames &&
-    !credentialNamesMatch(sandboxCredentialNames(handle), request.credentialNames)
-  ) {
-    throw new SetupFailure("invalid_request");
-  }
+  // A repeated attempt must keep the plan recorded for this generation. The
+  // check runs here, once, before any side effect. Legacy children compare the
+  // requested plan's credentials against the credentials they were created with.
+  const plan = resolvePlanForSandbox(request, decoded, handle);
+  const providers = paseoProviderIds(plan);
 
   let phase = decoded.labels[PHASE_LABEL];
   let changed = false;
@@ -260,26 +251,10 @@ async function advanceSandbox(
   try {
     token.throwIfAborted();
 
-    const pi = await readPiState(context, handle, redaction, token);
-    if (pi.status === "replaced") throw new SetupFailure("id_mismatch");
-    if (pi.status === "unknown") {
-      throw new SetupFailure("runtime_unavailable", pi.detail);
-    }
-
-    if (pi.status === "missing") {
-      // Actual Pi readiness wins. When it is missing, one idempotent install
-      // pass inspects the complete job inventory first, so a legacy `failed`
-      // phase never hides a job that is still running or actually succeeded.
+    if (phase !== "ready") {
       phase = "installing";
-      changed = (await ensurePiInstalled(context, handle, redaction, token)) || changed;
-      const after = await readPiState(context, handle, redaction, token);
-      if (after.status === "replaced") throw new SetupFailure("id_mismatch");
-      if (after.status === "unknown") {
-        throw new SetupFailure("runtime_unavailable", after.detail);
-      }
-      if (after.status !== "ready") {
-        throw new SetupFailure("path_unverified", "pi is not at the pinned path and version");
-      }
+      if (await writePhase(context, handle, phase, token)) changed = true;
+      if (await ensureProvisioned(context, handle, plan, redaction, token)) changed = true;
     }
 
     token.throwIfAborted();
@@ -297,6 +272,7 @@ async function advanceSandbox(
       parentId,
       { id: handle.id, name: handle.name },
       hostPort,
+      providers,
     );
     if (ensured.changed) changed = true;
 
@@ -325,146 +301,25 @@ async function advanceSandbox(
   }
 }
 
-async function ensurePiInstalled(
-  context: ReconcileContext,
+function resolvePlanForSandbox(
+  request: ReconcileRequest,
+  decoded: DecodedSandbox,
   handle: SandboxHandleLike,
-  redaction: readonly string[],
-  token: LaneToken,
-): Promise<boolean> {
-  token.throwIfAborted();
-
-  const inventory = await readInstallInventory(context, handle, token);
-  if (inventory.active.length > 1) throw new SetupFailure("install_conflict");
-
-  // A successful historical job wins over a missing legacy job label.
-  if (inventory.succeeded.length > 0) return false;
-
-  if (inventory.active.length === 1) {
-    const outcome = await waitForInstallJob(
-      handle,
-      inventory.active[0].id,
-      timeoutMs(context),
-      token.signal,
-    );
-    interpretOutcome(outcome);
-    return true;
-  }
-
-  if (inventory.failed.length > 0) {
-    throw new SetupFailure("install_failed", "the recorded Pi install did not succeed");
-  }
-
-  token.throwIfAborted();
-  await writePhase(context, handle, "installing", token);
-
-  let jobId: string;
-  try {
-    const job = await bounded(context.sandboxHost.startInstall(handle, piInstallSpec()), {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
-    jobId = job.id;
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    // A launch error (or a hung launch) may be uncertain. Re-list before
-    // deciding anything; never start a second job on speculation.
-    const after = await readInstallInventory(context, handle, token);
-    if (after.active.length > 1) throw new SetupFailure("install_conflict");
-    if (after.succeeded.length > 0) return true;
-    if (after.active.length === 1) {
-      interpretOutcome(
-        await waitForInstallJob(
-          handle,
-          after.active[0].id,
-          timeoutMs(context),
-          token.signal,
-        ),
-      );
-      return true;
+): CanonicalPlan {
+  if (request.plan) {
+    if (decoded.plan) {
+      if (!plansEqual(request.plan, decoded.plan)) throw new SetupFailure("invalid_request");
+      return decoded.plan;
     }
-    if (after.failed.length > 0) throw new SetupFailure("install_failed");
-
-    const uncertain = (error as { jobId?: unknown }).jobId;
-    if (typeof uncertain === "string" && uncertain.length > 0) {
-      interpretOutcome(
-        await waitForInstallJob(handle, uncertain, timeoutMs(context), token.signal),
-      );
-      return true;
+    // A legacy child has no persisted plan. A retry may only replay the plan
+    // whose required credentials match what this generation already has.
+    if (!planMatchesCredentialNames(request.plan, sandboxCredentialNames(handle))) {
+      throw new SetupFailure("invalid_request");
     }
-
-    throw new SetupFailure("install_pending", failureDetail(error, redaction));
+    return request.plan;
   }
 
-  interpretOutcome(
-    await waitForInstallJob(handle, jobId, timeoutMs(context), token.signal),
-  );
-  return true;
-}
-
-async function readInstallInventory(
-  context: ReconcileContext,
-  handle: SandboxHandleLike,
-  token: LaneToken,
-) {
-  try {
-    return classifyInstallJobs(
-      await listAllJobs(handle, undefined, {
-        timeoutMs: sdkTimeoutMs(context),
-        signal: token.signal,
-      }),
-    );
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    // Never start another install because inspection failed.
-    throw new SetupFailure("job_inventory_unavailable");
-  }
-}
-
-function interpretOutcome(outcome: InstallJobOutcome): void {
-  switch (outcome.status) {
-    case "succeeded":
-      return;
-    case "failed":
-      throw new SetupFailure("install_failed", "the Pi install job did not exit successfully");
-    case "running":
-      throw new SetupFailure("install_pending", "the Pi install job is still running");
-    case "unknown":
-      throw new SetupFailure("install_pending", "the Pi install job state is unknown");
-  }
-}
-
-async function readPiState(
-  context: ReconcileContext,
-  handle: SandboxHandleLike,
-  redaction: readonly string[],
-  token: LaneToken,
-): Promise<PiState> {
-  let connected: SandboxConnectHandleLike;
-  try {
-    connected = await bounded(context.sandboxHost.connect(handle), {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    return isSandboxReplacedError(error)
-      ? { status: "replaced" }
-      : { status: "unknown", detail: failureDetail(error, redaction) };
-  }
-
-  try {
-    const output = await bounded(connected.exec(piPathCheckSpec()), {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
-    if (output.code !== 0) return { status: "missing" };
-    return inspectPiInstall(output.stdout) ? { status: "ready" } : { status: "missing" };
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    return isSandboxReplacedError(error)
-      ? { status: "replaced" }
-      : { status: "unknown", detail: failureDetail(error, redaction) };
-  }
+  return decoded.plan ?? legacyPiPlan();
 }
 
 async function createWithPortRetry(
@@ -709,21 +564,6 @@ async function cleanupGeneration(
   return true;
 }
 
-
-/** True when the recorded credential names are a compatible repeat. */
-export function credentialNamesMatch(
-  recorded: readonly CredentialName[],
-  requested: readonly CredentialName[],
-): boolean {
-  if (recorded.length === 0) return true;
-  if (recorded.length !== requested.length) return false;
-  const expected = new Set(recorded);
-  return requested.every((name) => expected.has(name));
-}
-
-export function knownCredentialNames(handle: SandboxHandleLike): CredentialName[] {
-  return sandboxCredentialNames(handle);
-}
 
 export function mergeRedaction(
   base: readonly string[],

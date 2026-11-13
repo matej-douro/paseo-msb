@@ -6,6 +6,7 @@ import {
   SANDBOX_ID_LABEL,
 } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
+import { buildProvisionScript, legacyPiPlan } from "../../shared/provisioning";
 import { deleteVm } from "../../server/delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "../../server/lanes";
 import { reconcileVm, type ReconcileVmContext } from "../../server/reconcile";
@@ -93,29 +94,21 @@ describe("reconcileVm", () => {
     expect(hosts.removed).toEqual([]);
   });
 
-  it("resumes an interrupted install from a successful pinned job", async () => {
+  it("resumes an interrupted install from a successful provision status", async () => {
     const labels: Record<string, string>[] = [];
+    const provision = buildProvisionScript(legacyPiPlan());
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
       labelUpdates: labels,
-      jobs: [
-        {
-          id: "job_7",
-          command: [
-            "npm",
-            "install",
-            "-g",
-            "--ignore-scripts",
-            "--prefix",
-            "/home/paseo/.local",
-            "@earendil-works/pi-coding-agent@1.1.0",
-          ],
-          state: "exited",
-          exitCode: 0,
-        },
-      ],
+      provisionStatus: {
+        planHash: provision.planHash,
+        ok: true,
+        steps: [{ id: "pi-install", status: "ok", exitCode: 0 }],
+        failedStep: null,
+        error: null,
+      },
     });
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const hosts = new FakePaseoHosts();
@@ -168,7 +161,8 @@ describe("reconcileVm", () => {
     await reconcileVm(reconcileContext(fakeRuntime([sandbox]), hosts, creator), INPUT);
 
     expect(creator.execSpecs).toHaveLength(1);
-    expect(creator.execSpecs[0].command).toBe("npm");
+    expect(creator.execSpecs[0].command).toBe("/bin/sh");
+    expect(creator.execSpecs[0].args[0]).toContain("/provision-");
   });
 
   it("rejects multiple active pinned installs", async () => {
@@ -190,7 +184,7 @@ describe("reconcileVm", () => {
       INPUT,
     );
 
-    expect(result.errors[0].error.code).toBe("install_conflict");
+    expect(result.errors[0].error.code).toBe("provision_conflict");
     expect(creator.execSpecs).toEqual([]);
   });
 
@@ -396,8 +390,9 @@ describe("reconcileVm", () => {
     expect(hosts.added).toHaveLength(1);
   });
 
-  it("keeps a legacy failed label terminal when the install job confirms failure", async () => {
+  it("does not treat a failed legacy install job as terminal", async () => {
     const labels: Record<string, string>[] = [];
+    const provision = buildProvisionScript(legacyPiPlan());
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
@@ -406,6 +401,13 @@ describe("reconcileVm", () => {
       labelUpdates: labels,
       jobState: "exited",
       jobExitCode: 7,
+      provisionStatus: {
+        planHash: provision.planHash,
+        ok: true,
+        steps: [{ id: "pi-install", status: "ok", exitCode: 0 }],
+        failedStep: null,
+        error: null,
+      },
     });
     const hosts = new FakePaseoHosts();
 
@@ -414,14 +416,8 @@ describe("reconcileVm", () => {
       INPUT,
     );
 
-    expect(result.repaired).toEqual([]);
-    expect(result.errors).toEqual([
-      {
-        name: NAME,
-        error: safeError("install_failed", "the recorded Pi install did not succeed"),
-      },
-    ]);
-    expect(hosts.added).toEqual([]);
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(hosts.added).toHaveLength(1);
   });
 
   it("starts one install when a legacy failed label has no job history", async () => {
@@ -511,7 +507,7 @@ describe("reconcileVm", () => {
     await reconcileVm(reconcileContext(fakeRuntime([sandbox]), hosts, creator), INPUT);
 
     expect(creator.createCount).toBe(0);
-    expect(creator.connectCount).toBeGreaterThan(0);
+    expect(creator.connectCount).toBe(0);
     expect(creator.destroyed).toEqual([]);
   });
 
