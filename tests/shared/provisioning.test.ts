@@ -359,6 +359,16 @@ describe("provision script", () => {
     expect(script).not.toContain("SECRET");
   });
 
+  it("installs the status trap before the plan-hash guard", () => {
+    const script = buildProvisionScript(resolve(PI_NEURALWATT_GH).plan).script;
+    const trapAt = script.indexOf("trap finalize EXIT");
+    const guardAt = script.indexOf(`if [ "\${1:-}" != "$PLAN_HASH" ]`);
+
+    expect(trapAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(trapAt).toBeLessThan(guardAt);
+  });
+
   it("is valid POSIX shell", () => {
     const plan = resolve({
       providers: [
