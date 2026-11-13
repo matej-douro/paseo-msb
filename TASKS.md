@@ -57,7 +57,7 @@ Acceptance:
 - [x] Phase and short safe error codes are observable through list/detail. Pending creates remain visible after UI navigation without terminal history.
 - [x] Fake-runtime tests cover success, duplicate request ID, pull/boot/install failure, missing credentials, port retry, and redaction.
 
-Result: creation is idempotent per request ID, returns before host work, and stops at `registering` for task 4. The pinned image still requires the task 1 fallback of explicit tini init instead of `.init("auto")`, and host port `0` still needs the probe-and-retry loop. Raw SDK and guest errors never reach pending state or labels; only fixed safe codes do.
+Result: creation is idempotent per request ID, returns before host work, and continues through registration once task 4 landed. The pinned image still requires the task 1 fallback of explicit tini init instead of `.init("auto")`, and host port `0` still needs the probe-and-retry loop. Raw SDK and guest errors never reach pending state or labels; only fixed safe codes do.
 
 Files: `server/create.ts`, `server/pending.ts`, `server/pi-install.ts`, `server/secrets.ts`, `server/sandbox.ts`, `shared/`, `tests/server/create.test.ts`, `tests/server/fake-runtime.ts`
 
@@ -67,12 +67,14 @@ Complete the create workflow and all remaining server mutations.
 
 Acceptance:
 
-- [ ] Pi-ready sandboxes move to `registering`, use stable sandbox ID as `sourceKey`, wait for routed online, refresh providers, confirm Pi, and become `ready`.
-- [ ] Plugin init rediscovers labelled sandboxes and resumes only unambiguous install/registration work by persisted IDs; uncertain state remains failed without replaying side effects.
-- [ ] `vm.reconcile` resumes valid setup, restores missing registrations, and removes confirmed stale registrations. It never creates, starts, adopts, or deletes a sandbox and refuses ambiguous/foreign duplicates.
-- [ ] `vm.delete` requires matching name, stable ID, and confirmation; destroys that exact sandbox, removes its registration, and treats missing resources as success.
-- [ ] Failed and incomplete children can be deleted entirely through Paseo UI. A post-destroy registration failure remains repairable.
-- [ ] Tests cover interruption at each phase, reload with one detached job, stale registration, duplicate/foreign registration, missing resources, and unavailable inventory without destructive fallback.
+- [x] Pi-ready sandboxes move to `registering`, use stable sandbox ID as `sourceKey`, wait for routed online, refresh providers, confirm Pi, and become `ready`.
+- [x] Plugin init rediscovers labelled sandboxes and resumes only unambiguous install/registration work by persisted IDs; uncertain state remains failed without replaying side effects.
+- [x] `vm.reconcile` resumes valid setup, restores missing registrations, and removes confirmed stale registrations. It never creates, starts, adopts, or deletes a sandbox and refuses ambiguous/foreign duplicates.
+- [x] `vm.delete` requires matching name, stable ID, and confirmation; destroys that exact sandbox, removes its registration, and treats missing resources as success.
+- [x] Failed and incomplete children can be deleted entirely through Paseo UI. A post-destroy registration failure remains repairable.
+- [x] Tests cover interruption at each phase, reload with one detached job, stale registration, duplicate/foreign registration, missing resources, and unavailable inventory without destructive fallback.
+
+Result: registration, recovery, Repair, and Delete are wired through the five RPCs. Recovery starts once on first plugin use because the plugin server contribution has no Paseo client at load; it then rediscovers labelled sandboxes and resumes only persisted, unambiguous work. `vm.delete` reads registrations before destroying so an unavailable daemon never leaves an unmanaged running VM.
 
 Files: `server/registration.ts`, `server/recovery.ts`, `server/reconcile.ts`, `server/delete.ts`, `server/create.ts`, `server/index.ts`, `tests/server/`
 
