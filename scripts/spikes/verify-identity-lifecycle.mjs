@@ -282,6 +282,24 @@ async function main() {
       const survivorLabels = survivor.config().labels;
       const survivorJobs = await listAllJobs(survivor, 10);
 
+      // Assertion-backed regression guard for every documented stale-handle
+      // outcome. If the SDK changes, this spike must fail instead of silently
+      // recording a different matrix.
+      for (const [label, outcome] of [
+        ["refresh", refresh],
+        ["connect", connect],
+        ["listJobsWith", listJobs],
+        ["getJob", getJob],
+        ["destroy", destroy],
+      ]) {
+        assert(outcome.rejected, `stale ${label} was accepted`);
+      }
+      assert(survivor.id === replacement.handle.id, "stale destroy removed the replacement");
+      assert(
+        survivorLabels["spike-stale"] === "yes",
+        "stale modify no longer reaches the replacement: narrow guardedModify",
+      );
+
       return {
         oldId,
         replacementId: replacement.handle.id,
@@ -333,6 +351,15 @@ async function main() {
       const successInfo = await success.inspect();
       const failureInfo = await failure.inspect();
 
+      assert(
+        successInfo.state === "exited" && successInfo.exitCode === 0,
+        "successful job was not classified as exited/0",
+      );
+      assert(
+        failureInfo.state === "exited" && failureInfo.exitCode === 7,
+        "failing job was not classified as exited/7",
+      );
+
       // Reload: a fresh handle sees the same durable jobs and states.
       const reloaded = await Sandbox.get(NAME);
       const reloadedJobs = await listAllJobs(reloaded, 2);
@@ -366,6 +393,11 @@ async function main() {
           }
         }
       }
+
+      assert(
+        uncertain === null || uncertain.jobId === null || uncertain.inspectable,
+        "uncertain launch exposed an uninspectable job id",
+      );
 
       return {
         jobs: inventory.map((item) => ({

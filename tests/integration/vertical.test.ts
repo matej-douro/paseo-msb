@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPaseoClient, type PaseoClient } from "@getpaseo/client";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -8,6 +10,7 @@ import {
   ERROR_LABEL,
   GUEST_IMAGE,
   GUEST_PATH,
+  MICROSANDBOX_VERSION,
   PARENT_DAEMON_VERSION,
   PHASE_LABEL,
   PI_VERSION,
@@ -123,7 +126,12 @@ async function installJobs(name: string) {
   const handles = await sandboxesNamed(name);
   if (handles.length !== 1) return [];
 
-  const jobs: { command: readonly string[]; state: string; exitCode: number | null }[] = [];
+  const jobs: {
+    id: string;
+    command: readonly string[];
+    state: string;
+    exitCode: number | null;
+  }[] = [];
   let cursor: string | undefined;
   while (true) {
     const page = await handles[0].listJobsWith((builder) => {
@@ -160,6 +168,13 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
     await paseo.connect();
 
     msb = await loadMicrosandbox();
+    const msbPackage = JSON.parse(
+      await readFile(path.join(REPO_ROOT, "node_modules/microsandbox/package.json"), "utf8"),
+    ) as { version?: string };
+    expect(
+      msbPackage.version,
+      "the release test must run on the pinned microsandbox SDK",
+    ).toBe(MICROSANDBOX_VERSION);
 
     const status = await daemon.getDaemonStatus();
     expect(
@@ -341,12 +356,12 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(labels["paseo-msb-job"]).toBeUndefined();
       expect(labels[PHASE_LABEL]).toBe("ready");
       expect(
-        JSON.stringify(config).includes(GUEST_IMAGE),
+        (config as { image?: string }).image,
         "the pinned guest image was not applied",
-      ).toBe(true);
+      ).toBe(GUEST_IMAGE);
 
       const jobs = await installJobs(name);
-      expect(jobs.length).toBeGreaterThanOrEqual(1);
+      expect(jobs, "exactly one Pi install job for this attempt").toHaveLength(1);
       expect(
         jobs.every((job) => job.state === "exited" && job.exitCode === 0),
         "the pinned Pi install did not complete successfully",
@@ -416,6 +431,41 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         credentialName,
       ]);
       expect(guestValues[0]).toBe(`$MSB_${credentialName}`);
+
+      // Raw microsandbox sandbox, job, and system logs are separate sinks that
+      // redaction cannot rewrite after the fact; assert the value never reached
+      // them in the first place.
+      const rawSandboxLogs = await handles[0].logs({
+        tail: 200,
+        sources: ["stdout", "stderr", "output", "system"],
+      });
+      for (const entry of rawSandboxLogs) {
+        expect(entry.text()).not.toContain(fakeCredentialValue);
+      }
+
+      const installJob = await handles[0].getJob(jobs[0].id);
+      const rawJobLogs = await installJob.logs({ tail: 200 });
+      const logDecoder = new TextDecoder();
+      for (const entry of rawJobLogs) {
+        expect(logDecoder.decode(entry.data)).not.toContain(fakeCredentialValue);
+      }
+
+      // Replacing and then removing the store value must not disable redaction
+      // for the creation-time value persisted in this VM's config.
+      const replacedValue = `paseo-msb-replaced-${randomUUID()}`;
+      await rpc(secretsSetRpc.name, { name: credentialName, value: replacedValue });
+      const afterReplace = await rpc<VmDetailResult>(vmDetailRpc.name, { name });
+      expect(JSON.stringify(afterReplace)).not.toContain(fakeCredentialValue);
+      expect(JSON.stringify(afterReplace)).not.toContain(replacedValue);
+
+      await rpc(secretsDeleteRpc.name, { name: credentialName });
+      credentialWasStored = false;
+      const afterCredentialRemoval = await rpc<VmDetailResult>(vmDetailRpc.name, {
+        name,
+      });
+      expect(JSON.stringify(afterCredentialRemoval)).not.toContain(
+        fakeCredentialValue,
+      );
 
       // Repair restores a missing registration without another VM.
       const originalRegistration = registrations[0];

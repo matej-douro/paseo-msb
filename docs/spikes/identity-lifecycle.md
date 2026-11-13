@@ -89,7 +89,13 @@ labels are configuration, not ownership proof.
 
 None beyond the task 1 pins. The spike confirms the design's
 `refresh`-before-`modify` rule, manual job pagination, and list-before-add
-registration rule.
+registration rule. The script now asserts every row of the matrix above (stale
+`refresh`, `connect`, job listing, `getJob`, and `destroy` must reject; a stale
+`destroy` must leave the replacement alive; a stale `modify` must reach the
+replacement). The last assertion records the SDK limitation rather than hiding
+it: `modify()` is not generation-bound, so the plugin treats label writes as
+best-effort hints and `DESIGN.md` documents the residual window instead of
+claiming atomic label mutation.
 
 ## Scope
 
