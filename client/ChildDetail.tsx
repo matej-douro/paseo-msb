@@ -211,7 +211,9 @@ export function ChildDetail({
 
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
               <DetailRow theme={theme} label="Phase" value={phaseText(childPhase(child))} />
-              <DetailRow theme={theme} label="Setup" value={planSummary(childPlan(child))} />
+              {child.kind !== "registration" ? (
+                <DetailRow theme={theme} label="Setup" value={planSummary(childPlan(child))} />
+              ) : null}
               {sandbox ? (
                 <>
                   <DetailRow

@@ -81,7 +81,7 @@ export function CreateChild({
     setError(null);
   }, [open]);
 
-  const issue = planIssue(providers, providerStates);
+  const issue = planIssue(providers, integrations, providerStates, integrationStates);
   const canSubmit = issue === null && !pending;
   const required = requiredCredentialsForPlan({ providers, integrations });
 
@@ -294,7 +294,9 @@ export function CreateChild({
 
 function planIssue(
   providers: readonly ProviderSelection[],
+  integrations: readonly IntegrationId[],
   availability: readonly ProviderAvailability[],
+  integrationAvailability: readonly { id: IntegrationId; available: boolean }[],
 ): string | null {
   if (providers.length === 0) return "Select at least one provider.";
 
@@ -312,6 +314,14 @@ function planIssue(
         const label = entry.llms.find((candidate) => candidate.id === llm)?.label ?? llm;
         return `${label} is not available with the current secrets.`;
       }
+    }
+  }
+
+  for (const integration of integrations) {
+    const state = integrationAvailability.find((candidate) => candidate.id === integration);
+    if (!state?.available) {
+      const entry = INTEGRATION_CATALOG.find((candidate) => candidate.id === integration);
+      return `${entry?.label ?? integration} is not available with the current secrets.`;
     }
   }
 
