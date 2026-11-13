@@ -8,8 +8,8 @@ Working rules:
 - Keep the fixed v1 scope. Add no settings document, provider abstraction, lifecycle options, or decision framework.
 - The runtime-dependent release test is mandatory on a supported parent.
 
-Tasks 1-6 record the initial implementation and its verification. `DESIGN.md` and task 7 define
-the target wherever those historical identity/lifecycle notes differ.
+Tasks 1-6 record the initial implementation, and task 7 records the initial hardening pass.
+`DESIGN.md` defines the target wherever those historical notes differ.
 
 ## 1. Prove the pinned vertical slice
 
@@ -170,5 +170,46 @@ Structured job outcomes, list-before-add registration, stale-registration exact
 lookups, tombstoned Delete, redaction of persisted VM values, registration-only
 children, and legacy label quarantine are covered by unit and release tests.
 
+Follow-up review at `904b83a` found remaining lifecycle races and verification gaps. Those
+claims are reopened in task 8 rather than accepted as complete.
+
 Files: `shared/`, `server/`, `client/`, `tests/`, `scripts/spikes/`, `docs/spikes/`,
 `README.md`
+
+## 8. Close remaining lifecycle races and release gaps
+
+The name-based model is in place, but current review found post-cancellation work, unsettled
+pending attempts, incomplete registration repair, remaining redaction paths, and non-atomic
+replacement cleanup. [FINDINGS.md](./FINDINGS.md) contains the current failure sequences. Implement
+the existing design; do not add another lifecycle layer or broaden v1 scope.
+
+### Acceptance
+
+- [ ] Permanently close lifecycle lanes during plugin cleanup and make every job/SDK wait bounded
+  and abortable. No operation may start or continue side effects after closure, including later
+  names in a multi-name Repair.
+- [ ] Simplify Create reservation and pending settlement: validate credential names synchronously,
+  return before external work, run preflight inside the lane, and settle every success/failure/
+  cancellation exactly once. Registration-only cleanup remains visible and actionable.
+- [ ] Use one registration ownership predicate based on the parent directory and authenticated
+  producer/source key. Repair connection, label, and metadata drift without treating labels as
+  ownership or re-enabling disabled registrations.
+- [ ] Establish genuine exact-generation mutation and stale-cleanup semantics. Cover replacement
+  between refresh and modify and between absence observation and removal; if the pinned SDK cannot
+  provide the required guarantee, narrow `DESIGN.md` rather than claiming it.
+- [ ] Centralize diagnostic redaction across current and persisted VM credentials, including
+  directory errors, unexpected reconciler errors, and legacy labels. Rediscover actual active jobs
+  behind legacy `failed/install_failed` before declaring terminal failure.
+- [ ] Distinguish unavailable/empty/missing/unregistered in the UI, make polling latest-request-wins
+  and post-mutation refreshes effective, and align registration-only projection, store RPC fields,
+  and owner-only store permissions with `DESIGN.md`.
+- [ ] Turn identity spikes into assertion-backed regression checks and complete the release matrix:
+  after-side-effect failures, concurrent lifecycle operations, reload during install and deletion,
+  exact resource counts, verified runtime/SDK/image pins, and malformed config/pagination faults.
+- [ ] Verify store and environment canaries, removed/replaced creation-time values, and injected
+  upstream errors against RPC output, plugin logs, raw sandbox/job/system logs, pending state,
+  labels, and test artifacts. `npm run typecheck`, `npm run lint`, `npm test`, and
+  `npm run test:release` pass on the verified pins, with affected documentation updated.
+
+Files: `DESIGN.md`, `FINDINGS.md`, `shared/`, `server/`, `client/`, `tests/`,
+`scripts/spikes/`, `docs/spikes/`, `README.md`
