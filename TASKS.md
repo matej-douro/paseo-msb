@@ -84,12 +84,14 @@ Implement all v1 UI in one sidebar screen with no additional management surfaces
 
 Acceptance:
 
-- [ ] Create child confirmation shows fixed image/resources and available credential checkboxes by name only, requires at least one, and generates one request ID per logical attempt.
-- [ ] List shows pending creates and managed children with phase, runtime status, registration state, and safe errors. Polling stops on unmount without stopping host work.
-- [ ] Detail reconnects by sandbox name after navigation and shows bounded read-only logs, Repair, and Delete.
-- [ ] Delete confirmation names the child and states that its sandbox and registration are removed.
-- [ ] Loading, empty, partial-unavailable, failed, and repair-error states are usable on desktop and mobile and use approved primitives/theme colors.
-- [ ] Children are opened only through Paseo's normal host picker. No metrics, custom resource/provider fields, shell, copy, start/stop, or extra navigation actions are added.
+- [x] Create child confirmation shows fixed image/resources and available credential checkboxes by name only, requires at least one, and generates one request ID per logical attempt.
+- [x] List shows pending creates and managed children with phase, runtime status, registration state, and safe errors. Polling stops on unmount without stopping host work.
+- [x] Detail reconnects by sandbox name after navigation and shows bounded read-only logs, Repair, and Delete.
+- [x] Delete confirmation names the child and states that its sandbox and registration are removed.
+- [x] Loading, empty, partial-unavailable, failed, and repair-error states are usable on desktop and mobile and use approved primitives/theme colors.
+- [x] Children are opened only through Paseo's normal host picker. No metrics, custom resource/provider fields, shell, copy, start/stop, or extra navigation actions are added.
+
+Result: one sidebar screen renders the create confirmation, pending/managed list, and a detail pane with bounded logs, Repair, and Delete. Two polling hooks refresh list and detail every 2.5 seconds only while mounted; the selected child comes from the screen params so it reconnects by sandbox name after navigation. Pure client helpers and request-ID generation are covered by vitest; rendering uses plugin UI primitives and theme colors only.
 
 Files: `index.client.tsx`, `client/screen.tsx`, `client/CreateChild.tsx`, `client/ChildList.tsx`, `client/ChildDetail.tsx`, `client/hooks/`, `client/__tests__/`
 
