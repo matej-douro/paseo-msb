@@ -6,14 +6,15 @@ A Paseo parent-daemon plugin that creates, lists, repairs, and deletes microsand
 
 ## 1. V1 scope
 
-V1 has exactly four user flows:
+V1 has exactly five user flows:
 
-1. **Create**: click Create child, select available Pi credentials by name, and confirm. The VM uses a pinned image, 2 CPUs, and 2048 MiB memory. Its name is generated.
-2. **Use**: watch creation and Pi installation progress in the plugin, then open the child through Paseo's normal host UI.
-3. **Repair**: resume interrupted setup, restore a missing registration, or remove a stale plugin-owned registration.
-4. **Delete**: confirm in Paseo, destroy the exact sandbox, and remove its registration.
+1. **Manage credentials**: add, replace, or remove values for the five fixed names in the plugin's shared store. The UI never displays a stored value.
+2. **Create**: click Create child, select available Pi credentials by name, and confirm. The VM uses a pinned image, 2 CPUs, and 2048 MiB memory. Its name is generated.
+3. **Use**: watch creation and Pi installation progress in the plugin, then open the child through Paseo's normal host UI.
+4. **Repair**: resume interrupted setup, restore a missing registration, or remove a stale plugin-owned registration.
+5. **Delete**: confirm in Paseo, destroy the exact sandbox, and remove its registration.
 
-Everything else is out of scope: custom names or sizes, image selection, stop/start/restart controls, autoStart, metrics, adoption, other agents, generic provider mappings, user-entered secrets, operation history, settings migration, Command Center items, shell/exec, volumes, snapshots, and network controls.
+Everything else is out of scope: custom names or sizes, image selection, stop/start/restart controls, autoStart, metrics, adoption, other agents, generic provider mappings, settings migration, operation history, Command Center items, shell/exec, volumes, snapshots, and network controls.
 
 ## 2. Architecture and ownership
 
@@ -24,7 +25,7 @@ Everything else is out of scope: custom names or sizes, image selection, stop/st
 | Microsandbox | Authoritative sandbox inventory, stable IDs, config, runtime state, labels, logs, and detached jobs. |
 | Parent daemon | Authoritative host registrations, routed connections, and online state. |
 
-There is **no Paseo settings document**. The only plugin-owned volatile state is a map of creates that have not yet produced a sandbox.
+There is **no Paseo settings document**. The only plugin-owned volatile state is a map of creates that have not yet produced a sandbox. The only durable plugin state is the credential store described in section 5.
 
 The app polls `vm.list` and `vm.detail` only while the screen is mounted. Polling observes host work; it does not drive it. Detached VMs and Pi install jobs continue without the UI.
 
@@ -80,7 +81,7 @@ Detached VMs normally remain running across plugin and parent-daemon restarts. V
 
 ## 5. Pi secret passthrough
 
-V1 supports only these parent environment credentials:
+V1 supports only these five credential names:
 
 | Guest environment variable | Allowed upstream hosts |
 | --- | --- |
@@ -90,11 +91,13 @@ V1 supports only these parent environment credentials:
 | `NEURALWATT_API_KEY` | `api.neuralwatt.com` |
 | `GH_TOKEN` | `api.github.com`, `github.com`, `uploads.github.com` |
 
-`vm.list` reports which of these names are available. The create confirmation offers checkboxes for those names and requires at least one. It never displays or accepts values.
+Values come from the plugin's shared store first, then the parent process environment. The store lives at `<PASEO_HOME>/plugin-data/paseo-msb/secrets.json` (directory `0700`, file `0600`) and may be relocated with `PASEO_MSB_SECRETS_FILE`. It accepts only the five fixed names; unknown keys are ignored on read and rejected on write.
+
+`vm.list` reports which names are available and which come from the store. The create confirmation offers checkboxes for those names and requires at least one. It never displays or accepts values. `secrets.list` returns names and sources only, `secrets.set` is the only write path, and `secrets.delete` removes a stored value. No RPC returns a stored value.
 
 The server reads selected values immediately before creation and builds microsandbox secrets with header substitution only. TLS interception and guest CA setup are microsandbox responsibilities. Query/body substitution, placeholder passthrough configuration, OAuth stores, custom base URLs, and other providers are not supported in v1.
 
-Inline values and generated child passwords, if needed, remain inside parent-controlled microsandbox and Paseo state. Public DTOs use allowlists, and logs and errors are redacted.
+Inline values remain inside parent-controlled microsandbox state. Public DTOs use allowlists, and logs and errors are redacted against both stored and environment values.
 
 ## 6. Repair and deletion
 
@@ -113,15 +116,19 @@ It does not create or delete sandboxes, start stopped VMs, or adopt unlabelled s
 
 | RPC | Purpose |
 | --- | --- |
-| `vm.list` | Pending creates, managed children, available Pi credential names, progress, status, and safe errors. |
+| `vm.list` | Pending creates, managed children, available Pi credential names and stored names, progress, status, and safe errors. |
 | `vm.detail` | One pending child or sandbox, its registration state, and bounded sandbox/job logs. |
 | `vm.create` | Start one idempotent background create and return its generated name. |
 | `vm.delete` | Destroy the exact sandbox and remove its registration. |
 | `vm.reconcile` | Resume setup and repair missing or stale registrations. |
+| `secrets.list` | The five names with `stored` and `environment` sources. No values. |
+| `secrets.set` | Write one fixed-name value. The value is never returned. |
+| `secrets.delete` | Remove one stored value. |
 
 The single Paseo screen contains:
 
-- A Create child button and confirmation with fixed resources and available credential checkboxes.
+- A Manage secrets action that adds, replaces, or removes values for the five fixed names without displaying them.
+- A Create child button and confirmation with fixed resources and available credential checkboxes marked Stored or Environment.
 - Rows for pending creates and managed children with phase, runtime status, and error.
 - A detail pane with bounded read-only logs, Repair, and Delete.
 - Clear loading, empty, partial-unavailable, and failed states.
@@ -135,6 +142,14 @@ Before feature code, one vertical spike must prove the exact pinned combination 
 - Guest Node >= 22.19, npm, non-root Pi install, and daemon-user PATH.
 - `.init("auto")`, loopback port publish/release, detached survival, stable IDs, config, logs, and job recovery.
 - Child registration, routed online, registration removal, and Pi provider refresh.
-- Header-only substitution for the five fixed credentials without exposing values.
+- Header-only substitution for the five fixed credentials without exposing values, from both stored and parent environment values.
 
-The release test drives the five RPCs through create, background progress, Pi readiness, reload during install, Repair, and Delete. It verifies one sandbox/job/registration per request ID and no credential in RPC output, logs, or persisted plugin state outside microsandbox and protected parent registration state.
+After feature code, the plugin-owned credential store must be verified to persist with owner-only permissions, accept only the five fixed names, and never return a value through an RPC, log, DTO, pending state, or label.
+
+The release test drives the five lifecycle RPCs through create, background progress, Pi readiness, reload during install, Repair, and Delete. It also sets a fake stored credential and verifies it reaches only the allowed substitution path and never appears in RPC output, logs, or persisted plugin state outside microsandbox and protected parent registration state. It verifies one sandbox/job/registration per request ID.
+
+## 9. V2 shopping list
+
+Some ideas for V2 features that would be interesting, just so we don't forget. Can be ignored for now:
+
+- ability to see used VM disk capacity and quick way to enlarge/shrink it

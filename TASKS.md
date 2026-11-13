@@ -95,6 +95,22 @@ Result: one sidebar screen renders the create confirmation, pending/managed list
 
 Files: `index.client.tsx`, `client/screen.tsx`, `client/CreateChild.tsx`, `client/ChildList.tsx`, `client/ChildDetail.tsx`, `client/hooks/`, `client/__tests__/`
 
+## 5b. Add a plugin-managed credential store
+
+Let the single screen manage the five fixed credential values instead of requiring the parent daemon environment to carry them.
+
+Acceptance:
+
+- [x] Values for only the five fixed names persist in a 0600 file under the Paseo home plugin data directory; `PASEO_MSB_SECRETS_FILE` overrides the path.
+- [x] `secrets.list`, `secrets.set`, and `secrets.delete` expose names and sources only; no RPC, log, DTO, pending state, or label ever returns a value.
+- [x] `vm.create` resolves a stored value before the parent environment and fails safely when the store is unavailable.
+- [x] The single screen can add, replace, and remove stored values, and the create confirmation marks each available name as Stored or Environment.
+- [x] Tests cover persistence, permissions, corrupt files, precedence, redaction, and unavailable stores.
+
+Result: the plugin owns a small file store (`<PASEO_HOME>/plugin-data/paseo-msb/secrets.json`, directory 0700, file 0600, overridable with `PASEO_MSB_SECRETS_FILE`). The five fixed names remain the only accepted keys and upstream allowlists are unchanged. Stored values take precedence over parent environment values for new VMs; existing VMs are unaffected until recreated. All list/detail redaction now covers both sources.
+
+Files: `server/secrets-store.ts`, `server/secrets.ts`, `shared/contracts.ts`, `server/index.ts`, `client/ManageSecrets.tsx`, `client/hooks/useSecrets.ts`, `tests/server/secrets-store.test.ts`
+
 ## 6. Pass the vertical release test and document operation
 
 Add one real-runtime test through the plugin RPCs and replace contributor speculation in README with concise operating instructions.
@@ -103,7 +119,7 @@ Acceptance:
 
 - [ ] Test drives all five RPCs: create returns immediately, independent list/detail calls observe progress, routed host reaches online, and Pi appears after refresh.
 - [ ] Reload during installation produces one sandbox, detached job, and registration; Repair restores a missing/stale registration without another VM.
-- [ ] A fake fixed credential reaches only the allowed substitution path and never appears in RPC output, logs, pending state, or test artifacts.
+- [ ] A fake fixed credential from the plugin store reaches only the allowed substitution path and never appears in RPC output, logs, pending state, or test artifacts.
 - [ ] Delete cleans the exact sandbox and registration; repeated delete and Repair are safe.
 - [ ] Test runs in the release check on the verified parent/runtime/image/Pi pins.
 - [ ] README records requirements, pins, the five parent env credentials, Create/Repair/Delete behavior, loopback trust boundary, reload limitations, and release-test command.
