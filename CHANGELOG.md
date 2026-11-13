@@ -38,6 +38,12 @@ open.
 - Updated the README, DESIGN, TASKS, and provisioning doc for the new selection model, six fixed
   credentials, 4096 MiB shape, provider toolchain pins, and remaining live matrix.
 
+### `1cfa860` — Write status on a plan-hash mismatch
+
+- Moved the provisioning status trap ahead of the plan-hash guard after a disposable-VM smoke test
+  showed that a wrong plan hash could leave a stale success status in place. Added a regression
+  assertion for the trap ordering.
+
 ## 2026-11-02
 
 ### `a8e5715` — Initial commit
