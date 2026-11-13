@@ -1,0 +1,8 @@
+{
+  "id": "paseo-msb",
+  "name": "Paseo microVM hosts",
+  "description": "Create microsandbox microVMs and use them as Paseo hosts.",
+  "requirements": {
+    "paseo": ">=0.15.4"
+  }
+}

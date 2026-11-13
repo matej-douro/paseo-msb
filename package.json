@@ -3,11 +3,35 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "description": "Paseo plugin that turns microsandbox microVMs into Paseo hosts.",
+  "files": [
+    "paseo-plugin.json",
+    "index.client.tsx",
+    "index.server.ts",
+    "client/",
+    "server/",
+    "shared/"
+  ],
   "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "spike:vertical": "node scripts/spikes/verify-vertical-slice.mjs"
   },
   "dependencies": {
     "@getpaseo/client": "0.15.4",
     "microsandbox": "0.7.14"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "0.15.4",
+    "@getpaseo/protocol": "0.15.4",
+    "@tanstack/react-query": "^5.90.11",
+    "@types/node": "^24.0.0",
+    "@types/react": "~19.2.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "zod": "^4.4.3"
   }
 }
