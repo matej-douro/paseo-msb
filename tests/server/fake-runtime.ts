@@ -9,6 +9,7 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_SOURCE,
   SANDBOX_ID_LABEL,
+  type CredentialName,
   type Phase,
 } from "../../shared/constants";
 import type {
@@ -32,9 +33,48 @@ import type {
   HostDirectoryLike,
   HostRegistrationLike,
 } from "../../server/status";
+import type { SecretsStore } from "../../server/secrets-store";
 
 export const PARENT_ID = "srv_parent";
 export const SECRET_VALUE = "fake-anthropic-secret-value-123";
+
+/** In-memory store for create and RPC tests; never touches the filesystem. */
+export function memorySecretsStore(
+  initial: Partial<Record<CredentialName, string>> = {},
+): SecretsStore {
+  const values = new Map<CredentialName, string>();
+  for (const [name, value] of Object.entries(initial)) {
+    if (typeof value === "string") values.set(name as CredentialName, value);
+  }
+
+  return {
+    filePath: "/memory/paseo-msb/secrets.json",
+    async read() {
+      return { status: "ok", values: new Map(values) };
+    },
+    async set(name, value) {
+      values.set(name, value);
+    },
+    async delete(name) {
+      return values.delete(name);
+    },
+  };
+}
+
+export function unavailableSecretsStore(): SecretsStore {
+  return {
+    filePath: "/memory/paseo-msb/secrets.json",
+    async read() {
+      return { status: "unavailable", values: new Map() };
+    },
+    async set() {
+      throw new Error("secrets unavailable");
+    },
+    async delete() {
+      throw new Error("secrets unavailable");
+    },
+  };
+}
 
 export interface ManagedLabelOptions {
   id: string;

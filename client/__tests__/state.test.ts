@@ -13,6 +13,7 @@ import {
   childErrorText,
   childPhase,
   childTone,
+  credentialSourceLabel,
   deleteConfirmationText,
   findChild,
   inventoryNotice,
@@ -25,6 +26,7 @@ import {
   registrationTone,
   registrationsNotice,
   runtimeText,
+  secretSource,
   toggleCredential,
 } from "../state";
 
@@ -60,6 +62,23 @@ describe("create selection", () => {
   it("requires at least one credential", () => {
     expect(canCreate([])).toBe(false);
     expect(canCreate(["GH_TOKEN"])).toBe(true);
+  });
+
+  it("labels where a credential value comes from", () => {
+    expect(credentialSourceLabel("GH_TOKEN", [])).toBe("Environment");
+    expect(credentialSourceLabel("GH_TOKEN", ["GH_TOKEN"])).toBe("Stored");
+    expect(secretSource({ name: "GH_TOKEN", stored: true, environment: true })).toEqual({
+      label: "Stored",
+      tone: "accent",
+    });
+    expect(secretSource({ name: "GH_TOKEN", stored: false, environment: true })).toEqual({
+      label: "Environment",
+      tone: "muted",
+    });
+    expect(secretSource({ name: "GH_TOKEN", stored: false, environment: false })).toEqual({
+      label: "Not set",
+      tone: "warning",
+    });
   });
 });
 
@@ -127,6 +146,7 @@ describe("list states", () => {
         inventory: { status: "available" },
         registrations: { status: "available" },
         credentials: [],
+        storedCredentials: [],
         children: [],
       }),
     ).toBe(true);
@@ -135,6 +155,7 @@ describe("list states", () => {
         inventory: { status: "available" },
         registrations: { status: "available" },
         credentials: ["GH_TOKEN"],
+        storedCredentials: [],
         children: [PENDING],
       }),
     ).toBe(false);

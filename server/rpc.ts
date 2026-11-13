@@ -1,5 +1,5 @@
 import type { VmDetailInput, VmDetailResult, VmListResult } from "../shared/contracts";
-import { JOB_LABEL } from "../shared/constants";
+import { JOB_LABEL, type CredentialName } from "../shared/constants";
 import { safeError, type SafeError } from "../shared/errors";
 import {
   credentialValues,
@@ -21,6 +21,8 @@ export interface ReadContext {
   readonly runtime: SandboxRuntime;
   readonly pending: readonly PendingCreate[];
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly storedCredentials: readonly CredentialName[];
+  readonly storedSecrets: ReadonlyMap<CredentialName, string>;
 }
 
 type DirectoryLoad =
@@ -62,6 +64,7 @@ async function readProjection(context: ReadContext): Promise<Projection> {
       registrations,
       pending: context.pending,
       env: context.env,
+      storedCredentials: context.storedCredentials,
     }),
     inventory,
   };
@@ -90,7 +93,7 @@ export async function readVmDetail(
     );
 
     if (sandbox) {
-      const secrets = credentialValues(context.env);
+      const secrets = credentialValues(context.env, context.storedSecrets);
       const jobId = sandbox.sandbox.labels[JOB_LABEL];
       logs = {
         sandbox: await readSandboxLogs(sandbox.handle, secrets),

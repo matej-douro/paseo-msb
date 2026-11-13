@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  secretsDeleteRpc,
+  secretsListRpc,
+  secretsSetRpc,
   vmCreateRpc,
   vmDeleteRpc,
   vmDetailRpc,
   vmListRpc,
   vmReconcileRpc,
+  SecretsSetInputSchema,
   VmCreateInputSchema,
   VmDeleteInputSchema,
   VmDetailInputSchema,
@@ -14,12 +18,15 @@ import {
 const requestId = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
 
 describe("RPC contracts", () => {
-  it("registers exactly the five v1 contracts", () => {
+  it("registers the five lifecycle contracts and the credential store", () => {
     expect(
       [vmListRpc, vmDetailRpc, vmCreateRpc, vmDeleteRpc, vmReconcileRpc].map(
         (contract) => contract.name,
       ),
     ).toEqual(["vm.list", "vm.detail", "vm.create", "vm.delete", "vm.reconcile"]);
+    expect([secretsListRpc, secretsSetRpc, secretsDeleteRpc].map((contract) => contract.name)).toEqual(
+      ["secrets.list", "secrets.set", "secrets.delete"],
+    );
   });
 
   it("accepts a strict create request with fixed credential names only", () => {
@@ -74,11 +81,31 @@ describe("RPC contracts", () => {
     );
   });
 
+  it("requires a fixed credential name and a non-blank stored value", () => {
+    expect(
+      SecretsSetInputSchema.safeParse({ name: "OPENAI_API_KEY", value: "sk-test" }).success,
+    ).toBe(true);
+    expect(
+      SecretsSetInputSchema.safeParse({ name: "CUSTOM_TOKEN", value: "sk-test" }).success,
+    ).toBe(false);
+    expect(
+      SecretsSetInputSchema.safeParse({ name: "OPENAI_API_KEY", value: "   " }).success,
+    ).toBe(false);
+    expect(
+      SecretsSetInputSchema.safeParse({
+        name: "OPENAI_API_KEY",
+        value: "sk-test",
+        stored: true,
+      }).success,
+    ).toBe(false);
+  });
+
   it("does not allow raw config fields in the list DTO", () => {
     const result = {
       inventory: { status: "available" },
       registrations: { status: "available" },
       credentials: ["ANTHROPIC_API_KEY"],
+      storedCredentials: [],
       children: [
         {
           kind: "sandbox",

@@ -25,6 +25,7 @@ export const SAFE_ERROR_CODES = [
   "registration_timeout",
   "provider_unavailable",
   "delete_failed",
+  "secrets_unavailable",
 ] as const;
 
 export type SafeErrorCode = (typeof SAFE_ERROR_CODES)[number];
@@ -50,6 +51,7 @@ export const SAFE_ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   registration_timeout: "The child did not become reachable.",
   provider_unavailable: "Pi is not ready in the child.",
   delete_failed: "The sandbox could not be destroyed.",
+  secrets_unavailable: "The plugin credential store is unavailable.",
 };
 
 export const SafeErrorSchema = z

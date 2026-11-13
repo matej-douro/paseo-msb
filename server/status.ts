@@ -46,6 +46,7 @@ export interface VmListInput {
   readonly registrations: RegistrationsView;
   readonly pending: readonly PendingCreate[];
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly storedCredentials?: readonly CredentialName[];
 }
 
 const RegistrationStatusSchema = new Set<string>(REGISTRATION_STATUSES);
@@ -57,8 +58,10 @@ function normalizeRegistrationStatus(value: string): RegistrationStatus {
 /** Reports names only. Values never leave the parent process. */
 export function availableCredentialNames(
   env: Readonly<Record<string, string | undefined>>,
+  stored: readonly CredentialName[] = [],
 ): CredentialName[] {
   return CREDENTIAL_NAMES.filter((name) => {
+    if (stored.includes(name)) return true;
     const value = env[name];
     return typeof value === "string" && value.trim().length > 0;
   });
@@ -180,7 +183,8 @@ export function buildVmList(input: VmListInput): VmListResult {
   return {
     inventory: availabilityOf(input.inventory),
     registrations: registrationsAvailability(input.registrations),
-    credentials: availableCredentialNames(input.env),
+    credentials: availableCredentialNames(input.env, input.storedCredentials ?? []),
+    storedCredentials: [...(input.storedCredentials ?? [])],
     children,
   };
 }

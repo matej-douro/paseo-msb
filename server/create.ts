@@ -1,4 +1,9 @@
-import { JOB_LABEL, PHASE_LABEL, SANDBOX_ID_LABEL } from "../shared/constants";
+import {
+  JOB_LABEL,
+  PHASE_LABEL,
+  SANDBOX_ID_LABEL,
+  type CredentialName,
+} from "../shared/constants";
 import type { VmCreateInput, VmCreateResult } from "../shared/contracts";
 import { safeError, type SafeErrorCode } from "../shared/errors";
 import {
@@ -23,6 +28,7 @@ import {
   type SandboxJobHandleLike,
 } from "./sandbox";
 import { resolveSelectedSecrets, type ResolvedSecret } from "./secrets";
+import type { SecretsStore } from "./secrets-store";
 
 const MAX_CREATE_ATTEMPTS = 3;
 const DEFAULT_INSTALL_TIMEOUT_MS = 600_000;
@@ -47,6 +53,7 @@ export interface CreateContext extends RegistrationContext {
   readonly creator: SandboxCreator;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly pending: PendingCreateStore;
+  readonly secretsStore: SecretsStore;
   /** Bounded wait for the detached Pi install; tests shorten it. */
   readonly installTimeoutMs?: number;
 }
@@ -65,7 +72,12 @@ export async function createVm(
   context: CreateContext,
   input: VmCreateInput,
 ): Promise<VmCreateResult> {
-  const attempt = startCreate(context, input);
+  const stored = await context.secretsStore.read();
+  if (stored.status !== "ok") {
+    throw new Error(safeError("secrets_unavailable").message);
+  }
+
+  const attempt = startCreate(context, input, stored.values);
   void attempt.started.catch(() => {});
   return { name: attempt.name };
 }
@@ -75,7 +87,11 @@ export async function createVm(
  * returns the same name and starts nothing; restarting an empty pre-create
  * failure reuses the same name but replays no side effects.
  */
-export function startCreate(context: CreateContext, input: VmCreateInput): CreateAttempt {
+export function startCreate(
+  context: CreateContext,
+  input: VmCreateInput,
+  stored: ReadonlyMap<CredentialName, string> = new Map(),
+): CreateAttempt {
   const { requestId } = input;
   const existing = context.pending.find(requestId);
 
@@ -83,7 +99,7 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
     return { name: existing.name, started: Promise.resolve() };
   }
 
-  const resolution = resolveSelectedSecrets(input.secretEnvVars, context.env);
+  const resolution = resolveSelectedSecrets(input.secretEnvVars, context.env, stored);
   if (resolution.status === "missing") {
     throw new Error(safeError("missing_credentials").message);
   }

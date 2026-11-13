@@ -9,6 +9,7 @@ import type {
   Availability,
   LogBundle,
   Registration,
+  SecretEntry,
   VmChild,
   VmListResult,
   VmReconcileResult,
@@ -35,6 +36,21 @@ export function toggleCredential(
 /** The create confirmation requires at least one credential name. */
 export function canCreate(selected: readonly CredentialName[]): boolean {
   return selected.length > 0;
+}
+
+/** Where a credential value used for create will come from. */
+export function credentialSourceLabel(
+  name: CredentialName,
+  stored: readonly CredentialName[],
+): string {
+  return stored.includes(name) ? "Stored" : "Environment";
+}
+
+/** Management row source, including names that are not configured anywhere. */
+export function secretSource(entry: SecretEntry): { label: string; tone: Tone } {
+  if (entry.stored) return { label: "Stored", tone: "accent" };
+  if (entry.environment) return { label: "Environment", tone: "muted" };
+  return { label: "Not set", tone: "warning" };
 }
 
 export function phaseText(phase: Phase): string {

@@ -32,6 +32,8 @@ function context(runtime: ReadContext["runtime"], pending: ReadContext["pending"
     runtime,
     pending,
     env: { ANTHROPIC_API_KEY: SECRET_VALUE },
+    storedCredentials: [],
+    storedSecrets: new Map(),
   };
 }
 
@@ -148,5 +150,25 @@ describe("readVmDetail", () => {
       kind: "sandbox",
       registration: { registrationId: "reg_1", status: "online", serverId: "srv_child" },
     });
+  });
+
+  it("redacts values from the plugin credential store too", async () => {
+    const storedValue = "stored-secret-value-456";
+    const handle = fakeSandbox({
+      id: "sandbox_1",
+      name: "paseo-1",
+      logs: [logEntry(`token ${storedValue}`, 0)],
+    });
+    const detail = await readVmDetail(
+      {
+        ...context(fakeRuntime([handle])),
+        storedCredentials: ["OPENAI_API_KEY"],
+        storedSecrets: new Map([["OPENAI_API_KEY", storedValue]]),
+      },
+      { name: "paseo-1" },
+    );
+
+    expect(detail.logs.sandbox.entries[0].text).toBe("token [redacted]");
+    expect(JSON.stringify(detail)).not.toContain(storedValue);
   });
 });

@@ -192,6 +192,21 @@ describe("buildVmList", () => {
     });
   });
 
+  it("reports plugin-stored credentials by name only", () => {
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory: { status: "available", sandboxes: [], failures: [] },
+      registrations: { status: "available", hosts: [] },
+      pending: [],
+      env: {},
+      storedCredentials: ["OPENAI_API_KEY"],
+    });
+
+    expect(result.credentials).toEqual(["OPENAI_API_KEY"]);
+    expect(result.storedCredentials).toEqual(["OPENAI_API_KEY"]);
+    expect(VmListOutputSchema.parse(result)).toEqual(result);
+  });
+
   it("exposes no raw directory fields in the projection", async () => {
     const inventory = await loadManagedSandboxes(
       fakeRuntime([fakeSandbox({ id: "sandbox_1", name: "paseo-1" })]),

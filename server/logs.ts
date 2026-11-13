@@ -3,6 +3,7 @@ import {
   MAX_LOG_ENTRIES,
   MAX_LOG_LINE_BYTES,
   MAX_LOG_TOTAL_BYTES,
+  type CredentialName,
 } from "../shared/constants";
 import type { LogBundle, LogLine } from "../shared/contracts";
 
@@ -33,13 +34,24 @@ function truncateToBytes(text: string): { text: string; truncated: boolean } {
   };
 }
 
-/** Replaces every fixed credential value present in the parent environment. */
+/**
+ * Replaces every fixed credential value present in the parent environment or
+ * the plugin store. Stored values win for create, but both are redacted.
+ */
 export function credentialValues(
   env: Readonly<Record<string, string | undefined>>,
+  stored: ReadonlyMap<CredentialName, string> = new Map(),
 ): string[] {
-  return CREDENTIAL_NAMES.map((name) => env[name])
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .sort((left, right) => right.length - left.length);
+  const values = new Set<string>();
+
+  for (const name of CREDENTIAL_NAMES) {
+    const environment = env[name];
+    if (typeof environment === "string" && environment.length > 0) values.add(environment);
+    const pluginValue = stored.get(name);
+    if (typeof pluginValue === "string" && pluginValue.length > 0) values.add(pluginValue);
+  }
+
+  return [...values].sort((left, right) => right.length - left.length);
 }
 
 export function redact(text: string, secrets: readonly string[]): string {

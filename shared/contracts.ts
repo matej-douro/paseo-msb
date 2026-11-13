@@ -97,6 +97,7 @@ export const VmListOutputSchema = z
     inventory: AvailabilitySchema,
     registrations: AvailabilitySchema,
     credentials: z.array(CredentialNameSchema),
+    storedCredentials: z.array(CredentialNameSchema),
     children: z.array(VmChildSchema),
   })
   .strict();
@@ -178,6 +179,53 @@ export const VmReconcileOutputSchema = z
   })
   .strict();
 
+const SecretEntrySchema = z
+  .object({
+    name: CredentialNameSchema,
+    stored: z.boolean(),
+    environment: z.boolean(),
+  })
+  .strict();
+
+export const SecretsListOutputSchema = z
+  .object({
+    storePath: z.string().min(1).max(4096),
+    secrets: z.array(SecretEntrySchema),
+  })
+  .strict();
+
+export const SecretsSetInputSchema = z
+  .object({
+    name: CredentialNameSchema,
+    value: z
+      .string()
+      .min(1)
+      .max(4096)
+      .refine((value) => value.trim().length > 0, {
+        message: "value must not be blank",
+      }),
+  })
+  .strict();
+
+export const SecretsSetOutputSchema = z
+  .object({
+    name: CredentialNameSchema,
+  })
+  .strict();
+
+export const SecretsDeleteInputSchema = z
+  .object({
+    name: CredentialNameSchema,
+  })
+  .strict();
+
+export const SecretsDeleteOutputSchema = z
+  .object({
+    name: CredentialNameSchema,
+    removed: z.boolean(),
+  })
+  .strict();
+
 export const vmListRpc = defineRpc({
   name: "vm.list",
   input: z.object({}).strict().optional(),
@@ -208,6 +256,24 @@ export const vmReconcileRpc = defineRpc({
   output: VmReconcileOutputSchema,
 });
 
+export const secretsListRpc = defineRpc({
+  name: "secrets.list",
+  input: z.object({}).strict().optional(),
+  output: SecretsListOutputSchema,
+});
+
+export const secretsSetRpc = defineRpc({
+  name: "secrets.set",
+  input: SecretsSetInputSchema,
+  output: SecretsSetOutputSchema,
+});
+
+export const secretsDeleteRpc = defineRpc({
+  name: "secrets.delete",
+  input: SecretsDeleteInputSchema,
+  output: SecretsDeleteOutputSchema,
+});
+
 export type VmListResult = z.infer<typeof VmListOutputSchema>;
 export type VmDetailInput = z.infer<typeof VmDetailInputSchema>;
 export type VmDetailResult = z.infer<typeof VmDetailOutputSchema>;
@@ -218,6 +284,10 @@ export type VmDeleteInput = z.infer<typeof VmDeleteInputSchema>;
 export type VmDeleteResult = z.infer<typeof VmDeleteOutputSchema>;
 export type VmReconcileInput = z.infer<typeof VmReconcileInputSchema>;
 export type VmReconcileResult = z.infer<typeof VmReconcileOutputSchema>;
+export type SecretsListResult = z.infer<typeof SecretsListOutputSchema>;
+export type SecretEntry = z.infer<typeof SecretEntrySchema>;
+export type SecretsSetInput = z.infer<typeof SecretsSetInputSchema>;
+export type SecretsDeleteInput = z.infer<typeof SecretsDeleteInputSchema>;
 export type Availability = z.infer<typeof AvailabilitySchema>;
 export type Registration = z.infer<typeof RegistrationSchema>;
 export type ManagedLabels = z.infer<typeof ManagedLabelsSchema>;

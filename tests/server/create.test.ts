@@ -22,8 +22,10 @@ import {
   fakeSandbox,
   FakePaseoHosts,
   FakeSandboxCreator,
+  memorySecretsStore,
   PARENT_ID,
   SECRET_VALUE,
+  unavailableSecretsStore,
 } from "./fake-runtime";
 
 const REQUEST_ID = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
@@ -63,6 +65,7 @@ function createContext(
     creator,
     env: { ANTHROPIC_API_KEY: SECRET_VALUE, GH_TOKEN: "gh-secret-value" },
     pending: createPendingCreateStore(),
+    secretsStore: memorySecretsStore(),
     installTimeoutMs: 250,
     timeoutMs: 250,
     pollMs: 1,
@@ -280,6 +283,59 @@ describe("createVm", () => {
     );
     await expect(createVm(context, input)).rejects.toThrow(
       safeError("missing_credentials").message,
+    );
+
+    expect(context.pending.list()).toEqual([]);
+    expect(creator.createCount).toBe(0);
+  });
+
+  it("resolves a plugin-stored credential before the parent environment", async () => {
+    const creator = new FakeSandboxCreator();
+    const context = createContext(creator, {
+      env: { ANTHROPIC_API_KEY: "env-value" },
+      secretsStore: memorySecretsStore({ ANTHROPIC_API_KEY: "stored-value" }),
+    });
+
+    const attempt = startCreate(
+      context,
+      INPUT,
+      new Map([["ANTHROPIC_API_KEY", "stored-value"]]),
+    );
+    await attempt.started;
+
+    expect(creator.requests[0].secrets).toEqual([
+      {
+        envVar: "ANTHROPIC_API_KEY",
+        value: "stored-value",
+        allowedHosts: ["api.anthropic.com"],
+      },
+    ]);
+  });
+
+  it("reads the plugin store when vm.create resolves credentials", async () => {
+    const creator = new FakeSandboxCreator();
+    const context = createContext(creator, {
+      env: {},
+      secretsStore: memorySecretsStore({ GH_TOKEN: "stored-gh-token" }),
+    });
+    const input: VmCreateInput = { requestId: REQUEST_ID, secretEnvVars: ["GH_TOKEN"] };
+
+    await expect(createVm(context, input)).resolves.toEqual({ name: NAME });
+    await waitFor(() => creator.requests.length === 1);
+
+    expect(creator.requests[0].secrets[0]).toMatchObject({
+      envVar: "GH_TOKEN",
+      value: "stored-gh-token",
+    });
+    await waitFor(() => context.pending.list().length === 0);
+  });
+
+  it("fails safely when the credential store is unavailable", async () => {
+    const creator = new FakeSandboxCreator();
+    const context = createContext(creator, { secretsStore: unavailableSecretsStore() });
+
+    await expect(createVm(context, INPUT)).rejects.toThrow(
+      safeError("secrets_unavailable").message,
     );
 
     expect(context.pending.list()).toEqual([]);
