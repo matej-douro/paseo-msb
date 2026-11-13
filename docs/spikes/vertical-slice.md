@@ -1,6 +1,6 @@
 # Vertical slice results
 
-Task 1 of [TASKS.md](../../TASKS.md). Verified on 2026-11-13 on macOS arm64
+Task 1 of the v1 plan, recorded in [CHANGELOG.md](../../CHANGELOG.md). Verified on 2026-11-13 on macOS arm64
 (Apple silicon), using the real microsandbox runtime, the official Paseo image,
 and a real parent daemon.
 

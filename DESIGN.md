@@ -1,6 +1,6 @@
 # paseo-msb: minimal VM-backed Paseo hosts
 
-Status: minimal v1 target design. Implementation and remaining verification are tracked in [TASKS.md](./TASKS.md); review evidence is in [FINDINGS.md](./FINDINGS.md).
+Status: minimal v1 target design. Completed implementation is recorded in [CHANGELOG.md](./CHANGELOG.md); remaining verification is tracked in [TASKS.md](./TASKS.md).
 
 A Paseo parent-daemon plugin that creates, lists, repairs, and deletes microsandbox VMs running Paseo with Pi. Children appear in Paseo's normal host picker. All lifecycle management happens through the plugin's Paseo UI, not the `msb` CLI.
 

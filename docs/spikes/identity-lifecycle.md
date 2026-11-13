@@ -1,6 +1,6 @@
 # Identity and lifecycle spike results
 
-Task 7 of [TASKS.md](../../TASKS.md), required by [DESIGN.md](../../DESIGN.md)
+Task 7 of the v1 plan, recorded in [CHANGELOG.md](../../CHANGELOG.md) and required by [DESIGN.md](../../DESIGN.md)
 section 8 before lifecycle code changes. Verified on 2026-11-13 on macOS arm64
 (Apple silicon) with `msb 0.7.14`, `microsandbox@0.7.14`, parent daemon
 `0.15.4`, and `ghcr.io/getpaseo/paseo:0.15.4`.
