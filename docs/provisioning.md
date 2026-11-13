@@ -1,11 +1,10 @@
 # Provisioning harnesses and tools
 
-Status: **shared layer implemented, live wiring pending.** The catalog, planner,
-script renderer, and status contract exist in `shared/provisioning/` with unit
-tests. `vm.create`, the reconciler, registration, and the client still use the
-v1 `secretEnvVars` path and the pinned Pi-only install.
-
-This document is the agreed target design for the wiring slices.
+Status: **implemented in the live create path.** The catalog, planner, script
+renderer, and status contract live in `shared/provisioning/`; `vm.create`, the
+reconciler, registration, and the client now use the provider/integration plan.
+Unit and fake-runtime contracts pass. The real-runtime release matrix is still
+open in [TASKS.md](../TASKS.md).
 
 ## Selection model
 
@@ -154,18 +153,20 @@ The NeuralWatt extension declares an exact `@earendil-works/pi-ai@1.5.0` peer
 while Pi `1.5.2` ships `1.5.2`. The mismatch is accepted deliberately; the live
 release test is the gate.
 
-## Wiring slices
+## Implementation status
 
 1. **Shared layer** (done): catalog, plan resolution, script rendering, status
    parsing, and unit tests.
-2. **Contracts and create**: replace `secretEnvVars` with the plan, persist
-   `PASEO_MSB_PLAN`, derive the injected credential names, add
-   `CLAUDE_CODE_OAUTH_TOKEN`, and change the default VM memory to 4096 MiB.
-3. **Reconciler and registration**: materialize the script, launch the generic
-   provision job, parse status, refresh and confirm the selected Paseo
-   providers, and keep fatal failure semantics.
-4. **Client**: collapsible Providers and Integrations sections, availability
-   reasons, nested options, derived-credential confirmation, and plan detail.
-5. **Verification**: fake-runtime contracts for the new job and status path,
-   plus the real-runtime release test for Pi + NeuralWatt, Claude Code, and
-   `gh`, including an injected step failure and retry.
+2. **Contracts and create** (done): `secretEnvVars` is replaced by the plan,
+   `PASEO_MSB_PLAN` is persisted, only required credentials are injected,
+   `CLAUDE_CODE_OAUTH_TOKEN` is a fixed name, and the default VM memory is 4096
+   MiB.
+3. **Reconciler and registration** (done): the script is materialized, the
+   generic provision job is launched, `status.json` is parsed, the selected
+   Paseo providers are refreshed and confirmed, and failures are fatal.
+4. **Client** (done): collapsible Providers and Integrations sections,
+   availability reasons, nested options, derived-credential confirmation, and
+   plan detail.
+5. **Verification** (open): fake-runtime contracts cover the job and status
+   path. The real-runtime release test has been updated to the plan/provision
+   flow but has not been run on the documented pins; see [TASKS.md](../TASKS.md).

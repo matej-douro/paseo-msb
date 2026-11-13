@@ -2,14 +2,14 @@
 
 Status: minimal v1 target design. Completed implementation is recorded in [CHANGELOG.md](./CHANGELOG.md); remaining verification is tracked in [TASKS.md](./TASKS.md).
 
-A Paseo parent-daemon plugin that creates, lists, repairs, and deletes microsandbox VMs running Paseo with Pi. Children appear in Paseo's normal host picker. All lifecycle management happens through the plugin's Paseo UI, not the `msb` CLI.
+A Paseo parent-daemon plugin that creates, lists, repairs, and deletes microsandbox VMs running Paseo with the selected agent providers. Children appear in Paseo's normal host picker. All lifecycle management happens through the plugin's Paseo UI, not the `msb` CLI.
 
 ## 1. V1 scope
 
 V1 has exactly five user flows:
 
-1. **Manage credentials**: add, replace, or remove values for five fixed names in the plugin's shared store. The UI never displays a stored value.
-2. **Create**: select available Pi credentials by name and confirm a fixed image, 2 CPUs, and 2048 MiB memory. The VM name is generated.
+1. **Manage credentials**: add, replace, or remove values for six fixed names in the plugin's shared store. The UI never displays a stored value.
+2. **Create**: select providers and integrations and confirm a fixed image, 2 CPUs, and 4096 MiB memory. Secrets decide which options are selectable; the selection decides which credentials enter the child. The VM name is generated.
 3. **Use**: watch creation and Pi installation progress, then open the child through Paseo's normal host UI.
 4. **Repair**: resume interrupted setup, restore a missing registration, or remove a confirmed stale plugin-owned registration.
 5. **Delete**: confirm in Paseo, destroy the exact sandbox generation, and remove its registration.
@@ -25,7 +25,7 @@ Everything else is out of scope: custom names or sizes, image selection, stop/st
 | Microsandbox | Authoritative sandbox inventory, generation IDs, config, runtime state, labels, logs, and detached jobs. |
 | Parent daemon | Authoritative host registrations, routed connections, and online state. |
 
-There is **no Paseo settings document**. Volatile plugin state is limited to pending creates and in-flight per-name lifecycle lanes. The only durable plugin-owned state is the credential store in section 5. Pending creates retain the request ID and selected credential **names**, never values.
+There is **no Paseo settings document**. Volatile plugin state is limited to pending creates and in-flight per-name lifecycle lanes. The only durable plugin-owned state is the credential store in section 5. Pending creates retain the request ID and the canonical provider/integration plan, never values.
 
 The app polls `vm.list` and `vm.detail` only while the screen is mounted. Polling observes host work; it does not drive it. Detached VMs and Pi install jobs continue without the UI.
 
@@ -43,7 +43,7 @@ There is no atomic transaction spanning microsandbox and the parent daemon. Life
 
 ## 3. Identity and state
 
-The client generates a UUID `requestId`. The sandbox name is `paseo-<requestId>` and is the logical identifier used by the UI, lookup, and ownership. Strict name-create prevents duplicate allocation. Reusing a live request ID joins the same reconciliation; once Delete leaves neither sandbox nor registration, reuse creates a new generation. A repeated request must use the original credential names, recovered from pending state or sandbox config; different names are rejected.
+The client generates a UUID `requestId`. The sandbox name is `paseo-<requestId>` and is the logical identifier used by the UI, lookup, and ownership. Strict name-create prevents duplicate allocation. Reusing a live request ID joins the same reconciliation; once Delete leaves neither sandbox nor registration, reuse creates a new generation. A repeated request must use the original provider/integration plan, recovered from pending state or `PASEO_MSB_PLAN`; a different plan is rejected. Legacy children without the plan variable are treated as Pi-only.
 
 The name owns the current managed generation. Microsandbox `handle.id` is the generation token, not a second identity duplicated into sandbox labels. Delete retains the token so a stale client cannot destroy a replacement. Every guest operation and destroy uses the exact loaded handle and verifies its generation; an unverified fresh name lookup is not a valid reconnect.
 
@@ -92,45 +92,48 @@ without one.
 
 ## 4. Create, reconciliation, and readiness
 
-`vm.create({ requestId, secretEnvVars })` validates the fixed input, records a pending attempt, starts host-side work, and returns `{ name }` immediately. Background Create, startup recovery, and manual Repair all call the same idempotent reconciler. At most one operation advances a name at a time; plugin cleanup aborts further side effects promptly, and runners revalidate their generation/tombstone after uncertain awaits.
+`vm.create({ requestId, plan })` validates the fixed input, records a pending attempt, starts host-side work, and returns `{ name }` immediately. The plan contains provider and LLM identifiers plus integrations; it never contains values. Background Create, startup recovery, and manual Repair all call the same idempotent reconciler. At most one operation advances a name at a time; plugin cleanup aborts further side effects promptly, and runners revalidate their generation/tombstone after uncertain awaits.
 
 The reconciler observes actual resources and advances only unambiguous steps:
 
-1. Check parent/runtime feature floors and locate the current named sandbox. Only when initial creation is needed, resolve selected credential values from the store, then the parent environment. Recovery of an existing sandbox needs only the original credential names from pending state or config, never their old values.
-2. If the sandbox is absent, strictly create the pinned, fixed-size, detached sandbox with managed labels and a loopback-only published port for guest 6767. The verified image requires explicit `/usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint`; host port `0` is unsupported, so probe and retry internally. If create fails but the named managed sandbox appeared, continue through that exact handle.
-3. Check the exact daemon-user Pi path/version. If installation is needed, rediscover the detached job through complete job inventory and exact pinned argv: await one active match, start only when no match exists, and reject ambiguous active duplicates. Never start another job because inventory or inspection failed. Preserve uncertain `JobError.jobId` values when available.
-4. After a confirmed successful install, verify `pi` resolves at the pinned path/version as `paseo`, then move to `registering`.
-5. Ensure the exact producer/source-key registration with idempotent `hosts.add` or deliberate `hosts.update`, wait for routed online, call `providers.refresh()`, and confirm Pi is ready in a provider snapshot before moving to `ready`.
+1. Check parent/runtime feature floors and locate the current named sandbox. Only when initial creation is needed, resolve the plan's required credential values from the store, then the parent environment. Recovery of an existing sandbox needs only the persisted plan, never old values.
+2. If the sandbox is absent, strictly create the pinned, fixed-size, detached sandbox with managed labels, `PASEO_MSB_PLAN`, only the selected header-only secrets, and a loopback-only published port for guest 6767. The verified image requires explicit `/usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint`; host port `0` is unsupported, so probe and retry internally. If create fails but the named managed sandbox appeared, continue through that exact handle.
+3. Materialize the content-addressed `/home/paseo/.paseo-msb/provision-<planHash>.sh` and run it as one detached job. The status file is the success proof; each step probes first, so a retry skips completed work. Await one active matching job, never start another because inventory or inspection failed, and preserve uncertain `JobError.jobId` values when available.
+4. After a successful status, move to `registering`.
+5. Ensure the exact producer/source-key registration with idempotent `hosts.add` or deliberate `hosts.update`, wait for routed online, call `providers.refresh({ providers: selected })`, and confirm every selected provider in a provider snapshot before moving to `ready`.
 
 The child daemon binds only to parent loopback and runs without `PASEO_PASSWORD`; the authenticated parent is the security boundary.
 
-Failures preserve sandboxes, jobs, and registrations for inspection. Running jobs, timeouts, inspection failures, registration failures/timeouts, and provider unavailability are retryable or unknown—not automatic terminal failures. Only a confirmed unsuccessful install is a terminal failed-install state. Actual Pi readiness wins over missing historical job state. Retrying an empty pre-create failure uses the same request ID; once a sandbox exists, repeated Create joins reconciliation rather than replaying side effects.
+Provisioning failures are fatal and preserve the sandbox, jobs, and registration for inspection and retry. Running jobs, timeouts, inspection failures, registration failures/timeouts, and provider unavailability keep the actionable phase and a safe error; Retry create or Repair re-runs the idempotent script. Retrying an empty pre-create failure uses the same request ID; once a sandbox exists, repeated Create joins reconciliation rather than replaying side effects. After `ready`, the plugin does not observe tool health, repair drift, or re-provision.
 
 Detached VMs normally remain running across plugin and parent-daemon restarts. V1 neither starts a stopped VM nor provides separate lifecycle controls.
 
-## 5. Pi secret passthrough
+## 5. Credential passthrough
 
-V1 supports only these five credential names:
+V1 supports only these six credential names:
 
 | Guest environment variable | Allowed upstream hosts |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | `api.anthropic.com` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `api.anthropic.com` |
 | `OPENAI_API_KEY` | `api.openai.com` |
 | `GEMINI_API_KEY` | `generativelanguage.googleapis.com` |
 | `NEURALWATT_API_KEY` | `api.neuralwatt.com` |
 | `GH_TOKEN` | `api.github.com`, `github.com`, `uploads.github.com` |
 
-Values come from the plugin's shared store first, then the parent process environment. The store lives at `<PASEO_HOME>/plugin-data/paseo-msb/secrets.json` (directory `0700`, file `0600`) and may be relocated with `PASEO_MSB_SECRETS_FILE`. It accepts only the five fixed names; unknown keys are ignored on read and rejected on write.
+Values come from the plugin's shared store first, then the parent process environment. The store lives at `<PASEO_HOME>/plugin-data/paseo-msb/secrets.json` (directory `0700`, file `0600`) and may be relocated with `PASEO_MSB_SECRETS_FILE`. It accepts only the six fixed names; unknown keys are ignored on read and rejected on write.
 
-`vm.list` reports available names and stored names. Create requires at least one and never displays or accepts values in its confirmation. `secrets.list` returns names and sources only, `secrets.set` is the only write path, and `secrets.delete` removes a stored value. No RPC returns a value or host-local store path.
+`vm.list` reports available names and stored names. Create selects providers and integrations; every selected provider has at least one selected LLM option, and only the credentials those options require are sent to the child. Claude takes exactly one auth option (Anthropic API key or Claude subscription). Pi takes one or more of Anthropic, OpenAI, Gemini, and NeuralWatt. The GitHub CLI integration requires `GH_TOKEN` and is independent of providers. The confirmation never displays or accepts a value.
 
-The server reads selected values immediately before initial sandbox creation and builds microsandbox secrets with header substitution only. Guests receive placeholders; raw values remain in parent-controlled state and microsandbox config. TLS interception and guest CA setup are microsandbox responsibilities. Query/body substitution, placeholder passthrough configuration, OAuth stores, custom base URLs, and other providers are unsupported.
+`secrets.list` returns names and sources only, `secrets.set` is the only write path, and `secrets.delete` removes a stored value. No RPC returns a value or host-local store path.
+
+The server reads the plan's required values immediately before initial sandbox creation and builds microsandbox secrets with header substitution only. Guests receive placeholders; raw values remain in parent-controlled state and microsandbox config. TLS interception and guest CA setup are microsandbox responsibilities. Query/body substitution, placeholder passthrough configuration, interactive OAuth stores, custom base URLs, and providers not in the catalog are unsupported.
 
 Public DTOs use allowlists and structured safe errors. Any intentionally exposed diagnostic or log is bounded and centrally redacted against current environment/store values plus relevant persisted values from managed VM config—the selected VM for detail and all relevant VMs for inventory-wide errors. Removing or replacing a credential must not disable redaction for an existing VM. Redaction protects RPC output; separate raw-sink verification is still required because it cannot erase values already written elsewhere.
 
 ## 6. Repair and deletion
 
-`vm.reconcile` is the single Repair mutation and uses the reconciler in section 4. It resumes unambiguous install/registration work, restores missing registrations, and removes confirmed stale plugin-owned registrations. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed failed-install state. It does not initiate deletion; completing an existing `deleting` tombstone is Delete cleanup, not a new Repair deletion.
+`vm.reconcile` is the single Repair mutation and uses the reconciler in section 4. It resumes unambiguous provisioning/registration work, restores missing registrations, and removes confirmed stale plugin-owned registrations. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It does not initiate deletion; completing an existing `deleting` tombstone is Delete cleanup, not a new Repair deletion.
 
 Absence from managed, decoded, label-filtered inventory is not proof of deletion. Stale-registration removal requires either:
 
@@ -153,39 +156,39 @@ A failure after destruction leaves a visible, actionable registration-only child
 
 | RPC | Purpose |
 | --- | --- |
-| `vm.list` | Pending, sandbox, and registration-only children; available/stored credential names; progress, status, and safe errors. |
-| `vm.detail` | One child, its registration state, and bounded sandbox/job logs when a sandbox exists. |
-| `vm.create` | Start or join one idempotent background create and return its generated name. |
+| `vm.list` | Pending, sandbox, and registration-only children; available/stored credential names; each child's plan and progress; safe errors. |
+| `vm.detail` | One child, its plan and registration state, and bounded sandbox/provision-job logs when a sandbox exists. |
+| `vm.create` | Start or join one idempotent background create from a provider/integration plan and return its generated name. |
 | `vm.delete` | Destroy the exact generation and remove its registration. |
-| `vm.reconcile` | Resume setup and repair missing or confirmed stale registrations. |
-| `secrets.list` | The five names with `stored` and `environment` sources. No values or store path. |
+| `vm.reconcile` | Resume provisioning and repair missing or confirmed stale registrations. |
+| `secrets.list` | The six names with `stored` and `environment` sources. No values or store path. |
 | `secrets.set` | Write one fixed-name value. The value is never returned. |
 | `secrets.delete` | Remove one stored value. |
 
 The single Paseo screen contains:
 
 - Manage secrets, with add/replace/remove controls that never display values.
-- Create confirmation with fixed resources and available credential checkboxes marked Stored or Environment.
+- Create confirmation with fixed resources, collapsible **Providers** and **Integrations** sections, availability reasons, nested LLM options, and the derived credential names.
 - Rows for pending, sandbox, and registration-only children with two pills: setup health (the pipeline stage, or the stored safe error that names the stage that stalls it) and VM status (runtime, folded with registration reachability while running). Raw phase, runtime, and registration status stay in the detail sheet; the row keeps its safe error text.
-- Detail with bounded read-only logs as collapsible monospace blocks (line count in each header, timestamps in a separate column), Repair, and Delete.
-- Retry of a failed pending create with its original request ID and credential names, and working Repair/Delete for registration-only children.
+- Detail with the plan, bounded read-only logs as collapsible monospace blocks (line count in each header, timestamps in a separate column), Repair, and Delete.
+- Retry of a failed pending create with its original request ID and plan, and working Repair/Delete for registration-only children.
 - Clear loading, genuinely empty, partial-unavailable, and failed states. Unavailable inventory is never presented as empty or confirmed missing.
 
 There are no metrics, connection-copy controls, custom provider forms, or plugin-specific Open Host action. The registered child is used through Paseo's normal host picker.
 
 ## 8. Required verification and release bar
 
-The vertical spike must prove the exact pinned parent daemon, microsandbox SDK/runtime, guest image, and Pi package, including:
+The vertical spike must prove the exact pinned parent daemon, microsandbox SDK/runtime, guest image, and provider toolchain, including:
 
-- Guest Node >= 22.19, npm, non-root Pi install, daemon-user PATH, explicit tini fallback, loopback port publish/release, detached survival, config, and logs.
+- Guest Node >= 22.19, npm, non-root provider installs, daemon-user PATH, explicit tini fallback, loopback port publish/release, detached survival, config, and logs.
 - Exact-handle `refresh`, `connect`, `modify`, job listing, and destroy under same-name replacement.
-- Complete paginated job recovery, exact argv, running/exited/failed/lost states, and uncertain `JobError.jobId` handling across reload.
-- Real-plugin producer identity, unchanged-add idempotency, disabled-state preservation, changed-configuration updates, registration removal, routed online, and provider refresh.
-- Header-only substitution for all five credentials without exposing values to the guest, from both store and environment.
+- Complete paginated job recovery, exact plan-hash argv, running/exited/failed/lost states, status-file success proof, and uncertain `JobError.jobId` handling across reload.
+- Real-plugin producer identity, unchanged-add idempotency, disabled-state preservation, changed-configuration updates, registration removal, routed online, and selected-provider refresh.
+- Header-only substitution for all six credentials without exposing values to the guest, from both store and environment.
 
-The release test drives all lifecycle RPCs through Create, background progress, Pi readiness, reload during install and deletion, Repair, and Delete. Barriers/fault injection cover create, job launch, registration response, and destroy, plus concurrent Create/recovery/Repair/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active install, and one current registration per logical attempt. Malformed config and pagination failures never delete registrations.
+The release test drives all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and deletion, Repair, and Delete. Barriers/fault injection cover create, job launch, registration response, and destroy, plus concurrent Create/recovery/Repair/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active provision job, and one current registration per logical attempt. Malformed config and pagination failures never delete registrations.
 
-The credential store persists with owner-only permissions and fixed names only. Canary credentials, including removed/replaced creation-time values and injected upstream errors, never appear in RPC output, plugin logs, raw microsandbox sandbox/job/system logs, pending state, labels, or test artifacts outside approved secret config and intended upstream substitution. Store and environment paths are both covered.
+The credential store persists with owner-only permissions and the six fixed names. Canary credentials, including removed/replaced creation-time values and injected upstream errors, never appear in RPC output, plugin logs, raw microsandbox sandbox/job/system logs, pending state, labels, or test artifacts outside approved secret config and intended upstream substitution. Store and environment paths are both covered.
 
 `npm run typecheck`, `npm run lint`, `npm test`, and `npm run test:release` must pass on the verified pins.
 

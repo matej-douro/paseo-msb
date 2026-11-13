@@ -2,10 +2,10 @@
 
 A Paseo plugin that turns microsandbox microVMs into first-class Paseo hosts.
 
-Create a fixed-size child VM with selected Pi credentials and it appears in the
-Paseo host picker like any other machine, with its own workspaces, Pi agents,
-terminals, and diffs. Creation, repair, and deletion happen in the plugin's
-Paseo UI; day-to-day work happens in Paseo's normal host UI.
+Create a fixed-size child VM with selected agent providers and integrations and it appears in the
+Paseo host picker like any other machine, with its own workspaces, agents, terminals, and diffs.
+Creation, repair, and deletion happen in the plugin's Paseo UI; day-to-day work happens in Paseo's
+normal host UI.
 
 Design: [DESIGN.md](./DESIGN.md).
 Provisioning design, including the prepared shared layer and the remaining wiring: [docs/provisioning.md](./docs/provisioning.md).
@@ -22,8 +22,12 @@ Change history: [CHANGELOG.md](./CHANGELOG.md).
   (manifest `sha256:9a67fa9cc06e4a2f9d763f21ae7334af2a633580cb8d81cb7deed184020975f5`,
   config `sha256:2ccf4bcedf02782107e24e08ee13d34598edfb3d6fb563fcd14b37459032f17a`).
 - Guest Node `>= 22.19` (the pinned image has `22.23.4`) and npm.
-- Pi package `@earendil-works/pi-coding-agent@1.1.0`, installed inside the child
+- Pi package `@earendil-works/pi-coding-agent@1.5.2`, installed inside the child
   by the plugin.
+- NeuralWatt Pi extension `@aliou/pi-neuralwatt@0.19.3`, installed when
+  NeuralWatt is selected for Pi.
+- Claude Code `2.1.323`, installed when Claude is selected.
+- GitHub CLI `2.104.0`, installed when the GitHub CLI integration is selected.
 - A parent daemon user that can run the microsandbox runtime and bind loopback
   ports.
 - Plugins globally enabled in the parent daemon
@@ -35,15 +39,17 @@ mix with your normal Paseo state.
 
 ## Credentials
 
-The plugin accepts exactly five fixed credential names:
+The plugin accepts exactly six fixed credential names:
 
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `NEURALWATT_API_KEY`, `GH_TOKEN`.
+`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`NEURALWATT_API_KEY`, `GH_TOKEN`.
 
 Each name maps to a fixed set of upstream hosts:
 
 | Guest environment variable | Allowed upstream hosts |
 | --- | --- |
 | `ANTHROPIC_API_KEY` | `api.anthropic.com` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `api.anthropic.com` |
 | `OPENAI_API_KEY` | `api.openai.com` |
 | `GEMINI_API_KEY` | `generativelanguage.googleapis.com` |
 | `NEURALWATT_API_KEY` | `api.neuralwatt.com` |
@@ -58,55 +64,64 @@ Open **Manage secrets** in the plugin screen to add, replace, or remove values.
 Only names and sources are ever shown or returned by an RPC. A value is sent to
 microsandbox once at creation, appears only in parent-controlled microsandbox
 config, and is redacted from logs and safe errors. Create requires at least one
-available credential name.
+provider, and only the credentials required by the selected providers and
+integrations are sent to the child.
 
 ## Operation
 
 ### Create
 
-The create confirmation shows the fixed image and resources and lists available
-credential names as **Stored** or **Environment**. It requires at least one
-name and never accepts or displays a value.
+The create confirmation shows the fixed image and resources, a **Providers**
+section, and an **Integrations** section. Secrets decide which options are
+available; selecting an option decides which credentials enter the sandbox.
+Claude takes exactly one auth option (Anthropic API key or Claude subscription);
+Pi takes one or more LLM options (Anthropic, OpenAI, Gemini, NeuralWatt). The
+GitHub CLI integration is independent and unchecked by default.
 
 The child name is generated from one UUID per logical create attempt
 (`paseo-<requestId>`). The name is the logical identity; the current microsandbox
 generation is its exact `handle.id`. The RPC returns immediately; one idempotent
 reconciler per name then:
 
-1. creates a detached, fixed `2 CPU` / `2048 MiB` sandbox from the pinned image
-   with a loopback-only published child port;
-2. installs Pi as the non-root `paseo` user in one detached job, rediscovered by
-   its exact pinned argv rather than a durable job label;
-3. registers the exact generation with the parent and waits for routed online;
-4. refreshes Pi in the child and marks the child `ready`.
+1. creates a detached, fixed `2 CPU` / `4096 MiB` sandbox from the pinned image
+   with a loopback-only published child port, the canonical plan in
+   `PASEO_MSB_PLAN`, and only the selected header-only secrets;
+2. writes a content-addressed `/home/paseo/.paseo-msb/provision-<planHash>.sh`
+   and runs it as one detached job; each step probes first, so retries skip
+   already-satisfied work;
+3. registers the exact generation with the parent, waits for routed online, and
+   confirms every selected provider in Paseo's provider snapshot;
+4. marks the child `ready`.
 
 Progress is a phase label (`creating`, `installing`, `registering`, `ready`,
 `deleting`), so list/detail polling can observe it and can be stopped without
 stopping host work. Phase is a hint, not proof that a side effect happened.
+`installing` now means provisioning the selected providers and integrations.
 
 New sandboxes do not write stable-ID or job-ID labels. A repeated create for the
-same request joins the same reconciliation and must use the original credential
-names. Reusing a request after a fully confirmed Delete creates a new generation.
-Retryable failures keep the actionable phase and add a safe error code; only a
-confirmed unsuccessful install is terminal. A failed pending create can be
-retried from its detail with the original request ID and credential names.
+same request joins the same reconciliation and must use the original plan;
+legacy children without `PASEO_MSB_PLAN` are treated as Pi-only. Reusing a
+request after a fully confirmed Delete creates a new generation. All
+provisioning failures are fatal and keep the sandbox for inspection and retry; a
+failed pending create can be retried from its detail with the original request
+ID and plan.
 
 ### Repair
 
 Repair (`vm.reconcile`) runs the same reconciler. It resumes an unambiguous
-interrupted install or registration, restores a missing registration for a
-Pi-ready sandbox, and removes a confirmed stale plugin-owned registration. It
+interrupted provisioning or registration, restores a missing registration for a
+provisioned sandbox, and removes a confirmed stale plugin-owned registration. It
 never creates, starts, adopts, or initiates deletion and reports ambiguous or
 foreign state instead of guessing. A child already carrying a `deleting`
 tombstone has that Delete cleanup completed.
 
-Job recovery reads the complete detached-job inventory with checked pagination
-and matches the exact pinned install argv. Zero active matches permits one
-install, one is awaited, and multiple active matches are a conflict. Inventory
-or inspection failures never launch another install. Registration identity is
-the authenticated producer `plugin:paseo-msb` plus the exact generation id;
-metadata and labels are configuration, not ownership proof. A user-disabled
-registration is preserved, not re-enabled.
+Provision recovery reads `/home/paseo/.paseo-msb/status.json` first; a successful
+status for the plan hash is the only success proof. Active matching jobs are
+awaited, job-inventory failures never launch another job, and a retry re-runs the
+idempotent script so completed steps are skipped. Registration identity is the
+authenticated producer `plugin:paseo-msb` plus the exact generation id; metadata
+and labels are configuration, not ownership proof. A user-disabled registration
+is preserved, not re-enabled.
 
 Registration-only children remain visible and actionable. A same-request Create
 first removes only registrations whose generation is proven gone, re-checks the
@@ -135,16 +150,17 @@ plugin-specific copy, shell, metrics, start/stop, or custom provider controls.
 ### Failure diagnostics
 
 List and detail show the fixed safe code plus a bounded, redacted reason when
-the plugin has one, for example an image pull, Pi install, registration, or
-native-runtime error. Setup errors keep the actionable phase and store the same
-text as the `paseo-msb-error-detail` label.
+the plugin has one, for example an image pull, provisioning step, registration,
+or native-runtime error. Setup errors keep the actionable phase and store the
+same text as the `paseo-msb-error-detail` label.
 
 Redaction is centralized and covers current environment and store values plus
 relevant values from managed VM config, so removing or replacing a stored value
 does not disable redaction for an existing VM. Credential values are redacted
 before text enters pending state, a label, an RPC response, or a log; control
-characters are stripped and the length is capped. Retryable codes include
-`install_pending`, `install_conflict`, `job_inventory_unavailable`,
+characters are stripped and the length is capped. Provisioning failures are
+fatal but retryable through Repair or Retry create. Retryable codes include
+`provision_pending`, `provision_conflict`, `job_inventory_unavailable`,
 `registration_failed`, `registration_timeout`, and `provider_unavailable`.
 
 ## Native addon troubleshooting
@@ -231,14 +247,18 @@ skipped unless `PASEO_PARENT_URL` is set (or `PASEO_MSB_RELEASE_TEST=1`).
 ## Release test
 
 The mandatory vertical release test runs against a real parent daemon, the
-verified microsandbox runtime, the pinned guest image, and the pinned Pi
-package. It installs (or reloads) this checkout as a directory plugin, then
+verified microsandbox runtime, the pinned guest image, and the pinned provider
+toolchain. It installs (or reloads) this checkout as a directory plugin, then
 drives `vm.create`, `vm.list`, `vm.detail`, `vm.reconcile`, and `vm.delete`
 through the plugin RPCs. It also:
 
-- reloads the plugin during the Pi installation and verifies one sandbox, one
+- creates a provider plan from one unused model credential and verifies the
+  content-addressed provision job and `status.json` are the ones for that plan;
+- reloads the plugin during provisioning and verifies one sandbox, one relevant
   detached job, and one registration remain;
-- asserts the pinned parent daemon, microsandbox SDK, guest image, and Pi version;
+- asserts the pinned parent daemon, microsandbox SDK, guest image, and the
+  selected provider's version;
+- verifies Paseo's provider snapshot reports every selected provider ready;
 - stores one fake fixed credential, verifies it reaches only the allowed
   microsandbox secret entry with header-only substitution, and verifies it never
   appears in RPC output, plugin logs, raw sandbox/job/system logs, pending state,
@@ -250,6 +270,10 @@ through the plugin RPCs. It also:
   plugin, and confirming Repair removes only the registration;
 - deletes the exact sandbox and registration, then repeats delete and Repair
   safely.
+
+The test selects one model credential per run. Run it for the Anthropic API key,
+Claude OAuth token, and NeuralWatt key paths to cover Claude, Pi, and the
+NeuralWatt extension; add a GitHub CLI integration case when exercising `gh`.
 
 Start a parent daemon on the verified pins first. One isolated setup:
 

@@ -19,18 +19,19 @@ executed.
 The live test needs a parent daemon that can load the microsandbox native addon; see the README
 workstation note about the macOS hardened-runtime Team ID failure.
 
-## 2. Wire the provisioning shared layer
+## 2. Verify the provisioning release matrix
 
-`shared/provisioning/` now holds the agreed catalog, planner, script renderer, and status contract
-(see [docs/provisioning.md](./docs/provisioning.md)). Live behavior still uses `secretEnvVars` and
-the Pi-only install path.
+The shared layer and live wiring are implemented (see [docs/provisioning.md](./docs/provisioning.md))
+and the unit/contract suite passes. The real-runtime matrix has not been executed.
 
-- [ ] Replace the create input with the provider/integration plan, persist `PASEO_MSB_PLAN`, derive
-  only the injected credential names, add `CLAUDE_CODE_OAUTH_TOKEN`, and change the default memory to
-  4096 MiB.
-- [ ] Materialize the content-addressed provision script, launch it as the single detached job, parse
-  `status.json`, refresh and confirm the selected Paseo providers, and keep fatal failure semantics.
-- [ ] Rebuild the Create screen around collapsible Providers and Integrations sections with nested
-  LLM options, availability reasons, and a derived-credential confirmation.
-- [ ] Run the fake-runtime contracts and the real-runtime release test for Pi + NeuralWatt, Claude
-  Code, and `gh`, including an injected step failure and retry.
+- [ ] Run `npm run test:release` on a reachable parent daemon. The test now creates a provider plan,
+  waits for the content-addressed provision job and `status.json`, and asserts the selected provider
+  in the child's Paseo snapshot.
+- [ ] Verify Pi `1.5.2` is drivable by Paseo `0.15.4` and that `@aliou/pi-neuralwatt@0.19.3` loads with
+  the accepted `pi-ai` peer mismatch.
+- [ ] Exercise the Claude Code and GitHub CLI paths live, not just the unit/fake-runtime paths.
+- [ ] Inject a failing provisioning step and confirm the failure is fatal, the sandbox is kept, and
+  Retry create / Repair re-runs the idempotent script without repeating completed steps.
+- [ ] Re-check store and environment canaries, replaced/removed creation-time values, and secret
+  non-leakage across RPC output, plugin logs, raw sandbox/job/system logs, pending state, labels, and
+  test artifacts.
