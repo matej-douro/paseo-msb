@@ -41,13 +41,15 @@ export function piInstallArgv(): readonly string[] {
 /**
  * Checks the binary the daemon process would resolve, not a fresh `msb exec`
  * default PATH. The inline assignment keeps a login shell from resetting it.
+ * `&&` avoids running `pi` when it is absent, so the probe does not write a
+ * `pi: not found` line into the sandbox log before the first install.
  */
 export function piPathCheckSpec(): ExecSpec {
   return {
     command: "sh",
     args: [
       "-lc",
-      `PATH=${GUEST_PATH} command -v pi; PATH=${GUEST_PATH} pi --version`,
+      `PATH=${GUEST_PATH} command -v pi && PATH=${GUEST_PATH} pi --version`,
     ],
     user: GUEST_USER,
   };
