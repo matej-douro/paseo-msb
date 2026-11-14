@@ -10,11 +10,18 @@ import {
   CREDENTIAL_ALLOWED_HOSTS,
   ERROR_LABEL,
   GUEST_IMAGE,
+  GUEST_INIT_ARGS,
+  GUEST_INIT_COMMAND,
   GUEST_PATH,
+  GUEST_USER,
+  MANAGED_LABEL,
   MICROSANDBOX_VERSION,
   PARENT_DAEMON_VERSION,
+  PARENT_LABEL,
   PHASE_LABEL,
+  PLAN_ENV_VAR,
   PLUGIN_ID,
+  PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
   sandboxName,
@@ -25,12 +32,14 @@ import {
   CLAUDE_CODE_VERSION,
   GH_VERSION,
   PROVISIONING_PI_VERSION,
+  PROVISIONING_STATE_DIR,
   buildProvisionScript,
   canonicalizePlan,
   provisionStatusPath,
   requiredCredentialsForPlan,
   type CanonicalPlan,
   type LlmId,
+  type ProvisionScript,
 } from "../../shared/provisioning";
 import {
   secretsDeleteRpc,
@@ -39,6 +48,7 @@ import {
   vmCreateRpc,
   vmDeleteRpc,
   vmDetailRpc,
+  vmDismissRpc,
   vmListRpc,
   vmReconcileRpc,
   type SecretsListResult,
@@ -99,6 +109,16 @@ let createdName = "";
 let createdSandboxId = "";
 let createdPlan: CanonicalPlan | null = null;
 let staleRegistrationId = "";
+
+/** Every sandbox name the release suite created or discovered for cleanup. */
+const trackedNames = new Set<string>();
+/** Managed sandboxes by name, used for generation-exact cleanup. */
+const managedSandboxes = new Map<string, string>();
+
+function trackSandbox(name: string, id?: string): void {
+  trackedNames.add(name);
+  if (id) managedSandboxes.set(name, id);
+}
 
 /**
  * Every RPC output observed by the test. Inputs are deliberately not recorded
@@ -194,7 +214,7 @@ interface ProvisionFault {
 
 /**
  * Makes one real provisioning step fail without touching product code. Claude
- * settings accept a deterministic corrupt file; the GitHub CLI step fails when
+ * settings accept a deterministic corrupt file; Pi and the GitHub CLI fail when
  * the binary is gone and its install directory is read-only.
  */
 async function injectProvisionFailure(
@@ -227,7 +247,223 @@ async function injectProvisionFailure(
     };
   }
 
+  if (plan.providers.some((provider) => provider.provider === "pi")) {
+    await runGuest(
+      handle,
+      "rm -f /home/paseo/.local/bin/pi && chmod 0500 /home/paseo/.local/bin",
+    );
+    return {
+      step: "pi-install",
+      restore: async () => {
+        await runGuest(handle, "chmod 0755 /home/paseo/.local/bin");
+      },
+    };
+  }
+
   return null;
+}
+
+type SandboxChild = Extract<VmChild, { kind: "sandbox" }>;
+
+/**
+ * The release test reuses the same isolated store across its cases. The first
+ * case exercises replace/remove, so later cases restore the creation-time
+ * values before starting new lifecycle work.
+ */
+async function ensureStoredCredentials(): Promise<void> {
+  for (const credential of requiredCredentials) {
+    if (credential.source !== "store") continue;
+    await rpc(secretsSetRpc.name, { name: credential.name, value: credential.value });
+    storedByTest.add(credential.name);
+  }
+}
+
+async function waitForReadySandbox(
+  name: string,
+  timeoutMs: number,
+): Promise<{ readonly child: SandboxChild; readonly list: VmListResult }> {
+  return waitFor(
+    `child ${name} to reach ready and online`,
+    async () => {
+      const list = await rpc<VmListResult>(vmListRpc.name, {});
+      const child = list.children.find((entry) => entry.name === name);
+      return child?.kind === "sandbox" &&
+        child.labels[PHASE_LABEL] === "ready" &&
+        child.registration?.status === "online" &&
+        child.registration.serverId
+        ? { child, list }
+        : null;
+    },
+    { timeoutMs, secrets: credentialValues() },
+  );
+}
+
+/**
+ * Verifies the complete credential boundary for one managed child: only the
+ * fixed secret entry carries the value, the guest sees the placeholder, and no
+ * raw microsandbox sink contains the value.
+ */
+async function assertManagedSecretBoundary(
+  handle: SandboxHandle,
+  label: string,
+  options: { readonly jobId?: string } = {},
+): Promise<void> {
+  const refreshed = await handle.refresh();
+  const config = refreshed.config();
+  const secrets = secretEntries(config);
+
+  for (const credential of requiredCredentials) {
+    const secret = secrets.find((entry) => entry.envVar === credential.name);
+    expect(secret, `${label}: the ${credential.name} secret entry is missing`).toBeDefined();
+    if (!secret) continue;
+
+    expect(
+      secret.value === credential.value,
+      `${label}: the ${credential.name} value did not reach the secret entry`,
+    ).toBe(true);
+    expect(secret.placeholder).toBe(`$MSB_${credential.name}`);
+    expect(allowedHostNames(secret)).toEqual([
+      ...CREDENTIAL_ALLOWED_HOSTS[credential.name],
+    ]);
+    expect(secret.substitution?.headers).toBe(true);
+    expect(secret.substitution?.query).toBe(false);
+    expect(secret.substitution?.body).toBe(false);
+
+    const valuePaths = findValuePaths(config, credential.value);
+    expect(
+      valuePaths.length,
+      `${label}: the ${credential.name} value is absent from the stored config`,
+    ).toBeGreaterThan(0);
+    for (const location of valuePaths) {
+      expect(
+        location.includes(".network.secrets"),
+        `${label}: ${credential.name} leaked outside the secret entry at ${location}`,
+      ).toBe(true);
+      expect(
+        location.endsWith(".value"),
+        `${label}: ${credential.name} leaked outside a secret value at ${location}`,
+      ).toBe(true);
+    }
+  }
+
+  const guestValues = await readGuestEnvironment(
+    refreshed,
+    requiredCredentials.map((credential) => credential.name),
+  );
+  requiredCredentials.forEach((credential, index) => {
+    expect(guestValues[index]).toBe(`$MSB_${credential.name}`);
+  });
+
+  const sandboxLogs = await refreshed.logs({
+    tail: 200,
+    sources: ["stdout", "stderr", "output", "system"],
+  });
+  for (const entry of sandboxLogs) {
+    for (const credential of requiredCredentials) {
+      expect(
+        entry.text(),
+        `${label}: raw sandbox logs exposed the ${credential.name} value`,
+      ).not.toContain(credential.value);
+    }
+  }
+
+  if (options.jobId) {
+    const job = await refreshed.getJob(options.jobId);
+    const logs = await job.logs({ tail: 200 });
+    const decoder = new TextDecoder();
+    for (const entry of logs) {
+      const text = decoder.decode(entry.data);
+      for (const credential of requiredCredentials) {
+        expect(
+          text,
+          `${label}: raw job logs exposed the ${credential.name} value`,
+        ).not.toContain(credential.value);
+      }
+    }
+  }
+}
+
+/** Fails when any RPC output or plugin log since `start` carries a value. */
+async function assertNoCanarySince(start: number): Promise<void> {
+  for (const observation of observations.slice(start)) {
+    expectNoStoredValue("RPC observations", observation);
+  }
+  const pluginLogs = await daemon.getPluginLogs(PLUGIN_ID);
+  expectNoStoredValue("plugin logs", pluginLogs);
+}
+
+/** A different valid plan for the same request ID must be rejected. */
+function alternativePlan(plan: CanonicalPlan): CanonicalPlan {
+  return plan.providers.some((provider) => provider.provider === "pi")
+    ? canonicalizePlan({
+        providers: [{ provider: "claude", llms: ["anthropic-oauth"] }],
+        integrations: [],
+      })
+    : canonicalizePlan({
+        providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+        integrations: [],
+      });
+}
+
+/**
+ * Creates a real sandbox outside the plugin. Foreign fixtures carry no managed
+ * labels; managed fixtures persist the plan so recovery can advance them.
+ */
+async function createFixtureSandbox(options: {
+  readonly name: string;
+  readonly managed: boolean;
+  readonly plan?: CanonicalPlan;
+  readonly phase?: Phase;
+}): Promise<SandboxHandle> {
+  let builder = msb.Sandbox.builder(options.name)
+    .image(GUEST_IMAGE)
+    .cpus(1)
+    .memory(msb.MiB(1024))
+    .detached(true)
+    .init(GUEST_INIT_COMMAND, [...GUEST_INIT_ARGS]);
+
+  if (options.managed) {
+    if (!options.plan) throw new Error("a managed fixture needs a plan");
+    builder = builder
+      .labels({
+        [MANAGED_LABEL]: PLUGIN_VERSION,
+        [PARENT_LABEL]: parentId,
+        [PHASE_LABEL]: options.phase ?? "installing",
+      })
+      .env("PATH", GUEST_PATH)
+      .env(PLAN_ENV_VAR, JSON.stringify(options.plan));
+  } else {
+    builder = builder.labels({ "paseo-msb-fixture": "foreign" });
+  }
+
+  await builder.create();
+  return msb.Sandbox.get(options.name);
+}
+
+/** Writes a harmless long-running script at the content-addressed path. */
+async function materializeFakeProvisionScript(
+  handle: SandboxHandle,
+  provision: ProvisionScript,
+): Promise<void> {
+  await runGuest(
+    handle,
+    `mkdir -p ${PROVISIONING_STATE_DIR} && { printf '%s\\n' '#!/bin/sh' 'sleep 120'; } > ${provision.path} && chmod 700 ${provision.path}`,
+  );
+}
+
+/** Launches two detached jobs with the exact provision argv. */
+async function startFakeProvisionJobs(
+  handle: SandboxHandle,
+  provision: ProvisionScript,
+): Promise<string[]> {
+  const sandbox = await handle.connect();
+  const first = await sandbox.execDetachedWith("/bin/sh", (builder) =>
+    builder.args([provision.path, provision.planHash]).user(GUEST_USER),
+  );
+  const second = await sandbox.execDetachedWith("/bin/sh", (builder) =>
+    builder.args([provision.path, provision.planHash]).user(GUEST_USER),
+  );
+  return [first.id, second.id];
 }
 
 function imageReference(config: unknown): string | null {
@@ -791,6 +1027,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       // Inject a real provisioning failure. It must be fatal, keep the sandbox,
       // and a retry must skip work that already completed.
       const fault = await injectProvisionFailure(handles[0], plan);
+      expect(fault, "every release plan must exercise provisioning fault injection").not.toBeNull();
       if (fault) {
         const provision = buildProvisionScript(plan);
         await runGuest(handles[0], `rm -f ${provisionStatusPath()}`);
@@ -817,7 +1054,11 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         const completedBefore = failedStatus.steps
           .filter((step) => step.status === "ok" || step.status === "skipped")
           .map((step) => step.id);
-        expect(completedBefore.length).toBeGreaterThan(0);
+        if (fault.step === "pi-install") {
+          expect(completedBefore).toEqual([]);
+        } else {
+          expect(completedBefore.length).toBeGreaterThan(0);
+        }
 
         const failedList = await rpc<VmListResult>(vmListRpc.name, {});
         const failedChild = failedList.children.find((entry) => entry.name === name);
@@ -879,6 +1120,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       }
       const staleRequestId = randomUUID();
       const staleName = sandboxName(staleRequestId);
+      trackSandbox(staleName);
       await rpc<VmCreateResult>(vmCreateRpc.name, {
         requestId: staleRequestId,
         plan,
@@ -899,6 +1141,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         { timeoutMs: CREATE_TIMEOUT_MS, secrets: credentialValues() },
       );
       const staleSandboxId = staleChild.id;
+      trackSandbox(staleName, staleSandboxId);
 
       const staleRegistrations = await managedRegistrations(staleSandboxId);
       expect(staleRegistrations).toHaveLength(1);
@@ -998,34 +1241,470 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const pluginLogs = await daemon.getPluginLogs(PLUGIN_ID);
       expectNoStoredValue("plugin logs", pluginLogs);
     },
-    CREATE_TIMEOUT_MS,
+    CREATE_TIMEOUT_MS * 2,
+  );
+
+  it(
+    "serializes concurrent Create and Repair, repairs registration drift, and reloads after a deleting tombstone",
+    async () => {
+      const start = observations.length;
+      const plan = createdPlan;
+      if (!plan) throw new Error("the release test did not prepare a provisioning plan");
+      if (requiredCredentials.length === 0) {
+        throw new Error("the release test did not prepare any credential");
+      }
+      await ensureStoredCredentials();
+
+      const requestId = randomUUID();
+      const name = sandboxName(requestId);
+      trackSandbox(name);
+
+      // Two identical Creates must join one attempt. A different plan for the
+      // same request ID is rejected before any host-side work.
+      const [first, second] = await Promise.all([
+        rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan }),
+        rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan }),
+      ]);
+      expect(first).toEqual({ name });
+      expect(second).toEqual({ name });
+      await expect(
+        rpc<VmCreateResult>(vmCreateRpc.name, {
+          requestId,
+          plan: alternativePlan(plan),
+        }),
+      ).rejects.toThrow(safeError("invalid_request").message);
+
+      // Repair enters the same per-name lane and must wait for Create rather
+      // than advancing the child concurrently.
+      const repairPromise = rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+
+      const ready = await waitForReadySandbox(name, CREATE_TIMEOUT_MS);
+      const sandboxId = ready.child.id;
+      trackSandbox(name, sandboxId);
+      expect(ready.child.plan).toEqual(plan);
+      expect(ready.child.labels[PHASE_LABEL]).toBe("ready");
+
+      const repair = await repairPromise;
+      expect(repair.errors).toEqual([]);
+
+      const handles = await sandboxesNamed(name);
+      expect(handles).toHaveLength(1);
+      expect(handles[0].id).toBe(sandboxId);
+
+      const jobs = await installJobs(name);
+      expect(jobs, "exactly one provision job for the concurrent attempt").toHaveLength(1);
+      expect(
+        jobs.every((job) => job.state === "exited" && job.exitCode === 0),
+        "the concurrent provision script did not complete successfully",
+      ).toBe(true);
+
+      const registrations = await managedRegistrations(sandboxId);
+      expect(registrations).toHaveLength(1);
+      expect(registrations[0].status).toBe("online");
+      expect(registrations[0].metadata.name).toBe(name);
+      expect(registrations[0].source?.key).toBe(sandboxId);
+
+      await assertManagedSecretBoundary(handles[0], "concurrent Create", {
+        jobId: jobs[0].id,
+      });
+
+      // Configuration drift is repaired with one explicit update, never a
+      // second registration for the same generation.
+      const registration = registrations[0];
+      const driftedName = `${name}-drift`;
+      await paseo.hosts.update(registration.registrationId, {
+        metadata: { source: REGISTRATION_SOURCE, name: driftedName },
+      });
+      await waitFor(
+        "the drifted registration metadata",
+        async () => {
+          const entries = await managedRegistrations(sandboxId);
+          return entries[0]?.metadata.name === driftedName ? true : null;
+        },
+        { timeoutMs: 30_000, secrets: credentialValues() },
+      );
+
+      const repaired = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+      expect(repaired.errors).toEqual([]);
+      expect(repaired.repaired).toContain(name);
+
+      const restored = await managedRegistrations(sandboxId);
+      expect(restored).toHaveLength(1);
+      expect(restored[0].registrationId).toBe(registration.registrationId);
+      expect(restored[0].metadata.name).toBe(name);
+      expect(restored[0].status).toBe("online");
+      expect(await sandboxesNamed(name)).toHaveLength(1);
+
+      // Interrupt after the Delete tombstone but before destruction. A reload
+      // must complete this exact generation's cleanup and never resume setup.
+      const tombstoned = await msb.Sandbox.get(name);
+      expect(tombstoned.id).toBe(sandboxId);
+      await tombstoned.modify({ labels: { [PHASE_LABEL]: "deleting" } });
+      await waitFor(
+        "the deleting tombstone",
+        async () => {
+          const current = await msb.Sandbox.get(name).catch(() => null);
+          if (!current) return null;
+          const refreshed = await current.refresh();
+          return sandboxLabels(refreshed.config())[PHASE_LABEL] === "deleting"
+            ? true
+            : null;
+        },
+        { timeoutMs: 30_000, secrets: credentialValues() },
+      );
+
+      await daemon.reloadPlugin(PLUGIN_ID);
+      await waitForPlugin(daemon, PLUGIN_ID);
+      await rpc<VmListResult>(vmListRpc.name, {});
+
+      await waitFor(
+        "the tombstoned sandbox to be destroyed after reload",
+        async () => ((await sandboxesNamed(name)).length === 0 ? true : null),
+        { timeoutMs: 180_000, secrets: credentialValues() },
+      );
+      await waitFor(
+        "the exact generation registration to be removed after reload",
+        async () => ((await managedRegistrations(sandboxId)).length === 0 ? true : null),
+        { timeoutMs: 60_000, secrets: credentialValues() },
+      );
+
+      const after = await rpc<VmListResult>(vmListRpc.name, {});
+      expect(after.children.find((entry) => entry.name === name)).toBeUndefined();
+      expect(await sandboxesNamed(name)).toHaveLength(0);
+
+      // Repair after deletion reports not_found and never recreates the child.
+      const afterRepair = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+      expect(afterRepair.repaired).toEqual([]);
+      expect(afterRepair.errors).toEqual([{ name, error: safeError("not_found") }]);
+      expect(await sandboxesNamed(name)).toHaveLength(0);
+
+      await assertNoCanarySince(start);
+    },
+    CREATE_TIMEOUT_MS * 2,
+  );
+
+  it(
+    "aborts an in-flight Create on Delete, recovers the recreated generation, and rejects a stale token",
+    async () => {
+      const start = observations.length;
+      const plan = createdPlan;
+      if (!plan) throw new Error("the release test did not prepare a provisioning plan");
+      if (requiredCredentials.length === 0) {
+        throw new Error("the release test did not prepare any credential");
+      }
+      await ensureStoredCredentials();
+
+      const requestId = randomUUID();
+      const name = sandboxName(requestId);
+      trackSandbox(name);
+
+      await rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan });
+      const firstHandle = await waitFor(
+        "the first generation to appear",
+        async () => {
+          const handles = await sandboxesNamed(name);
+          return handles.length === 1 ? handles[0] : null;
+        },
+        { timeoutMs: 180_000, secrets: credentialValues() },
+      );
+      const oldId = firstHandle.id;
+      trackSandbox(name, oldId);
+
+      // Delete while provisioning is the active work for this name. The lane
+      // aborts Create, persists the tombstone, and destroys the exact handle.
+      const deleted = await rpc<VmDeleteResult>(vmDeleteRpc.name, {
+        name,
+        id: oldId,
+        confirmName: name,
+      });
+      expect(deleted).toEqual({ name, removed: true });
+
+      await waitFor(
+        "the cancelled generation to disappear",
+        async () => ((await sandboxesNamed(name)).length === 0 ? true : null),
+        { timeoutMs: 120_000, secrets: credentialValues() },
+      );
+      await waitFor(
+        "the cancelled generation registration to disappear",
+        async () => ((await managedRegistrations(oldId)).length === 0 ? true : null),
+        { timeoutMs: 60_000, secrets: credentialValues() },
+      );
+      const afterDelete = await rpc<VmListResult>(vmListRpc.name, {});
+      expect(afterDelete.children.find((entry) => entry.name === name)).toBeUndefined();
+
+      // Reusing a request whose Delete left no sandbox or registration creates
+      // a new generation rather than joining the old attempt.
+      await rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan });
+      const replacement = await waitFor(
+        "the replacement generation to appear",
+        async () => {
+          const handles = await sandboxesNamed(name);
+          return handles.length === 1 && handles[0].id !== oldId ? handles[0] : null;
+        },
+        { timeoutMs: 180_000, secrets: credentialValues() },
+      );
+      const newId = replacement.id;
+      expect(newId).not.toBe(oldId);
+      trackSandbox(name, newId);
+
+      // Reload while the replacement is provisioning. Recovery and a queued
+      // Repair must advance that same generation without a second VM or job.
+      await daemon.reloadPlugin(PLUGIN_ID);
+      await waitForPlugin(daemon, PLUGIN_ID);
+      await rpc<VmListResult>(vmListRpc.name, {});
+      const repairPromise = rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+
+      const ready = await waitForReadySandbox(name, CREATE_TIMEOUT_MS);
+      expect(ready.child.id).toBe(newId);
+      const repair = await repairPromise;
+      expect(repair.errors).toEqual([]);
+
+      const survivors = await sandboxesNamed(name);
+      expect(survivors).toHaveLength(1);
+      expect(survivors[0].id).toBe(newId);
+
+      const jobs = await installJobs(name);
+      expect(jobs, "exactly one provision job for the replacement").toHaveLength(1);
+      expect(
+        jobs.every((job) => job.state === "exited" && job.exitCode === 0),
+        "the recovered provision script did not complete successfully",
+      ).toBe(true);
+
+      const registrations = await managedRegistrations(newId);
+      expect(registrations).toHaveLength(1);
+      expect(registrations[0].status).toBe("online");
+      expect(registrations[0].source?.key).toBe(newId);
+      expect(await managedRegistrations(oldId)).toHaveLength(0);
+
+      // The old generation token must never destroy a newer same-name VM.
+      await expect(
+        rpc<VmDeleteResult>(vmDeleteRpc.name, {
+          name,
+          id: oldId,
+          confirmName: name,
+        }),
+      ).rejects.toThrow(safeError("id_mismatch").message);
+
+      const stillThere = await rpc<VmListResult>(vmListRpc.name, {});
+      const child = stillThere.children.find((entry) => entry.name === name);
+      expect(child?.kind).toBe("sandbox");
+      if (child?.kind === "sandbox") {
+        expect(child.id).toBe(newId);
+        expect(child.registration?.status).toBe("online");
+      }
+      expect((await sandboxesNamed(name))[0]?.id).toBe(newId);
+      expect(await managedRegistrations(newId)).toHaveLength(1);
+
+      // The current token removes exactly this generation.
+      const removed = await rpc<VmDeleteResult>(vmDeleteRpc.name, {
+        name,
+        id: newId,
+        confirmName: name,
+      });
+      expect(removed).toEqual({ name, removed: true });
+      await waitFor(
+        "the replacement to be removed",
+        async () => ((await sandboxesNamed(name)).length === 0 ? true : null),
+        { timeoutMs: 120_000, secrets: credentialValues() },
+      );
+      await waitFor(
+        "the replacement registration to be removed",
+        async () => ((await managedRegistrations(newId)).length === 0 ? true : null),
+        { timeoutMs: 60_000, secrets: credentialValues() },
+      );
+
+      await assertNoCanarySince(start);
+    },
+    CREATE_TIMEOUT_MS * 2,
+  );
+
+  it(
+    "fails a Create safely when a foreign sandbox holds the name, without touching it",
+    async () => {
+      const start = observations.length;
+      const plan = createdPlan;
+      if (!plan) throw new Error("the release test did not prepare a provisioning plan");
+      await ensureStoredCredentials();
+
+      const requestId = randomUUID();
+      const name = sandboxName(requestId);
+      trackSandbox(name);
+      const foreign = await createFixtureSandbox({ name, managed: false });
+
+      try {
+        const foreignId = foreign.id;
+        await rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan });
+
+        const failed = await waitFor(
+          "the pending Create to fail with name_conflict",
+          async () => {
+            const list = await rpc<VmListResult>(vmListRpc.name, {});
+            const child = list.children.find((entry) => entry.name === name);
+            return child?.kind === "pending" && child.error?.code === "name_conflict"
+              ? child
+              : null;
+          },
+          { timeoutMs: 120_000, secrets: credentialValues() },
+        );
+        expect(failed.phase).toBe("failed");
+        expectNoStoredValue("pending name conflict", failed);
+
+        // The foreign sandbox is not managed inventory, must not be relabelled,
+        // and must still be the exact generation the fixture created.
+        expect(await sandboxesNamed(name)).toHaveLength(0);
+        const survivor = await msb.Sandbox.get(name);
+        expect(survivor.id).toBe(foreignId);
+        expect(sandboxLabels(survivor.config())[PHASE_LABEL]).toBeUndefined();
+        expect(await managedRegistrations(foreignId)).toHaveLength(0);
+
+        const detail = await rpc<VmDetailResult>(vmDetailRpc.name, { name });
+        expect(detail.child?.kind).toBe("pending");
+        expectNoStoredValue("pending detail", detail);
+      } finally {
+        await foreign.destroy({ force: true, timeoutMs: 15_000 }).catch(() => {});
+        await waitFor(
+          "the foreign sandbox to disappear",
+          async () => {
+            const current = await msb.Sandbox.get(name).catch(() => null);
+            return current ? null : true;
+          },
+          { timeoutMs: 60_000, secrets: credentialValues() },
+        );
+      }
+
+      // Dismiss clears only the volatile failed row, without touching the
+      // foreign sandbox or requiring a plugin reload.
+      await rpc(vmDismissRpc.name, { requestId });
+      const cleared = await rpc<VmListResult>(vmListRpc.name, {});
+      expect(cleared.children.find((entry) => entry.name === name)).toBeUndefined();
+
+      await assertNoCanarySince(start);
+    },
+    10 * 60_000,
+  );
+
+  it(
+    "refuses to launch a third provision job when two matching jobs are active",
+    async () => {
+      const start = observations.length;
+      const plan = createdPlan;
+      if (!plan) throw new Error("the release test did not prepare a provisioning plan");
+
+      const requestId = randomUUID();
+      const name = sandboxName(requestId);
+      trackSandbox(name);
+      const fixture = await createFixtureSandbox({
+        name,
+        managed: true,
+        plan,
+        phase: "installing",
+      });
+      trackSandbox(name, fixture.id);
+
+      try {
+        const running = await waitFor(
+          "the managed fixture sandbox to run",
+          async () => {
+            const refreshed = await fixture.refresh();
+            return refreshed.status === "running" ? refreshed : null;
+          },
+          { timeoutMs: 180_000, secrets: credentialValues() },
+        );
+
+        const provision = buildProvisionScript(plan);
+        await materializeFakeProvisionScript(running, provision);
+        const jobIds = await startFakeProvisionJobs(running, provision);
+
+        const active = await waitFor(
+          "two matching provision jobs to become active",
+          async () => {
+            const jobs = await installJobs(name);
+            const runningJobs = jobs.filter(
+              (job) => job.state === "starting" || job.state === "running",
+            );
+            return runningJobs.length === 2 ? jobs : null;
+          },
+          { timeoutMs: 120_000, secrets: credentialValues() },
+        );
+        expect(new Set(active.map((job) => job.id))).toEqual(new Set(jobIds));
+
+        const result = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+        expect(result.repaired).toEqual([]);
+        expect(result.errors).toEqual([
+          { name, error: safeError("provision_conflict") },
+        ]);
+
+        const after = await installJobs(name);
+        expect(after, "the reconciler must not launch a third job").toHaveLength(2);
+        expect(new Set(after.map((job) => job.id))).toEqual(new Set(jobIds));
+
+        const refreshed = await running.refresh();
+        expect(sandboxLabels(refreshed.config())[PHASE_LABEL]).toBe("installing");
+        expect(sandboxLabels(refreshed.config())[ERROR_LABEL]).toBe(
+          "provision_conflict",
+        );
+
+        const detail = await rpc<VmDetailResult>(vmDetailRpc.name, { name });
+        expect(detail.child?.kind).toBe("sandbox");
+        if (detail.child?.kind === "sandbox") {
+          expect(detail.child.labels[PHASE_LABEL]).toBe("installing");
+          expect(detail.child.labels[ERROR_LABEL]).toBe("provision_conflict");
+        }
+        expectNoStoredValue("provision conflict detail", detail);
+      } finally {
+        await fixture.destroy({ force: true, timeoutMs: 15_000 }).catch(() => {});
+        await waitFor(
+          "the managed fixture sandbox to disappear",
+          async () => {
+            const current = await msb.Sandbox.get(name).catch(() => null);
+            return current ? null : true;
+          },
+          { timeoutMs: 60_000, secrets: credentialValues() },
+        );
+      }
+
+      await assertNoCanarySince(start);
+    },
+    15 * 60_000,
   );
 
   afterAll(async () => {
-    if (daemon && createdName && createdSandboxId) {
-      await daemon
-        .invokePluginRpc(PLUGIN_ID, vmDeleteRpc.name, {
-          name: createdName,
-          id: createdSandboxId,
-          confirmName: createdName,
-        })
-        .catch(() => {});
+    const managed = new Map(managedSandboxes);
+    if (createdName && createdSandboxId) managed.set(createdName, createdSandboxId);
+
+    const names = new Set(trackedNames);
+    if (createdName) names.add(createdName);
+
+    if (daemon) {
+      for (const [name, id] of managed) {
+        await daemon
+          .invokePluginRpc(PLUGIN_ID, vmDeleteRpc.name, {
+            name,
+            id,
+            confirmName: name,
+          })
+          .catch(() => {});
+      }
     }
 
-    if (msb && createdName) {
-      const handle = await msb.Sandbox.get(createdName).catch(() => null);
-      if (handle) {
-        await handle.destroy({ force: true, timeoutMs: 15_000 }).catch(() => {});
+    if (msb) {
+      for (const name of names) {
+        const handle = await msb.Sandbox.get(name).catch(() => null);
+        if (handle) {
+          await handle.destroy({ force: true, timeoutMs: 15_000 }).catch(() => {});
+        }
       }
     }
 
     if (paseo) {
       try {
         const directory = await paseo.hosts.list();
+        const managedIds = new Set(managed.values());
         const owned = directory.hosts.filter(
           (registration) =>
-            registration.metadata.source === REGISTRATION_SOURCE &&
-            (registration.metadata.vm === createdSandboxId ||
+            registration.source?.id === REGISTRATION_PRODUCER_ID &&
+            (names.has(registration.metadata.name) ||
+              managedIds.has(registration.source?.key ?? "") ||
               registration.registrationId === staleRegistrationId),
         );
         for (const registration of owned) {
