@@ -259,22 +259,48 @@ through the plugin RPCs. It also:
 - asserts the pinned parent daemon, microsandbox SDK, guest image, and the
   selected provider's version;
 - verifies Paseo's provider snapshot reports every selected provider ready;
-- stores one fake fixed credential, verifies it reaches only the allowed
-  microsandbox secret entry with header-only substitution, and verifies it never
-  appears in RPC output, plugin logs, raw sandbox/job/system logs, pending state,
-  labels, or test artifacts;
-- replaces and then removes that stored value and re-checks detail redaction of
-  the creation-time value persisted in the VM config;
+- stores or reads each selected fixed credential, verifies it reaches only the
+  allowed microsandbox secret entry with header-only substitution, and verifies
+  it never appears in RPC output, plugin logs, raw sandbox/job/system logs,
+  pending state, labels, or test artifacts;
+- replaces and then removes every selected value and re-checks detail redaction
+  of the creation-time value persisted in the VM config;
+- injects a real provisioning failure, asserts it is fatal and keeps the
+  sandbox, then retries Repair and verifies completed steps are skipped;
 - restores a missing registration, then removes an orphaned plugin-owned
   registration by creating a second child, destroying its sandbox behind the
   plugin, and confirming Repair removes only the registration;
 - deletes the exact sandbox and registration, then repeats delete and Repair
   safely.
 
-The test selects one model credential per run. The Pi + Anthropic path has
-passed on the pinned daemon. Run it with the Claude OAuth token and the
-NeuralWatt key to cover Claude, Pi, and the NeuralWatt extension; add a GitHub
-CLI integration case when exercising `gh`.
+The test selects one model credential per run by default. The full matrix has
+passed on the pinned daemon:
+
+```shell
+# Claude-only, store canary, exercises the live provisioning failure
+PASEO_MSB_RELEASE_CREDENTIALS=CLAUDE_CODE_OAUTH_TOKEN npm run test:release
+
+# Pi + NeuralWatt + GitHub CLI, with OpenAI supplied by the daemon environment
+# and NeuralWatt/GH_TOKEN written to the plugin store
+PASEO_MSB_RELEASE_CREDENTIALS=OPENAI_API_KEY,NEURALWATT_API_KEY \
+PASEO_MSB_RELEASE_ENV_CREDENTIAL=OPENAI_API_KEY \
+PASEO_MSB_RELEASE_ENV_VALUE=paseo-msb-env-canary-1b2c3d4e-5f60-4718-9a2b-3c4d5e6f7081 \
+PASEO_MSB_RELEASE_GITHUB_CLI=1 npm run test:release
+```
+
+The second run starts the daemon with the same
+`OPENAI_API_KEY=paseo-msb-env-canary-...` value. When
+`PASEO_MSB_RELEASE_ENV_CREDENTIAL` is set, the test verifies `secrets.list`
+reports the value as `environment: true`, `stored: false`, and that redaction
+survives store replacement and removal. `PASEO_MSB_RELEASE_GITHUB_CLI=1` adds
+the GitHub CLI integration and its `GH_TOKEN` canary.
+
+The failure injection runs whenever the plan includes Claude or the GitHub CLI.
+It corrupts the Claude settings file or removes `gh` and makes its install
+directory read-only, discards `status.json`, and forces Repair to re-provision.
+The test asserts the non-zero job is `provision_failed`, the sandbox and
+registration are kept, and a later Repair reports every previously completed
+step as `skipped` while the failed step becomes `ok`.
 
 Start a parent daemon on the verified pins first. One isolated setup:
 

@@ -5,6 +5,39 @@ listed where they close a PR. This file replaces the historical task and audit r
 [DESIGN.md](./DESIGN.md) is the authoritative spec and [TASKS.md](./TASKS.md) tracks what is still
 open.
 
+## 2026-11-14
+
+### `683f197` — Report the failed provisioning step
+
+- A non-zero provision job now reads `status.json` and surfaces
+  `provisioning step <id> failed` instead of the generic job failure. The launch,
+  active-job, uncertain-job-id, and normal wait paths share one helper.
+- Added a regression assertion in `tests/server/recovery.test.ts`.
+
+### `7632920` — Cover the provider matrix and live fault injection
+
+- Expanded the real-runtime test so one run can select model credentials with
+  `PASEO_MSB_RELEASE_CREDENTIALS`, add the GitHub CLI with
+  `PASEO_MSB_RELEASE_GITHUB_CLI=1`, and use a daemon environment value through
+  `PASEO_MSB_RELEASE_ENV_CREDENTIAL` / `PASEO_MSB_RELEASE_ENV_VALUE`.
+- The test checks the content-addressed `status.json`, every selected
+  credential's secret entry, guest placeholder, allowed hosts, substitution
+  flags, and non-leakage across RPC output, plugin logs, raw sandbox/job logs,
+  pending state, labels, and test artifacts. It replaces and removes every
+  selected value and re-checks detail redaction.
+- Added live provisioning fault injection. The test corrupts `claude-settings`
+  (or removes `gh` and makes its install directory read-only), discards
+  `status.json`, and runs Repair. The failure is fatal and keeps the sandbox;
+  the retry reports completed steps as `skipped` and the failed step as `ok`.
+- The live guest only receives `$MSB_<NAME>` placeholders, so an upstream error
+  cannot carry the real value. Credential-bearing injected errors are covered by
+  the fake-runtime and contract tests, which assert redaction in pending state,
+  labels, logs, and RPC output.
+- `npm run test:release` passes on Paseo `0.15.4`, microsandbox `0.7.14`, and the
+  pinned guest image for Claude-only (store canary) and Pi + NeuralWatt +
+  GitHub CLI (OpenAI environment canary, NeuralWatt and `GH_TOKEN` store
+  canaries). `npm run typecheck`, `npm run lint`, and `npm test` pass.
+
 ## 2026-11-13
 
 ### `01c2e76` — Add the shared provisioning catalog, planner, and provisioner

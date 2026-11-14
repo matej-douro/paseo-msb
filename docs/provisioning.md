@@ -1,12 +1,12 @@
 # Provisioning harnesses and tools
 
-Status: **implemented in the live create path and verified on the Pi/Anthropic
-release path.** The catalog, planner, script renderer, and status contract live
-in `shared/provisioning/`; `vm.create`, the reconciler, registration, and the
-client now use the provider/integration plan. Unit and fake-runtime contracts
-pass, and `npm run test:release` passes for the Pi + Anthropic plan on the
-pinned daemon. The remaining provider-path and failure-injection runs are in
-[TASKS.md](../TASKS.md).
+Status: **implemented and verified across the provider matrix.** The catalog,
+planner, script renderer, and status contract live in `shared/provisioning/`;
+`vm.create`, the reconciler, registration, and the client use the
+provider/integration plan. Unit and fake-runtime contracts pass, and
+`npm run test:release` passes on the pinned daemon for the Pi + Anthropic path,
+Claude-only, and Pi + NeuralWatt + GitHub CLI, including a live provisioning
+failure and retry.
 
 ## Selection model
 
@@ -169,8 +169,15 @@ release test is the gate.
 4. **Client** (done): collapsible Providers and Integrations sections,
    availability reasons, nested options, derived-credential confirmation, and
    plan detail.
-5. **Verification** (partial): fake-runtime contracts cover the job and status
-   path. `npm run test:release` passes for the Pi + Anthropic plan, including
+5. **Verification** (done): fake-runtime contracts cover the job and status
+   path. `npm run test:release` passes on the pinned daemon for the Pi +
+   Anthropic plan, Claude-only, and Pi + NeuralWatt + GitHub CLI. The runs cover
    reload during provisioning, registration repair, stale-registration cleanup,
-   and delete. Claude/NeuralWatt/`gh` were smoke-tested in a disposable VM; the
-   full lifecycle runs and failure injection remain in [TASKS.md](../TASKS.md).
+   delete, store and environment credential canaries, replaced/removed
+   creation-time values, and a live provisioning failure.
+
+   The failure injection corrupts the `claude-settings` step (or removes `gh`
+   and makes its install directory read-only for the GitHub CLI step), discards
+   `status.json`, and forces Repair to re-provision. The failure is fatal and
+   keeps the sandbox; the retry reports every completed step as `skipped` and
+   turns the failed step into `ok`.
