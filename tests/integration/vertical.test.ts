@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPaseoClient, type PaseoClient } from "@getpaseo/client";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { HostSummary } from "@getpaseo/protocol/hosts";
+import type { SandboxHandle } from "microsandbox";
 import {
   CREDENTIAL_ALLOWED_HOSTS,
   ERROR_LABEL,
@@ -22,9 +23,14 @@ import {
 } from "../../shared/constants";
 import {
   CLAUDE_CODE_VERSION,
+  GH_VERSION,
   PROVISIONING_PI_VERSION,
   buildProvisionScript,
+  canonicalizePlan,
+  provisionStatusPath,
+  requiredCredentialsForPlan,
   type CanonicalPlan,
+  type LlmId,
 } from "../../shared/provisioning";
 import {
   secretsDeleteRpc,
@@ -68,14 +74,27 @@ const RELEASE_ENABLED =
 
 const CREATE_TIMEOUT_MS = 20 * 60_000;
 
+const MODEL_CREDENTIALS: readonly CredentialName[] = [
+  "ANTHROPIC_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
+  "NEURALWATT_API_KEY",
+];
+
+interface PlanCredential {
+  readonly name: CredentialName;
+  readonly value: string;
+  readonly source: "store" | "environment";
+}
+
 let daemon: DaemonClient;
 let paseo: PaseoClient;
 let msb: MicrosandboxModule;
 let parentId = "";
 let installedByTest = false;
-let storedCredentialName: CredentialName | null = null;
-let fakeCredentialValue = "";
-let credentialWasStored = false;
+let requiredCredentials: readonly PlanCredential[] = [];
+const storedByTest = new Set<CredentialName>();
 let createdName = "";
 let createdSandboxId = "";
 let createdPlan: CanonicalPlan | null = null;
@@ -94,13 +113,19 @@ async function rpc<T>(method: string, input: unknown = {}): Promise<T> {
   return output;
 }
 
+function credentialValues(): string[] {
+  return requiredCredentials.map((credential) => credential.value);
+}
+
 function expectNoStoredValue(label: string, value: unknown): void {
-  if (fakeCredentialValue.length === 0) return;
   const text = JSON.stringify(value) ?? "";
-  expect(
-    text.includes(fakeCredentialValue),
-    `${label} exposed the stored credential value`,
-  ).toBe(false);
+  for (const credential of requiredCredentials) {
+    if (credential.value.length === 0) continue;
+    expect(
+      text.includes(credential.value),
+      `${label} exposed the ${credential.name} credential value`,
+    ).toBe(false);
+  }
 }
 
 function childPhase(child: VmChild | undefined): Phase | null {
@@ -108,26 +133,101 @@ function childPhase(child: VmChild | undefined): Phase | null {
   return child.kind === "sandbox" ? child.labels[PHASE_LABEL] : child.phase;
 }
 
-function planForCredential(name: CredentialName): CanonicalPlan {
-  switch (name) {
-    case "CLAUDE_CODE_OAUTH_TOKEN":
-      return { providers: [{ provider: "claude", llms: ["anthropic-oauth"] }], integrations: [] };
-    case "ANTHROPIC_API_KEY":
-      return { providers: [{ provider: "pi", llms: ["anthropic-api-key"] }], integrations: [] };
-    case "OPENAI_API_KEY":
-      return { providers: [{ provider: "pi", llms: ["openai-api-key"] }], integrations: [] };
-    case "GEMINI_API_KEY":
-      return { providers: [{ provider: "pi", llms: ["gemini-api-key"] }], integrations: [] };
-    case "NEURALWATT_API_KEY":
-      return { providers: [{ provider: "pi", llms: ["neuralwatt"] }], integrations: [] };
-    case "GH_TOKEN":
-      throw new Error("the release test requires a model credential, not GH_TOKEN");
+function planForCredentials(
+  names: readonly CredentialName[],
+  githubCli: boolean,
+): CanonicalPlan {
+  const piLlms: LlmId[] = [];
+  const providers: CanonicalPlan["providers"] = [];
+
+  for (const name of names) {
+    switch (name) {
+      case "CLAUDE_CODE_OAUTH_TOKEN":
+        providers.push({ provider: "claude", llms: ["anthropic-oauth"] });
+        break;
+      case "ANTHROPIC_API_KEY":
+        piLlms.push("anthropic-api-key");
+        break;
+      case "OPENAI_API_KEY":
+        piLlms.push("openai-api-key");
+        break;
+      case "GEMINI_API_KEY":
+        piLlms.push("gemini-api-key");
+        break;
+      case "NEURALWATT_API_KEY":
+        piLlms.push("neuralwatt");
+        break;
+      case "GH_TOKEN":
+        throw new Error("GH_TOKEN selects the GitHub CLI integration, not a provider");
+    }
   }
+
+  if (piLlms.length > 0) providers.push({ provider: "pi", llms: piLlms });
+  return canonicalizePlan({
+    providers,
+    integrations: githubCli ? ["github-cli"] : [],
+  });
 }
 
 function sandboxLabels(config: unknown): Record<string, string> {
   const labels = (config as { labels?: Record<string, string> } | null)?.labels;
   return labels ?? {};
+}
+
+interface ProvisionStatusFile {
+  readonly planHash: string;
+  readonly ok: boolean;
+  readonly steps: readonly { id: string; status: string; exitCode: number | null }[];
+  readonly failedStep: string | null;
+  readonly error: string | null;
+}
+
+async function readProvisionStatus(handle: SandboxHandle): Promise<ProvisionStatusFile> {
+  const text = await runGuest(handle, `cat ${provisionStatusPath()}`);
+  return JSON.parse(text) as ProvisionStatusFile;
+}
+
+interface ProvisionFault {
+  readonly step: string;
+  readonly restore: () => Promise<void>;
+}
+
+/**
+ * Makes one real provisioning step fail without touching product code. Claude
+ * settings accept a deterministic corrupt file; the GitHub CLI step fails when
+ * the binary is gone and its install directory is read-only.
+ */
+async function injectProvisionFailure(
+  handle: SandboxHandle,
+  plan: CanonicalPlan,
+): Promise<ProvisionFault | null> {
+  if (plan.providers.some((provider) => provider.provider === "claude")) {
+    await runGuest(
+      handle,
+      "printf '%s' '{invalid-json' > /home/paseo/.claude/settings.json",
+    );
+    return {
+      step: "claude-settings",
+      restore: async () => {
+        await runGuest(handle, "rm -f /home/paseo/.claude/settings.json");
+      },
+    };
+  }
+
+  if (plan.integrations.includes("github-cli")) {
+    await runGuest(
+      handle,
+      "rm -f /home/paseo/.local/bin/gh && chmod 0500 /home/paseo/.local/bin",
+    );
+    return {
+      step: "github-cli-install",
+      restore: async () => {
+        await runGuest(handle, "chmod 0755 /home/paseo/.local/bin");
+      },
+    };
+  }
+
+  return null;
 }
 
 function imageReference(config: unknown): string | null {
@@ -184,6 +284,9 @@ async function installJobs(name: string) {
 
 describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
   beforeAll(async () => {
+    requiredCredentials = [];
+    storedByTest.clear();
+
     if (PARENT_URL.length === 0) {
       throw new Error(
         "PASEO_PARENT_URL is required for the release test (for example ws://127.0.0.1:6780/ws)",
@@ -225,35 +328,102 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
     installedByTest = ensured.installedByTest;
 
     const secrets = await rpc<SecretsListResult>(secretsListRpc.name, {});
-    const modelCredentials: readonly CredentialName[] = [
-      "ANTHROPIC_API_KEY",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "OPENAI_API_KEY",
-      "GEMINI_API_KEY",
-      "NEURALWATT_API_KEY",
-    ];
-    const candidate = secrets.secrets.find(
-      (entry) => !entry.stored && modelCredentials.includes(entry.name),
-    );
-    if (!candidate) {
+    const requested = (process.env.PASEO_MSB_RELEASE_CREDENTIALS ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0);
+    const envCredentialName = process.env.PASEO_MSB_RELEASE_ENV_CREDENTIAL?.trim() || null;
+    const envCredentialValue = process.env.PASEO_MSB_RELEASE_ENV_VALUE ?? "";
+    const githubCli = process.env.PASEO_MSB_RELEASE_GITHUB_CLI === "1";
+
+    const envCredential = envCredentialName
+      ? (secrets.secrets.find((entry) => entry.name === envCredentialName)?.name ?? null)
+      : null;
+    if (envCredentialName && !envCredential) {
       throw new Error(
-        "the release test needs at least one model credential name not already stored; use an isolated PASEO_HOME",
+        `PASEO_MSB_RELEASE_ENV_CREDENTIAL="${envCredentialName}" is not a fixed credential name`,
+      );
+    }
+    if (envCredential && envCredentialValue.length === 0) {
+      throw new Error(
+        "PASEO_MSB_RELEASE_ENV_VALUE is required with PASEO_MSB_RELEASE_ENV_CREDENTIAL",
       );
     }
 
-    storedCredentialName = candidate.name;
-    fakeCredentialValue = `paseo-msb-release-${randomUUID()}`;
+    let modelNames: CredentialName[];
+    if (requested.length > 0) {
+      for (const name of requested) {
+        if (!MODEL_CREDENTIALS.includes(name as CredentialName)) {
+          throw new Error(
+            `PASEO_MSB_RELEASE_CREDENTIALS contains "${name}", which is not a model credential`,
+          );
+        }
+      }
+      modelNames = [...new Set(requested)] as CredentialName[];
+    } else if (envCredential && MODEL_CREDENTIALS.includes(envCredential)) {
+      modelNames = [envCredential];
+    } else {
+      const candidate = secrets.secrets.find(
+        (entry) =>
+          MODEL_CREDENTIALS.includes(entry.name) && !entry.stored && !entry.environment,
+      );
+      if (!candidate) {
+        throw new Error(
+          "the release test needs at least one unused model credential name; use an isolated PASEO_HOME",
+        );
+      }
+      modelNames = [candidate.name];
+    }
 
-    await rpc(secretsSetRpc.name, {
-      name: storedCredentialName,
-      value: fakeCredentialValue,
-    });
-    credentialWasStored = true;
+    createdPlan = planForCredentials(modelNames, githubCli);
+    const planCredentialNames = requiredCredentialsForPlan(createdPlan);
+    if (envCredential && !planCredentialNames.includes(envCredential)) {
+      throw new Error(
+        `PASEO_MSB_RELEASE_ENV_CREDENTIAL="${envCredential}" is not required by the selected plan`,
+      );
+    }
+
+    for (const name of planCredentialNames) {
+      const entry = secrets.secrets.find((candidate) => candidate.name === name);
+      if (!entry) throw new Error(`the fixed credential ${name} is missing from secrets.list`);
+
+      if (name === envCredential) {
+        if (!entry.environment || entry.stored) {
+          throw new Error(
+            `${name} must come from the parent daemon environment and not the plugin store`,
+          );
+        }
+        requiredCredentials = [
+          ...requiredCredentials,
+          { name, value: envCredentialValue, source: "environment" },
+        ];
+        continue;
+      }
+
+      if (entry.stored || entry.environment) {
+        throw new Error(
+          `${name} is already available; use an isolated PASEO_HOME and an unused credential name`,
+        );
+      }
+
+      const value = `paseo-msb-release-${randomUUID()}`;
+      await rpc(secretsSetRpc.name, { name, value });
+      storedByTest.add(name);
+      requiredCredentials = [
+        ...requiredCredentials,
+        { name, value, source: "store" },
+      ];
+    }
 
     const afterSet = await rpc<SecretsListResult>(secretsListRpc.name, {});
-    expect(
-      afterSet.secrets.find((entry) => entry.name === storedCredentialName),
-    ).toMatchObject({ stored: true });
+    for (const credential of requiredCredentials) {
+      const entry = afterSet.secrets.find((candidate) => candidate.name === credential.name);
+      expect(entry).toMatchObject(
+        credential.source === "store"
+          ? { stored: true }
+          : { stored: false, environment: true },
+      );
+    }
     expectNoStoredValue("secrets.list", afterSet);
 
     const list = await rpc<VmListResult>(vmListRpc.name, {});
@@ -261,32 +431,46 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       list.inventory.status === "available",
       `microsandbox inventory is unavailable: ${redact(
         JSON.stringify(list.inventory),
-        [fakeCredentialValue],
+        credentialValues(),
       )}`,
     ).toBe(true);
-    expect(list.credentials).toContain(storedCredentialName);
-    expect(list.storedCredentials).toContain(storedCredentialName);
+    const requiredNames = requiredCredentials.map((credential) => credential.name);
+    expect(list.credentials).toEqual(expect.arrayContaining(requiredNames));
+    expect(list.storedCredentials).toEqual(
+      expect.arrayContaining(
+        requiredCredentials
+          .filter((credential) => credential.source === "store")
+          .map((credential) => credential.name),
+      ),
+    );
+    for (const credential of requiredCredentials) {
+      if (credential.source === "environment") {
+        expect(list.storedCredentials).not.toContain(credential.name);
+      }
+    }
     expectNoStoredValue("vm.list", list);
   }, 180_000);
 
   it(
-    "creates, reloads, repairs, deletes, and never exposes the stored value",
+    "creates, reloads, fails, repairs, deletes, and never exposes a credential value",
     async () => {
-      const credentialName = storedCredentialName;
-      if (!credentialName) {
-        throw new Error("the release test did not prepare a stored credential");
+      const plan = createdPlan;
+      if (!plan) {
+        throw new Error("the release test did not prepare a provisioning plan");
+      }
+      if (requiredCredentials.length === 0) {
+        throw new Error("the release test did not prepare any credential");
       }
 
       const requestId = randomUUID();
       const name = sandboxName(requestId);
       createdName = name;
-      createdPlan = planForCredential(credentialName);
 
       // vm.create must return before host work. The sandbox does not exist yet.
       const createStartedAt = Date.now();
       const created = await rpc<VmCreateResult>(vmCreateRpc.name, {
         requestId,
-        plan: createdPlan,
+        plan,
       });
       const createElapsedMs = Date.now() - createStartedAt;
 
@@ -330,7 +514,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           throw new Error(
             redact(
               `child ${name} failed with ${code}: ${child.errorDetail ?? "no detail"}`,
-              [fakeCredentialValue],
+              credentialValues(),
             ),
           );
         }
@@ -341,7 +525,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
               `pending child ${name} failed with ${
                 child.error?.code ?? "create_failed"
               }: ${child.errorDetail ?? "no detail"}`,
-              [fakeCredentialValue],
+              credentialValues(),
             ),
           );
         }
@@ -425,7 +609,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         expect(refresh.acknowledged).toBe(true);
 
         const snapshot = await remote.providers.snapshot();
-        for (const provider of createdPlan?.providers ?? []) {
+        for (const provider of plan.providers) {
           expect(
             snapshot.entries.find((entry) => entry.provider === provider.provider)?.status,
           ).toBe("ready");
@@ -434,95 +618,139 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         await remote.dispose();
       }
 
-      // Each selected provider is at its pinned version in the child.
-      if (createdPlan?.providers.some((provider) => provider.provider === "pi")) {
+      // Each selected provider and integration is at its pinned version.
+      if (plan.providers.some((provider) => provider.provider === "pi")) {
         const piVersion = await runGuest(
           handles[0],
           `PATH=${GUEST_PATH} pi --version`,
         );
         expect(piVersion).toBe(PROVISIONING_PI_VERSION);
       }
-      if (createdPlan?.providers.some((provider) => provider.provider === "claude")) {
+      if (plan.providers.some((provider) => provider.provider === "claude")) {
         const claudeVersion = await runGuest(
           handles[0],
           `PATH=${GUEST_PATH} claude --version`,
         );
         expect(claudeVersion).toContain(CLAUDE_CODE_VERSION);
       }
-
-      // The stored value reaches only the fixed microsandbox secret entry.
-      const secrets = secretEntries(config);
-      const secret = secrets.find(
-        (entry) => entry.envVar === credentialName,
-      );
-      expect(secret).toBeDefined();
-      if (!secret) throw new Error("the fixed secret entry is missing");
-
-      expect(
-        secret.value === fakeCredentialValue,
-        "the stored value did not reach the microsandbox secret entry",
-      ).toBe(true);
-      expect(secret.placeholder).toBe(`$MSB_${credentialName}`);
-      expect(allowedHostNames(secret)).toEqual([
-        ...CREDENTIAL_ALLOWED_HOSTS[credentialName],
-      ]);
-      expect(secret.substitution?.headers).toBe(true);
-      expect(secret.substitution?.query).toBe(false);
-      expect(secret.substitution?.body).toBe(false);
-
-      const valuePaths = findValuePaths(config, fakeCredentialValue);
-      expect(valuePaths.length).toBeGreaterThan(0);
-      for (const location of valuePaths) {
-        expect(
-          location.includes(".network.secrets"),
-          `stored value leaked outside the secret entry at ${location}`,
-        ).toBe(true);
-        expect(
-          location.endsWith(".value"),
-          `stored value leaked outside a secret value at ${location}`,
-        ).toBe(true);
+      if (plan.integrations.includes("github-cli")) {
+        const ghVersion = await runGuest(
+          handles[0],
+          `PATH=${GUEST_PATH} gh --version`,
+        );
+        expect(ghVersion).toContain(GH_VERSION);
       }
 
-      // The guest sees only the placeholder, never the value.
-      const guestValues = await readGuestEnvironment(handles[0], [
-        credentialName,
-      ]);
-      expect(guestValues[0]).toBe(`$MSB_${credentialName}`);
+      // The content-addressed status file is the provisioning proof.
+      const provision = buildProvisionScript(plan);
+      const provisionStatus = JSON.parse(
+        await runGuest(handles[0], `cat ${provisionStatusPath()}`),
+      ) as {
+        planHash: string;
+        ok: boolean;
+        steps: { id: string; status: string; exitCode: number | null }[];
+        failedStep: string | null;
+      };
+      expect(provisionStatus).toMatchObject({
+        planHash: provision.planHash,
+        ok: true,
+        failedStep: null,
+      });
+      expect(provisionStatus.steps.map((step) => step.id)).toEqual(
+        provision.steps.map((step) => step.id),
+      );
+      for (const step of provisionStatus.steps) {
+        expect(["ok", "skipped"]).toContain(step.status);
+      }
+
+      // Every selected credential reaches only its fixed microsandbox secret
+      // entry, regardless of whether it came from the store or the environment.
+      const secrets = secretEntries(config);
+      for (const credential of requiredCredentials) {
+        const secret = secrets.find((entry) => entry.envVar === credential.name);
+        expect(secret, `the ${credential.name} secret entry is missing`).toBeDefined();
+        if (!secret) continue;
+
+        expect(
+          secret.value === credential.value,
+          `the ${credential.name} value did not reach the microsandbox secret entry`,
+        ).toBe(true);
+        expect(secret.placeholder).toBe(`$MSB_${credential.name}`);
+        expect(allowedHostNames(secret)).toEqual([
+          ...CREDENTIAL_ALLOWED_HOSTS[credential.name],
+        ]);
+        expect(secret.substitution?.headers).toBe(true);
+        expect(secret.substitution?.query).toBe(false);
+        expect(secret.substitution?.body).toBe(false);
+
+        const valuePaths = findValuePaths(config, credential.value);
+        expect(valuePaths.length).toBeGreaterThan(0);
+        for (const location of valuePaths) {
+          expect(
+            location.includes(".network.secrets"),
+            `${credential.name} leaked outside the secret entry at ${location}`,
+          ).toBe(true);
+          expect(
+            location.endsWith(".value"),
+            `${credential.name} leaked outside a secret value at ${location}`,
+          ).toBe(true);
+        }
+      }
+
+      // The guest sees only the placeholders, never the values.
+      const guestValues = await readGuestEnvironment(
+        handles[0],
+        requiredCredentials.map((credential) => credential.name),
+      );
+      requiredCredentials.forEach((credential, index) => {
+        expect(guestValues[index]).toBe(`$MSB_${credential.name}`);
+      });
 
       // Raw microsandbox sandbox, job, and system logs are separate sinks that
-      // redaction cannot rewrite after the fact; assert the value never reached
-      // them in the first place.
+      // redaction cannot rewrite after the fact; assert no value reached them.
       const rawSandboxLogs = await handles[0].logs({
         tail: 200,
         sources: ["stdout", "stderr", "output", "system"],
       });
       for (const entry of rawSandboxLogs) {
-        expect(entry.text()).not.toContain(fakeCredentialValue);
+        for (const credential of requiredCredentials) {
+          expect(entry.text()).not.toContain(credential.value);
+        }
       }
 
       const installJob = await handles[0].getJob(jobs[0].id);
       const rawJobLogs = await installJob.logs({ tail: 200 });
       const logDecoder = new TextDecoder();
       for (const entry of rawJobLogs) {
-        expect(logDecoder.decode(entry.data)).not.toContain(fakeCredentialValue);
+        const text = logDecoder.decode(entry.data);
+        for (const credential of requiredCredentials) {
+          expect(text).not.toContain(credential.value);
+        }
       }
 
-      // Replacing and then removing the store value must not disable redaction
-      // for the creation-time value persisted in this VM's config.
-      const replacedValue = `paseo-msb-replaced-${randomUUID()}`;
-      await rpc(secretsSetRpc.name, { name: credentialName, value: replacedValue });
-      const afterReplace = await rpc<VmDetailResult>(vmDetailRpc.name, { name });
-      expect(JSON.stringify(afterReplace)).not.toContain(fakeCredentialValue);
-      expect(JSON.stringify(afterReplace)).not.toContain(replacedValue);
+      // Replacing and then removing each value must not disable redaction for
+      // the creation-time value persisted in this VM's config.
+      for (const credential of requiredCredentials) {
+        const replacedValue = `paseo-msb-replaced-${randomUUID()}`;
+        await rpc(secretsSetRpc.name, {
+          name: credential.name,
+          value: replacedValue,
+        });
+        storedByTest.add(credential.name);
+        const afterReplace = await rpc<VmDetailResult>(vmDetailRpc.name, { name });
+        expect(JSON.stringify(afterReplace)).not.toContain(credential.value);
+        expect(JSON.stringify(afterReplace)).not.toContain(replacedValue);
 
-      await rpc(secretsDeleteRpc.name, { name: credentialName });
-      credentialWasStored = false;
-      const afterCredentialRemoval = await rpc<VmDetailResult>(vmDetailRpc.name, {
-        name,
-      });
-      expect(JSON.stringify(afterCredentialRemoval)).not.toContain(
-        fakeCredentialValue,
-      );
+        await rpc(secretsDeleteRpc.name, { name: credential.name });
+        storedByTest.delete(credential.name);
+        const afterCredentialRemoval = await rpc<VmDetailResult>(vmDetailRpc.name, {
+          name,
+        });
+        expect(JSON.stringify(afterCredentialRemoval)).not.toContain(
+          credential.value,
+        );
+        expect(JSON.stringify(afterCredentialRemoval)).not.toContain(replacedValue);
+      }
 
       // Repair restores a missing registration without another VM.
       const originalRegistration = registrations[0];
@@ -533,7 +761,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           const remaining = await managedRegistrations(createdSandboxId);
           return remaining.length === 0 ? true : null;
         },
-        { timeoutMs: 30_000, secrets: [fakeCredentialValue] },
+        { timeoutMs: 30_000, secrets: credentialValues() },
       );
 
       const repaired = await rpc<VmReconcileResult>(vmReconcileRpc.name, {
@@ -551,7 +779,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           );
           return entry ?? null;
         },
-        { timeoutMs: 180_000, secrets: [fakeCredentialValue] },
+        { timeoutMs: 180_000, secrets: credentialValues() },
       );
       expect(restored.metadata.name).toBe(name);
       expect(restored.source?.key).toBe(createdSandboxId);
@@ -560,17 +788,100 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(afterRepair).toHaveLength(1);
       expect(afterRepair[0].id).toBe(createdSandboxId);
 
+      // Inject a real provisioning failure. It must be fatal, keep the sandbox,
+      // and a retry must skip work that already completed.
+      const fault = await injectProvisionFailure(handles[0], plan);
+      if (fault) {
+        const provision = buildProvisionScript(plan);
+        await runGuest(handles[0], `rm -f ${provisionStatusPath()}`);
+        const refreshed = await handles[0].refresh();
+        await refreshed.modify({ labels: { [PHASE_LABEL]: "installing" } });
+
+        const failedRepair = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+        expect(failedRepair.errors).toEqual([
+          {
+            name,
+            error: safeError(
+              "provision_failed",
+              `provisioning step ${fault.step} failed`,
+            ),
+          },
+        ]);
+
+        const failedStatus = await readProvisionStatus(handles[0]);
+        expect(failedStatus).toMatchObject({
+          planHash: provision.planHash,
+          ok: false,
+          failedStep: fault.step,
+        });
+        const completedBefore = failedStatus.steps
+          .filter((step) => step.status === "ok" || step.status === "skipped")
+          .map((step) => step.id);
+        expect(completedBefore.length).toBeGreaterThan(0);
+
+        const failedList = await rpc<VmListResult>(vmListRpc.name, {});
+        const failedChild = failedList.children.find((entry) => entry.name === name);
+        expect(failedChild?.kind).toBe("sandbox");
+        if (failedChild?.kind === "sandbox") {
+          expect(failedChild.id).toBe(createdSandboxId);
+          expect(failedChild.labels[PHASE_LABEL]).toBe("installing");
+          expect(failedChild.labels[ERROR_LABEL]).toBe("provision_failed");
+          expect(failedChild.errorDetail).toContain(fault.step);
+        }
+
+        const keptSandboxes = await sandboxesNamed(name);
+        expect(keptSandboxes).toHaveLength(1);
+        expect(keptSandboxes[0].id).toBe(createdSandboxId);
+        expect((await managedRegistrations(createdSandboxId))[0]?.status).toBe("online");
+
+        await fault.restore();
+        const retried = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+        expect(retried.errors).toEqual([]);
+        expect(retried.repaired).toContain(name);
+
+        const retriedStatus = await readProvisionStatus(handles[0]);
+        expect(retriedStatus).toMatchObject({
+          planHash: provision.planHash,
+          ok: true,
+          failedStep: null,
+        });
+        for (const stepId of completedBefore) {
+          expect(
+            retriedStatus.steps.find((step) => step.id === stepId)?.status,
+            `${stepId} ran again instead of being skipped`,
+          ).toBe("skipped");
+        }
+        expect(
+          retriedStatus.steps.find((step) => step.id === fault.step)?.status,
+        ).toBe("ok");
+
+        const afterRetry = await rpc<VmListResult>(vmListRpc.name, {});
+        const retriedChild = afterRetry.children.find((entry) => entry.name === name);
+        expect(retriedChild?.kind).toBe("sandbox");
+        if (retriedChild?.kind === "sandbox") {
+          expect(retriedChild.id).toBe(createdSandboxId);
+          expect(retriedChild.labels[PHASE_LABEL]).toBe("ready");
+          expect(retriedChild.labels[ERROR_LABEL]).toBeUndefined();
+        }
+      }
+
       // Repair removes a stale plugin-owned registration whose VM is gone.
       // The plugin must create the registration so its producer identity is
       // the real `plugin:paseo-msb`; a plain client would register as `owner`.
-      // The stale child still needs the credential, so re-store it for this phase.
-      await rpc(secretsSetRpc.name, { name: credentialName, value: fakeCredentialValue });
-      credentialWasStored = true;
+      // The stale child still needs every store-backed credential for this phase.
+      for (const credential of requiredCredentials) {
+        if (credential.source !== "store") continue;
+        await rpc(secretsSetRpc.name, {
+          name: credential.name,
+          value: credential.value,
+        });
+        storedByTest.add(credential.name);
+      }
       const staleRequestId = randomUUID();
       const staleName = sandboxName(staleRequestId);
       await rpc<VmCreateResult>(vmCreateRpc.name, {
         requestId: staleRequestId,
-        plan: createdPlan,
+        plan,
       });
 
       const staleChild = await waitFor(
@@ -585,7 +896,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
             ? entry
             : null;
         },
-        { timeoutMs: CREATE_TIMEOUT_MS, secrets: [fakeCredentialValue] },
+        { timeoutMs: CREATE_TIMEOUT_MS, secrets: credentialValues() },
       );
       const staleSandboxId = staleChild.id;
 
@@ -602,7 +913,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           const remaining = await sandboxesNamed(staleName);
           return remaining.length === 0 ? true : null;
         },
-        { timeoutMs: 60_000, secrets: [fakeCredentialValue] },
+        { timeoutMs: 60_000, secrets: credentialValues() },
       );
 
       const staleRepair = await rpc<VmReconcileResult>(vmReconcileRpc.name, {});
@@ -613,16 +924,19 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           const remaining = await managedRegistrations(staleSandboxId);
           return remaining.length === 0 ? true : null;
         },
-        { timeoutMs: 30_000, secrets: [fakeCredentialValue] },
+        { timeoutMs: 30_000, secrets: credentialValues() },
       );
 
       const afterStale = await sandboxesNamed(name);
       expect(afterStale).toHaveLength(1);
       expect(afterStale[0].id).toBe(createdSandboxId);
 
-      // The second child is done; remove the temporary store value again.
-      await rpc(secretsDeleteRpc.name, { name: credentialName });
-      credentialWasStored = false;
+      // The second child is done; remove the temporary store values again.
+      for (const credential of requiredCredentials) {
+        if (credential.source !== "store") continue;
+        await rpc(secretsDeleteRpc.name, { name: credential.name });
+        storedByTest.delete(credential.name);
+      }
 
       // Delete removes exactly this sandbox and its registration.
       const deleted = await rpc<VmDeleteResult>(vmDeleteRpc.name, {
@@ -638,7 +952,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           const remaining = await sandboxesNamed(name);
           return remaining.length === 0 ? true : null;
         },
-        { timeoutMs: 60_000, secrets: [fakeCredentialValue] },
+        { timeoutMs: 60_000, secrets: credentialValues() },
       );
 
       await waitFor(
@@ -647,7 +961,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           const remaining = await managedRegistrations(createdSandboxId);
           return remaining.length === 0 ? true : null;
         },
-        { timeoutMs: 30_000, secrets: [fakeCredentialValue] },
+        { timeoutMs: 30_000, secrets: credentialValues() },
       );
 
       const stillExists = await msb.Sandbox.get(name)
@@ -722,12 +1036,12 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       }
     }
 
-    if (daemon && storedCredentialName && credentialWasStored) {
-      await daemon
-        .invokePluginRpc(PLUGIN_ID, secretsDeleteRpc.name, {
-          name: storedCredentialName,
-        })
-        .catch(() => {});
+    if (daemon) {
+      for (const name of storedByTest) {
+        await daemon
+          .invokePluginRpc(PLUGIN_ID, secretsDeleteRpc.name, { name })
+          .catch(() => {});
+      }
     }
 
     if (daemon && installedByTest) {
