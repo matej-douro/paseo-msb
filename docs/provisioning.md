@@ -1,13 +1,5 @@
 # Provisioning harnesses and tools
 
-Status: **implemented and verified across the provider matrix.** The catalog,
-planner, script renderer, and status contract live in `shared/provisioning/`;
-`vm.create`, the reconciler, registration, and the client use the
-provider/integration plan. Unit and fake-runtime contracts pass, and
-`npm run test:release` passes on the pinned daemon for the Pi + Anthropic path,
-Claude-only, and Pi + NeuralWatt + GitHub CLI, including a live provisioning
-failure and retry.
-
 ## Selection model
 
 Create selects **providers** and **integrations**. Secrets gate what can be
@@ -154,30 +146,3 @@ substituted. `gh` works because it sends the placeholder as a raw
 The NeuralWatt extension declares an exact `@earendil-works/pi-ai@1.5.0` peer
 while Pi `1.5.2` ships `1.5.2`. The mismatch is accepted deliberately; the live
 release test is the gate.
-
-## Implementation status
-
-1. **Shared layer** (done): catalog, plan resolution, script rendering, status
-   parsing, and unit tests.
-2. **Contracts and create** (done): `secretEnvVars` is replaced by the plan,
-   `PASEO_MSB_PLAN` is persisted, only required credentials are injected,
-   `CLAUDE_CODE_OAUTH_TOKEN` is a fixed name, and the default VM memory is 4096
-   MiB.
-3. **Reconciler and registration** (done): the script is materialized, the
-   generic provision job is launched, `status.json` is parsed, the selected
-   Paseo providers are refreshed and confirmed, and failures are fatal.
-4. **Client** (done): collapsible Providers and Integrations sections,
-   availability reasons, nested options, derived-credential confirmation, and
-   plan detail.
-5. **Verification** (done): fake-runtime contracts cover the job and status
-   path. `npm run test:release` passes on the pinned daemon for the Pi +
-   Anthropic plan, Claude-only, and Pi + NeuralWatt + GitHub CLI. The runs cover
-   reload during provisioning, registration repair, stale-registration cleanup,
-   delete, store and environment credential canaries, replaced/removed
-   creation-time values, and a live provisioning failure.
-
-   The failure injection corrupts the `claude-settings` step (or removes `gh`
-   and makes its install directory read-only for the GitHub CLI step), discards
-   `status.json`, and forces Repair to re-provision. The failure is fatal and
-   keeps the sandbox; the retry reports every completed step as `skipped` and
-   turns the failed step into `ok`.

@@ -8,7 +8,7 @@ Creation, repair, and deletion happen in the plugin's Paseo UI; day-to-day work 
 normal host UI.
 
 Design: [DESIGN.md](./DESIGN.md).
-Provisioning design, including the prepared shared layer and the remaining wiring: [docs/provisioning.md](./docs/provisioning.md).
+Provisioning design: [docs/provisioning.md](./docs/provisioning.md).
 Open tasks: [TASKS.md](./TASKS.md).
 Change history: [CHANGELOG.md](./CHANGELOG.md).
 
@@ -205,7 +205,7 @@ microsandbox responsibilities.
 
 ## Reload and recovery limitations
 
-Labelled sandboxes, detached Pi install jobs, and parent registrations survive
+Labelled sandboxes, detached provisioning jobs, and parent registrations survive
 plugin and parent-daemon restarts. On first use after a plugin reload, recovery
 rediscovers labelled sandboxes and plugin-owned registrations and feeds each
 name to the same reconciler. It does not create, start, or adopt a VM. The only
@@ -221,11 +221,11 @@ its actionable phase and a safe error until Repair or Delete.
 
 Legacy `paseo-msb-id` and `paseo-msb-job` labels are read only for migration. A
 matching legacy ID is tolerated; a mismatched legacy ID quarantines the VM as
-`id_mismatch` instead of adopting it. A legacy `failed` phase is reclassified
-from the complete job inventory: an active install is awaited, a successful job
-wins, a confirmed failed job stays terminal, and no job history permits one
-idempotent install. Existing registrations are updated to the current metadata
-shape on their next successful reconciliation.
+`id_mismatch` instead of adopting it. A legacy `failed` phase is re-run through
+the idempotent provision script: a still-running legacy Pi install is awaited
+first, and a historical failed job is not terminal because Repair re-provisions.
+Existing registrations are updated to the current metadata shape on their next
+successful reconciliation.
 
 The pinned SDK's `modify()` is not generation-bound: a same-name replacement can
 receive a stale handle's label write. Label writes therefore refresh and compare
@@ -322,7 +322,7 @@ same code works from `node`. The command above uses the published
 `@getpaseo/cli@0.15.4` under system Node for that reason; use any other parent
 that can load the addon for the release check.
 
-The test requires at least one of the five credential names to be unused in the
+The test requires at least one of the six credential names to be unused in the
 plugin store, because it stores a fake value under that name and removes it
 afterwards. An isolated `PASEO_HOME` satisfies this. Set `PASEO_PASSWORD` when
 the parent daemon requires authentication. Set `PASEO_MSB_SECRETS_FILE` on the

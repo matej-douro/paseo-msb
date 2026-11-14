@@ -1,6 +1,6 @@
 # paseo-msb: minimal VM-backed Paseo hosts
 
-Status: minimal v1 target design. Completed implementation is recorded in [CHANGELOG.md](./CHANGELOG.md); remaining verification is tracked in [TASKS.md](./TASKS.md).
+Status: minimal v1 target design. Completed implementation is recorded in [CHANGELOG.md](./CHANGELOG.md); remaining implementation and verification are tracked in [TASKS.md](./TASKS.md).
 
 A Paseo parent-daemon plugin that creates, lists, repairs, and deletes microsandbox VMs running Paseo with the selected agent providers. Children appear in Paseo's normal host picker. All lifecycle management happens through the plugin's Paseo UI, not the `msb` CLI.
 
@@ -10,7 +10,7 @@ V1 has exactly five user flows:
 
 1. **Manage credentials**: add, replace, or remove values for six fixed names in the plugin's shared store. The UI never displays a stored value.
 2. **Create**: select providers and integrations and confirm a fixed image, 2 CPUs, and 4096 MiB memory. Secrets decide which options are selectable; the selection decides which credentials enter the child. The VM name is generated.
-3. **Use**: watch creation and Pi installation progress, then open the child through Paseo's normal host UI.
+3. **Use**: watch creation and provisioning progress, then open the child through Paseo's normal host UI.
 4. **Repair**: resume interrupted setup, restore a missing registration, or remove a confirmed stale plugin-owned registration.
 5. **Delete**: confirm in Paseo, destroy the exact sandbox generation, and remove its registration.
 
@@ -27,13 +27,13 @@ Everything else is out of scope: custom names or sizes, image selection, stop/st
 
 There is **no Paseo settings document**. Volatile plugin state is limited to pending creates and in-flight per-name lifecycle lanes. The only durable plugin-owned state is the credential store in section 5. Pending creates retain the request ID and the canonical provider/integration plan, never values.
 
-The app polls `vm.list` and `vm.detail` only while the screen is mounted. Polling observes host work; it does not drive it. Detached VMs and Pi install jobs continue without the UI.
+The app polls `vm.list` and `vm.detail` only while the screen is mounted. Polling observes host work; it does not drive it. Detached VMs and provisioning jobs continue without the UI.
 
 ```text
 Paseo app -> parent daemon -> plugin subprocess -> microsandbox
              |                                      |
              |                                      +-> detached VM, Paseo daemon :6767
-             |                                      +-> detached Pi install job
+             |                                      +-> detached provisioning job
              +-> routed registration -> 127.0.0.1:<published port>
 ```
 
@@ -168,7 +168,7 @@ A failure after destruction leaves a visible, actionable registration-only child
 The single Paseo screen contains:
 
 - Manage secrets, with add/replace/remove controls that never display values.
-- Create confirmation with fixed resources, collapsible **Providers** and **Integrations** sections, availability reasons, nested LLM options, and the derived credential names.
+- Create confirmation with fixed resources, settings-style **Providers** and **Integrations** sections, availability reasons, per-provider nested LLM options, and the derived credential names.
 - Rows for pending, sandbox, and registration-only children with two pills: setup health (the pipeline stage, or the stored safe error that names the stage that stalls it) and VM status (runtime, folded with registration reachability while running). Raw phase, runtime, and registration status stay in the detail sheet; the row keeps its safe error text.
 - Detail with the plan, bounded read-only logs as collapsible monospace blocks (line count in each header, timestamps in a separate column), Repair, and Delete.
 - Retry of a failed pending create with its original request ID and plan, and working Repair/Delete for registration-only children.
@@ -178,19 +178,11 @@ There are no metrics, connection-copy controls, custom provider forms, or plugin
 
 ## 8. Required verification and release bar
 
-The vertical spike must prove the exact pinned parent daemon, microsandbox SDK/runtime, guest image, and provider toolchain, including:
-
-- Guest Node >= 22.19, npm, non-root provider installs, daemon-user PATH, explicit tini fallback, loopback port publish/release, detached survival, config, and logs.
-- Exact-handle `refresh`, `connect`, `modify`, job listing, and destroy under same-name replacement.
-- Complete paginated job recovery, exact plan-hash argv, running/exited/failed/lost states, status-file success proof, and uncertain `JobError.jobId` handling across reload.
-- Real-plugin producer identity, unchanged-add idempotency, disabled-state preservation, changed-configuration updates, registration removal, routed online, and selected-provider refresh.
-- Header-only substitution for all six credentials without exposing values to the guest, from both store and environment.
-
-The release test drives all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and deletion, Repair, and Delete. Barriers/fault injection cover create, job launch, registration response, and destroy, plus concurrent Create/recovery/Repair/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active provision job, and one current registration per logical attempt. Malformed config and pagination failures never delete registrations.
+The release test must drive all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and deletion, Repair, and Delete. Barriers/fault injection cover create, job launch, registration response, and destroy, plus concurrent Create/recovery/Repair/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active provision job, and one current registration per logical attempt. Malformed config and pagination failures never delete registrations.
 
 The credential store persists with owner-only permissions and the six fixed names. Canary credentials, including removed/replaced creation-time values and injected upstream errors, never appear in RPC output, plugin logs, raw microsandbox sandbox/job/system logs, pending state, labels, or test artifacts outside approved secret config and intended upstream substitution. Store and environment paths are both covered.
 
-`npm run typecheck`, `npm run lint`, `npm test`, and `npm run test:release` must pass on the verified pins.
+`npm run typecheck`, `npm run lint`, `npm test`, and `npm run test:release` must pass on the verified pins; changing a pin requires re-running the release verification.
 
 ## 9. V2 shopping list
 

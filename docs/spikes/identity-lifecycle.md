@@ -1,7 +1,6 @@
 # Identity and lifecycle spike results
 
-Task 7 of the v1 plan, recorded in [CHANGELOG.md](../../CHANGELOG.md) and required by [DESIGN.md](../../DESIGN.md)
-section 8 before lifecycle code changes. Verified on 2026-11-13 on macOS arm64
+Verified on 2026-11-13 on macOS arm64
 (Apple silicon) with `msb 0.7.14`, `microsandbox@0.7.14`, parent daemon
 `0.15.4`, and `ghcr.io/getpaseo/paseo:0.15.4`.
 
@@ -87,7 +86,7 @@ labels are configuration, not ownership proof.
 
 ## Required narrow fallbacks
 
-None beyond the task 1 pins. The spike confirms the design's
+None beyond the vertical-slice pins. The spike confirms the design's
 `refresh`-before-`modify` rule, manual job pagination, and list-before-add
 registration rule. The script now asserts every row of the matrix above (stale
 `refresh`, `connect`, job listing, `getJob`, and `destroy` must reject; a stale

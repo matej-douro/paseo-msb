@@ -1,6 +1,6 @@
 # Vertical slice results
 
-Task 1 of the v1 plan, recorded in [CHANGELOG.md](../../CHANGELOG.md). Verified on 2026-11-13 on macOS arm64
+Verified on 2026-11-13 on macOS arm64
 (Apple silicon), using the real microsandbox runtime, the official Paseo image,
 and a real parent daemon.
 
@@ -17,7 +17,7 @@ the routed client, restarts the parent daemon, removes the registration, stops
 the sandbox, verifies host-port release, and destroys the sandbox. It prints a
 JSON summary and exits non-zero on the first failed check.
 
-## Pins used by the remaining tasks
+## Pins used by the spike
 
 | Item | Pin |
 | --- | --- |
@@ -98,8 +98,7 @@ The script records the values in the table above from `msb --version`,
   `destroy()` refuses to destroy the replacement.
 - The spike simulated a plugin reload by disposing and recreating the Paseo
   client. The VM, job, and registration are host-side state and are unaffected.
-  A real plugin-subprocess reload is exercised by task 4/6 once the plugin
-  exists.
+  A real plugin-subprocess reload is exercised by the release test.
 
 ### Loopback child without `PASEO_PASSWORD`
 
@@ -133,16 +132,16 @@ The script records the values in the table above from `msb --version`,
   `api.anthropic.com`. Sending its placeholder to the controlled endpoint
   returned HTTP 403 and the upstream received no request.
 
-## Notes for the plugin implementation
+## SDK behavior notes
 
 - The SDK's `SandboxHandle.config()` returns **camelCase** (`envVar`,
   `allowedHosts`, `substitution.headers`, `memoryMib`). `msb inspect --format
-  json` returns snake_case. Task 2's strict config decoder must not assume the
+  json` returns snake_case. The strict config decoder must not assume the
   CLI shape.
 - Secrets configured with `.value(...)` persist the value in the durable
   sandbox config (`value` is non-empty). That is inside
-  parent-controlled microsandbox state, as the design allows, but task 2 must
-  keep `value` out of every public DTO and log.
+  parent-controlled microsandbox state, as the design allows, but `value` must
+  stay out of every public DTO and log.
 - `Sandbox.get(name)` returns a `SandboxHandle`; `getJob()` is async.
   `destroy({ force: true, timeoutMs })` bounds teardown.
 - `providers.refresh()` only acknowledges the request. Confirm availability
