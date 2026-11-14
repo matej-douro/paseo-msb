@@ -130,6 +130,16 @@ function sandboxLabels(config: unknown): Record<string, string> {
   return labels ?? {};
 }
 
+function imageReference(config: unknown): string | null {
+  const image = (config as { image?: unknown } | null)?.image;
+  if (typeof image === "string") return image;
+  if (typeof image === "object" && image !== null) {
+    const oci = (image as { Oci?: { reference?: unknown } }).Oci;
+    if (typeof oci?.reference === "string") return oci.reference;
+  }
+  return null;
+}
+
 async function sandboxesNamed(name: string) {
   const handles = await listManagedSandboxes(msb, parentId);
   return handles.filter((handle) => handle.name === name);
@@ -392,7 +402,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(labels["paseo-msb-job"]).toBeUndefined();
       expect(labels[PHASE_LABEL]).toBe("ready");
       expect(
-        (config as { image?: string }).image,
+        imageReference(config),
         "the pinned guest image was not applied",
       ).toBe(GUEST_IMAGE);
 
@@ -553,6 +563,9 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       // Repair removes a stale plugin-owned registration whose VM is gone.
       // The plugin must create the registration so its producer identity is
       // the real `plugin:paseo-msb`; a plain client would register as `owner`.
+      // The stale child still needs the credential, so re-store it for this phase.
+      await rpc(secretsSetRpc.name, { name: credentialName, value: fakeCredentialValue });
+      credentialWasStored = true;
       const staleRequestId = randomUUID();
       const staleName = sandboxName(staleRequestId);
       await rpc<VmCreateResult>(vmCreateRpc.name, {
@@ -606,6 +619,10 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const afterStale = await sandboxesNamed(name);
       expect(afterStale).toHaveLength(1);
       expect(afterStale[0].id).toBe(createdSandboxId);
+
+      // The second child is done; remove the temporary store value again.
+      await rpc(secretsDeleteRpc.name, { name: credentialName });
+      credentialWasStored = false;
 
       // Delete removes exactly this sandbox and its registration.
       const deleted = await rpc<VmDeleteResult>(vmDeleteRpc.name, {
