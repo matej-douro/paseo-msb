@@ -74,20 +74,22 @@ runtime accepts a shrink, or the legacy cap cannot be changed safely.
 
 Acceptance:
 
-- [ ] Script records the create config, every `modify()` plan, `resizeStatus`,
+- [x] Script records the create config, every `modify()` plan, `resizeStatus`,
       change dispositions, observed config before and after, and guest `df -m /`
       where applicable.
-- [ ] Script records the legacy default `maxMemory`, whether it can be changed,
+- [x] Script records the legacy default `maxMemory`, whether it can be changed,
       and what happens to `created`, `stopped`, `paused`, and `crashed` VMs
-      under `policy: "restart"`.
-- [ ] Script records whether `no_restart` persists config/env before a restart,
+      under `policy: "restart"`. (`created` and `crashed` were not reproducible:
+      detached create reports `running`; `kill()` reports `stopped`.)
+- [x] Script records whether `no_restart` persists config/env before a restart,
       whether an identical `restart` call still restarts, and whether `dryRun`
       can discover a restart requirement without applying.
-- [ ] Script records combined RAM+disk behavior and partial application.
-- [ ] Result is captured in `docs/spikes/v11-resources.md`.
-- [ ] Task 3.2 uses only outcomes verified here; unsupported cases become
-      `resize_failed` or `restart_required` as appropriate.
-- [ ] Sandboxes and registrations are removed in `finally`.
+- [x] Script records combined RAM+disk behavior and partial application.
+- [x] Result is captured in `docs/spikes/v11-resources.md`.
+- [x] Task 3.2 uses only outcomes verified here; unsupported cases become
+      `resize_failed` or `restart_required` as appropriate. Env writes must not
+      be combined with a `no_restart` resource call.
+- [x] Sandboxes and registrations are removed in `finally`.
 
 Files: `scripts/spikes/verify-v11-resources.mjs`,
 `docs/spikes/v11-resources.md`
