@@ -37,13 +37,13 @@ chosen name is rejected by microsandbox.
 
 Acceptance:
 
-- [ ] Script records the sandbox name, registration label, metadata, and host
+- [x] Script records the sandbox name, registration label, metadata, and host
       directory row.
-- [ ] A screenshot or written note records what Paseo's host picker displays.
-- [ ] Result is captured in `docs/spikes/v11-host-name.md`.
-- [ ] If the picker ignores registration names, DESIGN §3 is amended before
-      task 2.5.
-- [ ] Sandbox and registration are removed in `finally`.
+- [x] A screenshot or written note records what Paseo's host picker displays.
+- [x] Result is captured in `docs/spikes/v11-host-name.md`.
+- [x] If the picker ignores registration names, DESIGN §3 is amended before
+      task 2.5. (Not required: the picker renders the registration label.)
+- [x] Sandbox and registration are removed in `finally`.
 
 Files: `scripts/spikes/verify-v11-host-name.mjs`,
 `docs/spikes/v11-host-name.md`
