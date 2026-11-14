@@ -19,7 +19,7 @@ import { useSecrets } from "./hooks/useSecrets";
 import { useVmDetail } from "./hooks/useVmDetail";
 import { useVmList } from "./hooks/useVmList";
 import { ManageSecrets } from "./ManageSecrets";
-import { ActionButton } from "./ui";
+import { IconButton } from "./ui";
 
 /**
  * The single v1 management screen: create confirmation, child list, and one
@@ -111,9 +111,13 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
         alignItems: compact ? "stretch" : "center",
         justifyContent: "space-between",
         gap: 8,
+        // Hover tooltips belong to the header and must paint above the list.
+        position: "relative",
+        zIndex: 20,
       },
       panelTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
       panelActions: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+      listViewport: { flex: 1, minHeight: 0, position: "relative", zIndex: 0 },
       emptyDetail: {
         flex: 1,
         alignItems: "center",
@@ -158,22 +162,24 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
           ) : null}
         </View>
         <View style={styles.panelActions}>
-          <ActionButton
+          <IconButton
+            icon="KeyRound"
             label="Manage secrets"
             theme={theme}
+            size={compact ? 28 : 30}
             onPress={() => setSecretsOpen(true)}
-            compact={compact}
           />
-          <ActionButton
+          <IconButton
+            icon="Plus"
             label="Create child"
             theme={theme}
             variant="primary"
+            size={compact ? 28 : 30}
             onPress={() => setCreateOpen(true)}
-            compact={compact}
           />
         </View>
       </View>
-      <View style={{ flex: 1, minHeight: 0 }}>{listPane}</View>
+      <View style={styles.listViewport}>{listPane}</View>
     </View>
   );
 
