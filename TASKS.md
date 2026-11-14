@@ -19,19 +19,19 @@ executed.
 The live test needs a parent daemon that can load the microsandbox native addon; see the README
 workstation note about the macOS hardened-runtime Team ID failure.
 
-## 2. Verify the provisioning release matrix
+## 2. Verify the remaining provisioning matrix
 
-The shared layer and live wiring are implemented (see [docs/provisioning.md](./docs/provisioning.md))
-and the unit/contract suite passes. The real-runtime matrix has not been executed.
+The shared layer, live wiring, and the Pi/Anthropic release path are verified. The disposable-VM
+smoke test installed and probed Claude Code, Pi, the NeuralWatt extension, and `gh`, and reran the
+script to confirm probe-based idempotency.
 
-- [ ] Run `npm run test:release` on a reachable parent daemon. The test now creates a provider plan,
-  waits for the content-addressed provision job and `status.json`, and asserts the selected provider
-  in the child's Paseo snapshot.
-- [ ] Verify Pi `1.5.2` is drivable by Paseo `0.15.4` and that `@aliou/pi-neuralwatt@0.19.3` loads with
-  the accepted `pi-ai` peer mismatch.
-- [ ] Exercise the Claude Code and GitHub CLI paths live, not just the unit/fake-runtime paths.
+- [x] `npm run test:release` passes on Paseo `0.15.4`, microsandbox `0.7.14`, and the pinned guest
+  image for the Pi + Anthropic plan.
+- [x] Pi `1.5.2` is drivable by Paseo `0.15.4`; `@aliou/pi-neuralwatt@0.19.3` installs and is
+  declared in Pi settings with the accepted `pi-ai` peer mismatch.
+- [x] Claude Code `2.1.323`, NeuralWatt, and `gh` `2.104.0` install and probe successfully in a
+  disposable VM, including auto-update being disabled.
+- [ ] Run the full release test with `CLAUDE_CODE_OAUTH_TOKEN` (Claude-only) and with
+  `NEURALWATT_API_KEY` plus the GitHub CLI integration.
 - [ ] Inject a failing provisioning step and confirm the failure is fatal, the sandbox is kept, and
   Retry create / Repair re-runs the idempotent script without repeating completed steps.
-- [ ] Re-check store and environment canaries, replaced/removed creation-time values, and secret
-  non-leakage across RPC output, plugin logs, raw sandbox/job/system logs, pending state, labels, and
-  test artifacts.

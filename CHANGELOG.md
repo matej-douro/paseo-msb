@@ -44,6 +44,29 @@ open.
   showed that a wrong plan hash could leave a stale success status in place. Added a regression
   assertion for the trap ordering.
 
+### `a3eb0ce` — Persist the plan env and serialize provision runs
+
+- Found by the live release test: the runtime adapter applied only `PATH`, so `PASEO_MSB_PLAN`
+  never reached the sandbox and reload recovery fell back to a legacy Pi-only plan. Apply every
+  planned env entry now.
+- The real SDK exposes env entries as `{key, value}`; decode both `key` and `name`, and reuse the
+  same reader for credential-name compatibility checks.
+- Serialize concurrent provision scripts with a guest `flock`, so a reload during provisioning
+  waits and then skips completed steps instead of running a second package install.
+
+### `f8c84ce` — Keep the second child's credential available in the release test
+
+- The stale-registration phase re-stores the fake credential before creating the second child and
+  removes it afterwards, instead of leaving the child in `missing_credentials` for the long wait.
+
+### Verification
+
+- `npm run test:release` passes on Paseo `0.15.4`, microsandbox `0.7.14`, and the pinned guest image
+  for the Pi + Anthropic plan, including reload during provisioning, registration repair,
+  stale-registration cleanup, delete, and secret non-leakage.
+- A disposable-VM smoke test installed and probed Claude Code `2.1.323`, Pi `1.5.2`,
+  `@aliou/pi-neuralwatt@0.19.3`, and `gh 2.104.0`; a second run skipped every step.
+
 ## 2026-11-02
 
 ### `a8e5715` — Initial commit

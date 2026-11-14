@@ -1,10 +1,12 @@
 # Provisioning harnesses and tools
 
-Status: **implemented in the live create path.** The catalog, planner, script
-renderer, and status contract live in `shared/provisioning/`; `vm.create`, the
-reconciler, registration, and the client now use the provider/integration plan.
-Unit and fake-runtime contracts pass. The real-runtime release matrix is still
-open in [TASKS.md](../TASKS.md).
+Status: **implemented in the live create path and verified on the Pi/Anthropic
+release path.** The catalog, planner, script renderer, and status contract live
+in `shared/provisioning/`; `vm.create`, the reconciler, registration, and the
+client now use the provider/integration plan. Unit and fake-runtime contracts
+pass, and `npm run test:release` passes for the Pi + Anthropic plan on the
+pinned daemon. The remaining provider-path and failure-injection runs are in
+[TASKS.md](../TASKS.md).
 
 ## Selection model
 
@@ -167,6 +169,8 @@ release test is the gate.
 4. **Client** (done): collapsible Providers and Integrations sections,
    availability reasons, nested options, derived-credential confirmation, and
    plan detail.
-5. **Verification** (open): fake-runtime contracts cover the job and status
-   path. The real-runtime release test has been updated to the plan/provision
-   flow but has not been run on the documented pins; see [TASKS.md](../TASKS.md).
+5. **Verification** (partial): fake-runtime contracts cover the job and status
+   path. `npm run test:release` passes for the Pi + Anthropic plan, including
+   reload during provisioning, registration repair, stale-registration cleanup,
+   and delete. Claude/NeuralWatt/`gh` were smoke-tested in a disposable VM; the
+   full lifecycle runs and failure injection remain in [TASKS.md](../TASKS.md).

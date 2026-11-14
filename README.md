@@ -271,9 +271,10 @@ through the plugin RPCs. It also:
 - deletes the exact sandbox and registration, then repeats delete and Repair
   safely.
 
-The test selects one model credential per run. Run it for the Anthropic API key,
-Claude OAuth token, and NeuralWatt key paths to cover Claude, Pi, and the
-NeuralWatt extension; add a GitHub CLI integration case when exercising `gh`.
+The test selects one model credential per run. The Pi + Anthropic path has
+passed on the pinned daemon. Run it with the Claude OAuth token and the
+NeuralWatt key to cover Claude, Pi, and the NeuralWatt extension; add a GitHub
+CLI integration case when exercising `gh`.
 
 Start a parent daemon on the verified pins first. One isolated setup:
 
