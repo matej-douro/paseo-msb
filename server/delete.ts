@@ -7,11 +7,13 @@ import {
   type RegistrationContext,
 } from "./registration";
 import {
-  decodeManagedSandbox,
+  isIncompleteSandboxError,
+  isSandboxNotFoundError,
   isSandboxReplacedError,
   markSandboxPhase,
   ownershipOf,
   SandboxGenerationError,
+  SandboxMissingError,
   type SandboxHandleLike,
   type SandboxHost,
 } from "./sandbox";
@@ -61,16 +63,13 @@ export async function deleteVm(
   if (ownership === "quarantine") throw new Error(safeError("id_mismatch").message);
   if (ownership !== "owned") throw new Error(safeError("invalid_config").message);
 
-  try {
-    const decoded = decodeManagedSandbox(handle, parentId);
-    if (!decoded) throw new Error(safeError("invalid_config").message);
-  } catch {
-    throw new Error(safeError("invalid_config").message);
-  }
-
   token.throwIfAborted();
 
-  // Tombstone first. If this cannot be written, the VM is not destroyed.
+  // Tombstone first. A generation that vanished is already deleted. The SDK's
+  // specific interrupted-create state cannot be refreshed or labelled, but its
+  // exact handle is still generation-checked and safe to destroy.
+  let vanished = false;
+  let incomplete = false;
   try {
     await bounded(markSandboxPhase(handle, "deleting"), {
       timeoutMs: DELETE_CALL_TIMEOUT_MS,
@@ -78,22 +77,33 @@ export async function deleteVm(
     });
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
-    throw new Error(safeError("delete_failed").message);
+    if (isIncompleteSandboxError(error)) {
+      incomplete = true;
+    } else if (error instanceof SandboxMissingError || isSandboxNotFoundError(error)) {
+      vanished = true;
+    } else {
+      throw new Error(safeError("delete_failed").message);
+    }
   }
 
-  // Re-read the exact generation after the tombstone write. The SDK's
-  // `modify()` can hit a replacement, so never destroy without this check.
-  const current = await refreshExact(handle, token);
-  token.throwIfAborted();
+  if (!vanished) {
+    // Re-read after a successful tombstone: `modify()` can hit a replacement.
+    // Incomplete creation cannot be refreshed; destroy() still rejects a stale
+    // handle, so a replacement remains protected in that path as well.
+    const current = incomplete ? handle : await refreshExact(handle, token);
+    token.throwIfAborted();
 
-  try {
-    await bounded(context.sandboxHost.destroy(current), {
-      timeoutMs: DELETE_CALL_TIMEOUT_MS,
-      signal: token.signal,
-    });
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    throw new Error(safeError("delete_failed").message);
+    if (current) {
+      try {
+        await bounded(context.sandboxHost.destroy(current), {
+          timeoutMs: DELETE_CALL_TIMEOUT_MS,
+          signal: token.signal,
+        });
+      } catch (error) {
+        if (error instanceof LifecycleAbortedError) throw error;
+        throw new Error(safeError("delete_failed").message);
+      }
+    }
   }
 
   // After destruction, remove only this generation's registration. A failure
@@ -167,10 +177,11 @@ async function findSandbox(
   }
 }
 
+
 async function refreshExact(
   handle: SandboxHandleLike,
   token: LaneToken,
-): Promise<SandboxHandleLike> {
+): Promise<SandboxHandleLike | null> {
   try {
     const current = await bounded(handle.refresh(), {
       timeoutMs: DELETE_CALL_TIMEOUT_MS,
@@ -180,6 +191,7 @@ async function refreshExact(
     return current;
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
+    if (error instanceof SandboxMissingError || isSandboxNotFoundError(error)) return null;
     if (error instanceof SandboxGenerationError || isSandboxReplacedError(error)) {
       throw new Error(safeError("id_mismatch").message);
     }

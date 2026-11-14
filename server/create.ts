@@ -1,4 +1,5 @@
 import type { VmCreateInput, VmCreateResult } from "../shared/contracts";
+import type { CredentialName } from "../shared/constants";
 import { PROVISIONING_CREDENTIAL_NAMES } from "../shared/provisioning";
 import {
   availableCredentialSet,
@@ -13,8 +14,8 @@ import type { PendingCreate, PendingCreateStore } from "./pending";
 import { reconcileName, type ReconcileContext } from "./reconciler";
 import { SetupFailure } from "./registration";
 import type { SandboxHost } from "./sandbox";
-import { resolveSelectedSecrets } from "./secrets";
 import type { SecretsStore } from "./secrets-store";
+import { resolveSelectedSecrets, type ResolvedSecret } from "./secrets";
 
 export interface CreateContext extends ReconcileContext {
   readonly lanes: LifecycleLanes;
@@ -68,9 +69,11 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
 
   const entry = reservation.entry;
   let redactionValues: readonly string[] = credentialValues(context.env);
+  let taskStarted = false;
 
   const started = context.lanes
     .run(entry.name, async (token: LaneToken) => {
+      taskStarted = true;
       try {
         redactionValues = await createInLane(context, entry, token, (values) => {
           redactionValues = values;
@@ -92,7 +95,12 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
         );
       }
     })
-    .catch(() => undefined);
+    .catch(() => {
+      // The lane rejected before its task ran, so the task's own settlement
+      // never happened. Keep the reserved entry from staying pending forever;
+      // `entry` guards a newer attempt and a started task is never overwritten.
+      if (!taskStarted) context.pending.settle(entry.requestId, entry);
+    });
 
   return { name: entry.name, started };
 }
@@ -106,40 +114,48 @@ async function createInLane(
 ): Promise<readonly string[]> {
   token.throwIfAborted();
 
+  // Current values are only needed to redact today's diagnostics and to seed an
+  // initial create. Joining an existing generation relies on the persisted plan
+  // and its recorded generations, never on values that may since be removed.
   const stored = await context.secretsStore.read();
-  if (stored.status !== "ok") throw new SetupFailure("secrets_unavailable");
+  const storedValues: ReadonlyMap<CredentialName, string> =
+    stored.status === "ok" ? stored.values : new Map();
 
-  const redactionValues = credentialValues(context.env, stored.values);
+  const redactionValues = credentialValues(context.env, storedValues);
   onRedaction(redactionValues);
 
-  const available = availableCredentialSet(
-    PROVISIONING_CREDENTIAL_NAMES.filter(
-      (name) => stored.values.has(name) || (context.env[name]?.trim().length ?? 0) > 0,
-    ),
-  );
-  const resolution = resolveProvisionPlan(entry.plan, available);
-  if (!resolution.ok) {
-    throw new SetupFailure(
-      resolution.code === "missing_credentials" ? "missing_credentials" : "invalid_request",
+  const resolveCredentials = (): readonly ResolvedSecret[] => {
+    if (stored.status !== "ok") throw new SetupFailure("secrets_unavailable");
+
+    const available = availableCredentialSet(
+      PROVISIONING_CREDENTIAL_NAMES.filter(
+        (name) => storedValues.has(name) || (context.env[name]?.trim().length ?? 0) > 0,
+      ),
     );
-  }
+    const resolution = resolveProvisionPlan(entry.plan, available);
+    if (!resolution.ok) {
+      throw new SetupFailure(
+        resolution.code === "missing_credentials" ? "missing_credentials" : "invalid_request",
+      );
+    }
+
+    const selected = resolveSelectedSecrets(
+      resolution.requiredCredentials,
+      context.env,
+      storedValues,
+    );
+    if (selected.status === "missing") throw new SetupFailure("missing_credentials");
+    return selected.secrets;
+  };
 
   await reconcileName(
     context,
     {
       name: entry.name,
       allowCreate: true,
-      plan: resolution.plan,
+      plan: entry.plan,
       redactionValues,
-      resolveCredentials: () => {
-        const selected = resolveSelectedSecrets(
-          resolution.requiredCredentials,
-          context.env,
-          stored.values,
-        );
-        if (selected.status === "missing") throw new SetupFailure("missing_credentials");
-        return selected.secrets;
-      },
+      resolveCredentials,
     },
     token,
   );

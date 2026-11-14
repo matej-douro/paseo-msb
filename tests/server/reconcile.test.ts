@@ -486,6 +486,31 @@ describe("reconcileVm", () => {
     expect(labels.filter((entry) => entry[PHASE_LABEL] === "ready")).toEqual([]);
   });
 
+  it("completes a deleting tombstone whose generation already vanished", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "deleting",
+      refreshError: Object.assign(new Error("sandbox not found"), {
+        code: "sandboxNotFound",
+      }),
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    const result = await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, creator),
+      INPUT,
+    );
+
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(hosts.added).toEqual([]);
+    expect(hosts.removed).toEqual(["reg_owned"]);
+    expect(creator.destroyed).toEqual([]);
+  });
+
   it("targets one name and reports a missing child", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: "paseo-other", phase: "ready" });
     const hosts = new FakePaseoHosts();

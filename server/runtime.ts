@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import {
   MANAGED_LABEL,
+  MAX_JOB_PAGES,
   MAX_SANDBOX_PAGE_SIZE,
   PARENT_LABEL,
   PLUGIN_ID,
@@ -11,6 +12,7 @@ import {
 } from "../shared/constants";
 import {
   buildSandboxCreatePlan,
+  isSandboxNotFoundError,
   type ExecSpec,
   type SandboxConnectHandleLike,
   type SandboxCreateHandleLike,
@@ -61,6 +63,40 @@ function loadMicrosandbox(paseo: PaseoApi): Promise<MicrosandboxModule> {
 }
 
 /**
+ * A complete inventory read gets the same bounded page budget as job and log
+ * reads. A repeated cursor or an exhausted budget is an inspection failure,
+ * never a silently truncated inventory.
+ */
+const MAX_SANDBOX_PAGES = MAX_JOB_PAGES;
+
+interface SandboxListPageLike {
+  readonly sandboxes: readonly SandboxHandleLike[];
+  readonly nextCursor: string | null;
+}
+
+export async function collectSandboxPages(
+  loadPage: (cursor: string | undefined) => Promise<SandboxListPageLike>,
+): Promise<readonly SandboxHandleLike[]> {
+  const handles: SandboxHandleLike[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  for (let page = 0; page < MAX_SANDBOX_PAGES; page += 1) {
+    const result = await loadPage(cursor);
+    handles.push(...result.sandboxes);
+
+    if (!result.nextCursor) return handles;
+    if (seenCursors.has(result.nextCursor)) {
+      throw new Error("sandbox inventory repeated a cursor");
+    }
+    seenCursors.add(result.nextCursor);
+    cursor = result.nextCursor;
+  }
+
+  throw new Error("sandbox inventory exceeded the page budget");
+}
+
+/**
  * The only place the microsandbox SDK is used for inventory. Label filtering
  * happens in the runtime so foreign sandboxes never reach the projection.
  */
@@ -68,11 +104,8 @@ export function createMicrosandboxRuntime(paseo: PaseoApi): SandboxRuntime {
   return {
     async list(parentId) {
       const { Sandbox } = await loadMicrosandbox(paseo);
-      const handles: SandboxHandleLike[] = [];
-      const seenCursors = new Set<string>();
-      let cursor: string | undefined;
 
-      while (true) {
+      return collectSandboxPages(async (cursor) => {
         const page = await Sandbox.listWith((list) => {
           const filtered = list
             .labels({
@@ -83,18 +116,11 @@ export function createMicrosandboxRuntime(paseo: PaseoApi): SandboxRuntime {
           return cursor ? filtered.cursor(cursor) : filtered;
         });
 
-        handles.push(...(page.sandboxes as unknown as SandboxHandleLike[]));
-
-        const next = page.nextCursor;
-        if (!next) break;
-        if (seenCursors.has(next)) {
-          throw new Error("sandbox inventory repeated a cursor");
-        }
-        seenCursors.add(next);
-        cursor = next;
-      }
-
-      return handles;
+        return {
+          sandboxes: page.sandboxes as unknown as readonly SandboxHandleLike[],
+          nextCursor: page.nextCursor ?? null,
+        };
+      });
     },
   };
 }
@@ -112,7 +138,7 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
         const handle = await Sandbox.get(name);
         return handle as unknown as SandboxHandleLike;
       } catch (error) {
-        if (isSandboxNotFound(error)) return null;
+        if (isSandboxNotFoundError(error)) return null;
         throw error;
       }
     },
@@ -120,9 +146,7 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
     probePort: probeLoopbackPort,
 
     async connect(handle) {
-      const sandbox = await handle.connect().catch((error) => {
-        throw error;
-      });
+      const sandbox = await handle.connect();
       return wrapConnectHandle(handle.id, sandbox as unknown as SdkSandboxLike);
     },
 
@@ -138,7 +162,7 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
           timeoutMs: 15_000,
         });
       } catch (error) {
-        if (isSandboxNotFound(error)) return;
+        if (isSandboxNotFoundError(error)) return;
         throw error;
       }
     },
@@ -232,13 +256,7 @@ interface SdkHandleDestroyLike {
   destroy(options: { force: boolean; timeoutMs: number }): Promise<void>;
 }
 
-function isSandboxNotFound(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { code?: unknown }).code === "sandboxNotFound"
-  );
-}
+
 
 function applyExecSpec(builder: ExecOptionsBuilderLike, spec: ExecSpec): ExecOptionsBuilderLike {
   let configured = builder.args([...spec.args]).user(spec.user);

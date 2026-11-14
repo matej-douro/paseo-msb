@@ -186,6 +186,58 @@ describe("createVm", () => {
     expect(context.hosts).toBeInstanceOf(FakePaseoHosts);
   });
 
+  it("joins an existing sandbox after its create-time credentials were removed", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_existing",
+      name: NAME,
+      phase: "ready",
+      plan: INPUT.plan,
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator, { env: {}, secretsStore: memorySecretsStore() });
+
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(creator.createCount).toBe(0);
+  });
+
+  it("still rejects a different persisted plan when joining without credentials", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_existing",
+      name: NAME,
+      phase: "ready",
+      plan: GEMINI_PLAN,
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator, { env: {}, secretsStore: memorySecretsStore() });
+
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "invalid_request",
+    });
+    expect(creator.createCount).toBe(0);
+  });
+
+  it("joins an existing sandbox when the credential store is unavailable", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_existing", name: NAME, phase: "ready" });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator, {
+      env: {},
+      secretsStore: unavailableSecretsStore(),
+    });
+
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(creator.createCount).toBe(0);
+  });
+
   it("rejects a repeated request with different credential names", async () => {
     const gate = deferred<void>();
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
@@ -413,6 +465,27 @@ describe("createVm", () => {
     expect(context.lanes.closed).toBe(true);
 
     gate.resolve();
+  });
+
+  it("settles a pending create when the lane rejects before the task starts", async () => {
+    const gate = deferred<void>();
+    const lanes = createLifecycleLanes();
+    const context = createContext(new FakeSandboxCreator(), { lanes });
+
+    // Occupy the name's lane, then queue the create behind it. Closing the
+    // lanes cancels the queued task before it starts.
+    const blocker = lanes.run(NAME, async () => {
+      await gate.promise;
+    });
+    const attempt = startCreate(context, INPUT);
+    expect(context.pending.find(REQUEST_ID)).not.toBeNull();
+
+    lanes.close();
+    gate.resolve();
+    await blocker.catch(() => undefined);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
   });
 
   it("keeps a pending create visible through the list projection", async () => {

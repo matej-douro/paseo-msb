@@ -9,6 +9,7 @@ import { buildProvisionScript, legacyPiPlan } from "../shared/provisioning";
 import { safeError, type SafeError } from "../shared/errors";
 import { persistedCredentialValues } from "./diagnostics";
 import { findLatestInstallJob } from "./jobs";
+import { bounded } from "./lanes";
 import {
   credentialValues,
   readJobLogs,
@@ -33,7 +34,12 @@ export interface ReadContext {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly storedCredentials: readonly CredentialName[];
   readonly storedSecrets: ReadonlyMap<CredentialName, string>;
+  /** Bound for one parent directory read; tests shorten it. */
+  readonly hostCallTimeoutMs?: number;
 }
+
+/** Bound for one parent directory read in the read projection. */
+const DEFAULT_HOST_CALL_TIMEOUT_MS = 60_000;
 
 type DirectoryLoad =
   | { readonly status: "available"; readonly directory: HostDirectoryLike }
@@ -42,9 +48,10 @@ type DirectoryLoad =
 async function loadDirectory(
   hosts: ParentHostsLike,
   redaction: readonly string[],
+  timeoutMs: number,
 ): Promise<DirectoryLoad> {
   try {
-    return { status: "available", directory: await hosts.list() };
+    return { status: "available", directory: await bounded(hosts.list(), { timeoutMs }) };
   } catch (error) {
     return {
       status: "unavailable",
@@ -66,7 +73,11 @@ interface Projection {
 
 async function readProjection(context: ReadContext): Promise<Projection> {
   const redaction = credentialValues(context.env, context.storedSecrets);
-  const loaded = await loadDirectory(context.hosts, redaction);
+  const loaded = await loadDirectory(
+    context.hosts,
+    redaction,
+    context.hostCallTimeoutMs ?? DEFAULT_HOST_CALL_TIMEOUT_MS,
+  );
   const registrations = registrationsView(loaded);
   const parentId = loaded.status === "available" ? loaded.directory.self.serverId : null;
 

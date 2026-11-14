@@ -289,6 +289,27 @@ describe("recoverManagedSandboxes", () => {
     expect(hosts.added).toEqual([]);
   });
 
+  it("recovers a listed owned registration without the managed name prefix", async () => {
+    const orphanName = "legacy-child";
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([
+        fakeRegistration({
+          registrationId: "reg_orphan",
+          label: `${PARENT_ID}/${orphanName}`,
+          source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_gone" },
+          metadata: { source: "paseo-msb", name: orphanName },
+        }),
+      ]),
+    });
+
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([]), hosts, { sandboxHost: new FakeSandboxCreator() }),
+    );
+
+    // The exact generation is absent, so recovery cleans up the listed row.
+    expect(hosts.removed).toEqual(["reg_orphan"]);
+  });
+
   it("throws when registrations are unavailable so the caller can retry", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
     const hosts = new FakePaseoHosts({

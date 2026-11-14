@@ -223,7 +223,7 @@ export function buildVmList(input: VmListInput): VmListResult {
     );
     const known = new Set<string>();
     for (const registration of input.registrations.hosts) {
-      if (registration.source?.id !== REGISTRATION_PRODUCER_ID) continue;
+      if (!isManagedRegistration(registration)) continue;
       const name = registration.metadata.name;
       if (typeof name !== "string" || name.length === 0) continue;
       if (sandboxNames.has(name) || activePending.has(name) || known.has(name)) continue;

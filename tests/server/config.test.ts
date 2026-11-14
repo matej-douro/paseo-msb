@@ -30,8 +30,6 @@ describe("decodeManagedSandbox", () => {
       "errorDetail",
       "id",
       "labels",
-      "legacyId",
-      "legacyJobId",
       "name",
       "plan",
       "runtimeStatus",
@@ -40,8 +38,6 @@ describe("decodeManagedSandbox", () => {
     expect(decoded!.id).toBe("sbx_1");
     expect(decoded!.name).toBe("paseo-1");
     expect(decoded!.runtimeStatus).toBe("running");
-    expect(decoded!.legacyId).toBeNull();
-    expect(decoded!.legacyJobId).toBeNull();
     expect(decoded!.labels).toEqual({
       [MANAGED_LABEL]: PLUGIN_VERSION,
       [PARENT_LABEL]: PARENT_ID,
@@ -124,7 +120,7 @@ describe("decodeManagedSandbox", () => {
     expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
   });
 
-  it("accepts a matching legacy stable-id label and reads legacy job ids only as hints", () => {
+  it("accepts matching legacy labels without projecting them", () => {
     const handle = fakeSandbox({
       id: "sbx_1",
       name: "paseo-1",
@@ -133,8 +129,9 @@ describe("decodeManagedSandbox", () => {
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
 
     expect(decoded!.labels).not.toHaveProperty(SANDBOX_ID_LABEL);
-    expect(decoded!.legacyId).toBe("sbx_1");
-    expect(decoded!.legacyJobId).toBe("job_7");
+    expect(decoded!.labels).not.toHaveProperty("paseo-msb-job");
+    expect(decoded).not.toHaveProperty("legacyId");
+    expect(decoded).not.toHaveProperty("legacyJobId");
   });
 
   it("does not project an arbitrary error label", () => {

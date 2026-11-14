@@ -6,6 +6,7 @@ import {
   vmCreateRpc,
   vmDeleteRpc,
   vmDetailRpc,
+  vmDismissRpc,
   vmListRpc,
   vmReconcileRpc,
   SecretsSetInputSchema,
@@ -18,12 +19,19 @@ import {
 const requestId = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
 
 describe("RPC contracts", () => {
-  it("registers the five lifecycle contracts and the credential store", () => {
+  it("registers the six lifecycle contracts and the credential store", () => {
     expect(
-      [vmListRpc, vmDetailRpc, vmCreateRpc, vmDeleteRpc, vmReconcileRpc].map(
+      [vmListRpc, vmDetailRpc, vmCreateRpc, vmDismissRpc, vmDeleteRpc, vmReconcileRpc].map(
         (contract) => contract.name,
       ),
-    ).toEqual(["vm.list", "vm.detail", "vm.create", "vm.delete", "vm.reconcile"]);
+    ).toEqual([
+      "vm.list",
+      "vm.detail",
+      "vm.create",
+      "vm.dismiss",
+      "vm.delete",
+      "vm.reconcile",
+    ]);
     expect([secretsListRpc, secretsSetRpc, secretsDeleteRpc].map((contract) => contract.name)).toEqual(
       ["secrets.list", "secrets.set", "secrets.delete"],
     );

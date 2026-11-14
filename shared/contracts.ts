@@ -160,6 +160,19 @@ export const VmCreateOutputSchema = z
   })
   .strict();
 
+export const VmDismissInputSchema = z
+  .object({
+    requestId: z.string().uuid(),
+  })
+  .strict();
+
+export const VmDismissOutputSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    dismissed: z.literal(true),
+  })
+  .strict();
+
 export const VmDeleteInputSchema = z
   .object({
     name: z.string().min(1).max(128),
@@ -262,6 +275,12 @@ export const vmCreateRpc = defineRpc({
   output: VmCreateOutputSchema,
 });
 
+export const vmDismissRpc = defineRpc({
+  name: "vm.dismiss",
+  input: VmDismissInputSchema,
+  output: VmDismissOutputSchema,
+});
+
 export const vmDeleteRpc = defineRpc({
   name: "vm.delete",
   input: VmDeleteInputSchema,
@@ -299,6 +318,8 @@ export type VmChild = z.infer<typeof VmChildSchema>;
 export type RegistrationChild = z.infer<typeof RegistrationChildSchema>;
 export type VmCreateInput = z.infer<typeof VmCreateInputSchema>;
 export type VmCreateResult = z.infer<typeof VmCreateOutputSchema>;
+export type VmDismissInput = z.infer<typeof VmDismissInputSchema>;
+export type VmDismissResult = z.infer<typeof VmDismissOutputSchema>;
 export type VmDeleteInput = z.infer<typeof VmDeleteInputSchema>;
 export type VmDeleteResult = z.infer<typeof VmDeleteOutputSchema>;
 export type VmReconcileInput = z.infer<typeof VmReconcileInputSchema>;

@@ -307,6 +307,32 @@ describe("buildVmList", () => {
     expect(VmListOutputSchema.parse(result)).toEqual(result);
   });
 
+  it("lists a plugin-owned registration without the managed name prefix", () => {
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory: { status: "available", sandboxes: [], failures: [] },
+      registrations: {
+        status: "available",
+        hosts: [
+          fakeRegistration({
+            registrationId: "reg_legacy",
+            source: { id: "plugin:paseo-msb", key: "sandbox_gone" },
+            metadata: { source: "paseo-msb", name: "legacy-child" },
+            label: `${PARENT_ID}/legacy-child`,
+            status: "offline",
+            serverId: null,
+          }),
+        ],
+      },
+      pending: [],
+      env: {},
+    });
+
+    expect(result.children).toEqual([
+      expect.objectContaining({ kind: "registration", name: "legacy-child" }),
+    ]);
+  });
+
   it("reports plugin-stored credentials by name only", () => {
     const result = buildVmList({
       parentId: PARENT_ID,

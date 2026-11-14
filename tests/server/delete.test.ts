@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MANAGED_LABEL, REGISTRATION_PRODUCER_ID } from "../../shared/constants";
+import { MANAGED_LABEL, PLAN_ENV_VAR, REGISTRATION_PRODUCER_ID } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
 import { deleteVm, type DeleteContext } from "../../server/delete";
 import type { LaneToken } from "../../server/lanes";
@@ -41,6 +41,17 @@ function ownedRegistration(overrides: Parameters<typeof fakeRegistration>[0] = {
     metadata: { source: "paseo-msb", name: NAME },
     ...overrides,
   });
+}
+
+function notFoundError(): Error {
+  return Object.assign(new Error("sandbox not found"), { code: "sandboxNotFound" });
+}
+
+function incompleteError(): Error {
+  return Object.assign(
+    new Error(`invalid config: sandbox "${NAME}" has an incomplete creation or cleanup`),
+    { code: "invalidConfig" },
+  );
 }
 
 describe("deleteVm", () => {
@@ -108,6 +119,130 @@ describe("deleteVm", () => {
     const creator = new FakeSandboxCreator({
       existing: fakeSandbox({ id: "sandbox_replacement", name: NAME }),
     });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    await expect(deleteVm(deleteContext(creator, hosts), INPUT, token())).rejects.toThrow(
+      safeError("id_mismatch").message,
+    );
+
+    expect(creator.destroyed).toEqual([]);
+    expect(hosts.removed).toEqual([]);
+  });
+
+  it("deletes an owned sandbox whose persisted plan no longer parses", async () => {
+    const creator = new FakeSandboxCreator({
+      existing: fakeSandbox({
+        id: "sandbox_1",
+        name: NAME,
+        configExtras: {
+          env: [{ name: PLAN_ENV_VAR, value: "{not a plan" }],
+        },
+      }),
+    });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    const result = await deleteVm(deleteContext(creator, hosts), INPUT, token());
+
+    expect(result).toEqual({ name: NAME, removed: true });
+    expect(creator.destroyed).toEqual(["sandbox_1"]);
+    expect(hosts.removed).toEqual(["reg_owned"]);
+  });
+
+  it("destroys an interrupted creation that cannot accept a tombstone", async () => {
+    const creator = new FakeSandboxCreator({
+      existing: fakeSandbox({
+        id: "sandbox_1",
+        name: NAME,
+        refreshError: incompleteError(),
+      }),
+    });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    const result = await deleteVm(deleteContext(creator, hosts), INPUT, token());
+
+    expect(result).toEqual({ name: NAME, removed: true });
+    expect(creator.destroyed).toEqual(["sandbox_1"]);
+    expect(hosts.removed).toEqual(["reg_owned"]);
+  });
+
+  it("does not bypass tombstone failure for other invalid configs", async () => {
+    const creator = new FakeSandboxCreator({
+      existing: fakeSandbox({
+        id: "sandbox_1",
+        name: NAME,
+        refreshError: Object.assign(new Error("invalid config: malformed state"), {
+          code: "invalidConfig",
+        }),
+      }),
+    });
+    const hosts = new FakePaseoHosts();
+
+    await expect(deleteVm(deleteContext(creator, hosts), INPUT, token())).rejects.toThrow(
+      safeError("delete_failed").message,
+    );
+    expect(creator.destroyed).toEqual([]);
+  });
+
+  it("treats a generation that vanished before the tombstone as already missing", async () => {
+    const creator = new FakeSandboxCreator({
+      existing: fakeSandbox({
+        id: "sandbox_1",
+        name: NAME,
+        refreshError: notFoundError(),
+      }),
+    });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    const result = await deleteVm(deleteContext(creator, hosts), INPUT, token());
+
+    expect(result).toEqual({ name: NAME, removed: true });
+    expect(creator.destroyed).toEqual([]);
+    expect(hosts.removed).toEqual(["reg_owned"]);
+  });
+
+  it("treats a generation that vanished after the tombstone as already missing", async () => {
+    const base = fakeSandbox({ id: "sandbox_1", name: NAME });
+    let refreshes = 0;
+    const sandbox = {
+      ...base,
+      refresh: async () => {
+        refreshes += 1;
+        if (refreshes === 1) return base;
+        throw notFoundError();
+      },
+    };
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+
+    const result = await deleteVm(deleteContext(creator, hosts), INPUT, token());
+
+    expect(result).toEqual({ name: NAME, removed: true });
+    expect(creator.destroyed).toEqual([]);
+    expect(hosts.removed).toEqual(["reg_owned"]);
+  });
+
+  it("still refuses a replacement that appears on the post-tombstone refresh", async () => {
+    const base = fakeSandbox({ id: "sandbox_1", name: NAME });
+    const replacement = fakeSandbox({ id: "sandbox_replacement", name: NAME });
+    let refreshes = 0;
+    const sandbox = {
+      ...base,
+      refresh: async () => {
+        refreshes += 1;
+        return refreshes === 1 ? base : replacement;
+      },
+    };
+    const creator = new FakeSandboxCreator({ existing: sandbox });
     const hosts = new FakePaseoHosts({
       directory: fakeHostDirectory([ownedRegistration()]),
     });

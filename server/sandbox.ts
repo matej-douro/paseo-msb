@@ -9,9 +9,7 @@ import {
   GUEST_INIT_COMMAND,
   GUEST_PATH,
   GUEST_PORT,
-  JOB_LABEL,
   MANAGED_LABEL,
-  MANAGED_NAME_PREFIX,
   MEMORY_MIB,
   PARENT_LABEL,
   PHASE_LABEL,
@@ -35,7 +33,7 @@ import type { ResolvedSecret } from "./secrets";
  * Structural handles keep the decoder testable with fake sandboxes. The real
  * microsandbox adapter below satisfies the same interface. Every mutation goes
  * through `guardedModify`, because the pinned SDK's `modify()` does not reject a
- * same-name replacement (verified by the task 7 spike).
+ * same-name replacement (verified by the integration identity contract).
  */
 export interface SandboxLogEntryLike {
   readonly timestamp: Date | number;
@@ -222,10 +220,6 @@ export interface DecodedSandbox {
   readonly plan: CanonicalPlan | null;
   /** Bounded, redacted diagnostic for a failed or retrying sandbox. */
   readonly errorDetail: string | null;
-  /** Legacy stable-ID label, read only for migration. */
-  readonly legacyId: string | null;
-  /** Legacy job label, read only for migration. */
-  readonly legacyJobId: string | null;
 }
 
 export interface LoadedSandbox {
@@ -263,6 +257,14 @@ export class SandboxGenerationError extends Error {
   constructor(readonly code: Extract<SafeErrorCode, "id_mismatch" | "runtime_unavailable">) {
     super(code);
     this.name = "SandboxGenerationError";
+  }
+}
+
+/** The exact generation disappeared between lookup and refresh. */
+export class SandboxMissingError extends Error {
+  constructor() {
+    super("sandbox generation is gone");
+    this.name = "SandboxMissingError";
   }
 }
 
@@ -321,8 +323,6 @@ function decodeLabels(
     labels: projected,
     plan: null,
     errorDetail: detail,
-    legacyId: labels[SANDBOX_ID_LABEL] ?? null,
-    legacyJobId: labels[JOB_LABEL] ?? null,
   };
 }
 
@@ -406,10 +406,6 @@ export async function loadManagedSandboxes(
   return { status: "available", sandboxes, failures };
 }
 
-/** Guard used by tests and later lifecycle code. */
-export function isManagedSandboxName(name: string): boolean {
-  return name.startsWith(MANAGED_NAME_PREFIX) && name.length > MANAGED_NAME_PREFIX.length;
-}
 
 function mergePersistedRedaction(
   base: readonly string[],
@@ -453,9 +449,6 @@ export function ownershipOf(handle: SandboxHandleLike, parentId: string): Sandbo
   return "owned";
 }
 
-export function ownsSandbox(handle: SandboxHandleLike, parentId: string): boolean {
-  return ownershipOf(handle, parentId) === "owned";
-}
 
 /**
  * Normalizes the SDK's array-shaped env and the CLI's record-shaped env.
@@ -549,6 +542,10 @@ export async function guardedModify(
   try {
     current = await handle.refresh();
   } catch (error) {
+    // Preserve absence as a distinct outcome: Delete treats it as an already
+    // satisfied request, while a replaced generation remains a mismatch.
+    if (isSandboxNotFoundError(error)) throw new SandboxMissingError();
+    if (isIncompleteSandboxError(error)) throw error;
     throw new SandboxGenerationError(
       isSandboxReplacedError(error) ? "id_mismatch" : "runtime_unavailable",
     );
@@ -559,6 +556,7 @@ export async function guardedModify(
   try {
     await current.modify({ labels });
   } catch (error) {
+    if (isSandboxNotFoundError(error)) throw new SandboxMissingError();
     if (isSandboxReplacedError(error)) throw new SandboxGenerationError("id_mismatch");
     throw error;
   }
@@ -570,6 +568,27 @@ export function isSandboxReplacedError(error: unknown): boolean {
     error !== null &&
     ((error as { code?: unknown }).code === "sandboxReplaced" ||
       (error as { code?: unknown }).code === "sandbox_replaced")
+  );
+}
+
+/** An interrupted create cannot be refreshed or labelled, but its handle can be destroyed. */
+export function isIncompleteSandboxError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === "invalidConfig" &&
+    typeof candidate.message === "string" &&
+    candidate.message.includes("incomplete creation or cleanup")
+  );
+}
+
+/** The SDK could not find the exact generation that was just looked up. */
+export function isSandboxNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    ((error as { code?: unknown }).code === "sandboxNotFound" ||
+      (error as { code?: unknown }).code === "sandbox_not_found")
   );
 }
 

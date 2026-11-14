@@ -6,6 +6,7 @@ import {
   vmCreateRpc,
   vmDeleteRpc,
   vmDetailRpc,
+  vmDismissRpc,
   vmListRpc,
   vmReconcileRpc,
 } from "../shared/contracts";
@@ -14,7 +15,7 @@ import { safeError } from "../shared/errors";
 import { createVm } from "./create";
 import { deleteVm } from "./delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "./lanes";
-import { createPendingCreateStore } from "./pending";
+import { createPendingCreateStore, dismissPendingCreate } from "./pending";
 import { reconcileVm } from "./reconcile";
 import { recoverManagedSandboxes } from "./recovery";
 import { readVmDetail, readVmList, type ReadContext } from "./rpc";
@@ -26,13 +27,15 @@ import {
 } from "./secrets-store";
 
 /**
- * Registers the five lifecycle RPCs plus the plugin credential store. One
+ * Registers the six lifecycle RPCs plus the plugin credential store. One
  * per-name lifecycle lane serializes Create, recovery, Repair, and Delete.
  * Recovery starts on first use and is retried after a transient failure.
  */
 export function registerRpcHandlers(server: PluginServerContext): () => Promise<void> {
   const pending = createPendingCreateStore();
-  const secretsStore = createSecretsStore(defaultSecretsFilePath(process.env));
+  const secretsStore = createSecretsStore(defaultSecretsFilePath(process.env), {
+    secureExistingDirectory: true,
+  });
   const lanes = createLifecycleLanes();
   let recovery: Promise<void> | null = null;
   let recoveryDone = false;
@@ -93,6 +96,8 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
     ensureRecovery(paseo);
     return createVm(reconcileContext(paseo), input);
   });
+
+  server.handle(vmDismissRpc, (input) => dismissPendingCreate(pending, input.requestId));
 
   server.handle(vmDeleteRpc, (input, { paseo }) => {
     const context = reconcileContext(paseo);

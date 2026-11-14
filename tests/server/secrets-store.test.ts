@@ -58,6 +58,41 @@ describe("secrets store", () => {
     expect(directoryStat.mode & 0o777).toBe(0o700);
   });
 
+  it("does not tighten an existing parent chosen for the secret file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-msb-secrets-"));
+    cleanup.push(root);
+    const parent = path.join(root, "shared-config");
+    await fs.mkdir(parent, { recursive: true });
+    await fs.chmod(parent, 0o755);
+
+    const filePath = path.join(parent, "secrets.json");
+    const store = createSecretsStore(filePath);
+    await store.set("OPENAI_API_KEY", "stored-value");
+
+    const [parentStat, fileStat] = await Promise.all([
+      fs.stat(parent),
+      fs.stat(filePath),
+    ]);
+
+    expect(parentStat.mode & 0o777).toBe(0o755);
+    expect(fileStat.mode & 0o777).toBe(0o600);
+  });
+
+  it("tightens the plugin-owned default directory when explicitly requested", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paseo-msb-secrets-"));
+    cleanup.push(root);
+    const parent = path.join(root, "plugin-data", "paseo-msb");
+    await fs.mkdir(parent, { recursive: true });
+    await fs.chmod(parent, 0o755);
+
+    const store = createSecretsStore(path.join(parent, "secrets.json"), {
+      secureExistingDirectory: true,
+    });
+    await store.set("OPENAI_API_KEY", "stored-value");
+
+    expect((await fs.stat(parent)).mode & 0o777).toBe(0o700);
+  });
+
   it("ignores unknown names and blank values in the file", async () => {
     const { store, filePath } = await tempStore();
     await fs.mkdir(path.dirname(filePath), { recursive: true });

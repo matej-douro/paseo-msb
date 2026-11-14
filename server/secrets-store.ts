@@ -9,7 +9,7 @@ import {
 } from "../shared/constants";
 
 /**
- * Plugin-managed credential values for the five fixed names. Values live only
+ * Plugin-managed credential values for the six fixed names. Values live only
  * in this file and the plugin process; no RPC returns them.
  */
 export interface StoredSecrets {
@@ -54,7 +54,10 @@ export function defaultSecretsFilePath(
   return path.join(home, "plugin-data", PLUGIN_ID, "secrets.json");
 }
 
-export function createSecretsStore(filePath = defaultSecretsFilePath()): SecretsStore {
+export function createSecretsStore(
+  filePath = defaultSecretsFilePath(),
+  { secureExistingDirectory = false }: { readonly secureExistingDirectory?: boolean } = {},
+): SecretsStore {
   let queue: Promise<unknown> = Promise.resolve();
 
   function serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -104,13 +107,13 @@ export function createSecretsStore(filePath = defaultSecretsFilePath()): Secrets
     };
 
     try {
-      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-      // Owner-only permissions are part of the contract, not best effort.
-      await fs.chmod(directory, 0o700);
+      await ensurePrivateDirectory(directory, secureExistingDirectory);
       await fs.writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, {
         mode: 0o600,
       });
       await fs.rename(temporary, filePath);
+      // The secret file itself is always owner-only, even when the caller chose
+      // an existing parent directory via PASEO_MSB_SECRETS_FILE.
       await fs.chmod(filePath, 0o600);
     } catch {
       await fs.rm(temporary, { force: true }).catch(() => {});
@@ -154,4 +157,42 @@ function isMissingFile(error: unknown): boolean {
     error !== null &&
     (error as { code?: unknown }).code === "ENOENT"
   );
+}
+
+/**
+ * Creates missing directories as `0700`. Existing override parents keep their
+ * permissions; the plugin-owned default directory may be tightened explicitly.
+ */
+async function ensurePrivateDirectory(
+  directory: string,
+  secureExistingDirectory: boolean,
+): Promise<void> {
+  const missing: string[] = [];
+  let current = directory;
+
+  while (true) {
+    try {
+      const stats = await fs.stat(current);
+      if (!stats.isDirectory()) throw new SecretsStoreUnavailableError();
+      break;
+    } catch (error) {
+      if (!isMissingFile(error)) throw error;
+      missing.push(current);
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+
+  if (missing.length === 0) {
+    if (secureExistingDirectory) await fs.chmod(directory, 0o700);
+    return;
+  }
+
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  // `mkdir`'s mode is filtered by the process umask, so re-apply it to every
+  // directory this call actually created. Existing parents are never touched.
+  for (const created of missing) {
+    await fs.chmod(created, 0o700);
+  }
 }

@@ -25,6 +25,7 @@ import {
 } from "./registration";
 import {
   decodeManagedSandbox,
+  isSandboxNotFoundError,
   isSandboxReplacedError,
   markSandboxError,
   markSandboxPhase,
@@ -32,6 +33,7 @@ import {
   readSandboxHostPort,
   sandboxCredentialNames,
   SandboxGenerationError,
+  SandboxMissingError,
   type DecodedSandbox,
   type SandboxCreateHandleLike,
   type SandboxCreateRequest,
@@ -526,6 +528,11 @@ async function completeDeletion(
     });
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
+    // The tombstoned generation vanished before this reload reached it. The
+    // user's intent is satisfied; only its exact registration remains to clear.
+    if (error instanceof SandboxMissingError || isSandboxNotFoundError(error)) {
+      return cleanupGeneration(context, handle.id, redaction, token);
+    }
     throw new SetupFailure("delete_failed");
   }
   if (current.id !== handle.id) throw new SetupFailure("id_mismatch");
@@ -564,8 +571,7 @@ async function cleanupGeneration(
   return true;
 }
 
-
-export function mergeRedaction(
+function mergeRedaction(
   base: readonly string[],
   handle: SandboxHandleLike,
 ): string[] {

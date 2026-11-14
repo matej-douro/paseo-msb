@@ -1,7 +1,8 @@
 import { sandboxName, type Phase } from "../shared/constants";
+import type { VmDismissResult } from "../shared/contracts";
 import type { CanonicalPlan } from "../shared/provisioning";
 import { canonicalizePlan, plansEqual } from "../shared/provisioning";
-import type { SafeErrorCode } from "../shared/errors";
+import { safeError, type SafeErrorCode } from "../shared/errors";
 
 /**
  * A create attempt that has not produced a sandbox yet. The store is the only
@@ -72,6 +73,18 @@ function initialEntry(
     errorCode: null,
     errorDetail: null,
   };
+}
+
+export function dismissPendingCreate(
+  store: PendingCreateStore,
+  requestId: string,
+): VmDismissResult {
+  const entry = store.find(requestId);
+  if (!entry) throw new Error(safeError("not_found").message);
+  if (entry.phase !== "failed") throw new Error(safeError("invalid_request").message);
+
+  store.settle(requestId, entry);
+  return { name: entry.name, dismissed: true };
 }
 
 export function createPendingCreateStore(): PendingCreateStore {

@@ -1,12 +1,15 @@
 import {
-  MANAGED_NAME_PREFIX,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
   registrationLabel,
 } from "../shared/constants";
 import type { SafeErrorCode } from "../shared/errors";
 import { abortableSleep, bounded, LifecycleAbortedError } from "./lanes";
-import type { HostDirectoryLike, HostRegistrationLike } from "./status";
+import {
+  isManagedRegistration,
+  type HostDirectoryLike,
+  type HostRegistrationLike,
+} from "./status";
 
 /** The parent host API used for registration, not just reads. */
 export interface HostAddInput {
@@ -123,16 +126,18 @@ export function matchingRegistrations(
 
 /**
  * Plugin-owned registrations in this parent's directory whose metadata names a
- * managed child. Absence from sandbox inventory is not proof of deletion;
- * callers must confirm with an exact lookup before removing any of these.
+ * managed child. This is the same producer/name predicate the read projection
+ * uses, so every listed owned row can be targeted by Repair and recovery.
+ * Absence from sandbox inventory is not proof of deletion; callers must confirm
+ * with an exact lookup before removing any of these.
  */
 export function pluginRegistrations(
   registrations: readonly HostRegistrationLike[],
 ): HostRegistrationLike[] {
   return registrations.filter((registration) => {
-    if (registration.source?.id !== REGISTRATION_PRODUCER_ID) return false;
+    if (!isManagedRegistration(registration)) return false;
     const name = registration.metadata.name;
-    return typeof name === "string" && name.startsWith(MANAGED_NAME_PREFIX);
+    return typeof name === "string" && name.length > 0;
   });
 }
 
