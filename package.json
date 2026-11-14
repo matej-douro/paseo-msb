@@ -19,8 +19,6 @@
     "lint:fix": "biome check --write .",
     "test": "vitest run",
     "test:release": "PASEO_MSB_RELEASE_TEST=1 vitest run tests/integration",
-    "spike:vertical": "node scripts/spikes/verify-vertical-slice.mjs",
-    "spike:identity": "PASEO_HOME=$PWD/.scratch/paseo-home PASEO_PARENT_URL=ws://127.0.0.1:6793/ws node scripts/spikes/verify-identity-lifecycle.mjs",
     "check:native": "node scripts/check-native.mjs",
     "check:plugin": "node scripts/check-plugin.mjs"
   },
@@ -32,7 +30,6 @@
     "@biomejs/biome": "^2.6.7",
     "@getpaseo/plugin": "0.15.4",
     "@getpaseo/protocol": "0.15.4",
-    "@tanstack/react-query": "^5.90.11",
     "@types/node": "^24.0.0",
     "@types/react": "~19.2.0",
     "react": "19.1.0",

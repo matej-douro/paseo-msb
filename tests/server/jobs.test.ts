@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  classifyInstallJobs,
   isPiInstallJob,
   JobInventoryError,
   listAllJobs,
@@ -61,18 +60,6 @@ describe("job inventory", () => {
     ).toBe(false);
   });
 
-  it("classifies active, failed, and successful jobs without treating retries as conflict", () => {
-    const inventory = classifyInstallJobs([
-      job({ id: "old_fail", state: "exited", exitCode: 1 }),
-      job({ id: "new_success", state: "exited", exitCode: 0 }),
-      job({ id: "running", state: "running" }),
-      job({ id: "other", command: ["echo"], state: "running" }),
-    ]);
-
-    expect(inventory.active.map((entry) => entry.id)).toEqual(["running"]);
-    expect(inventory.failed.map((entry) => entry.id)).toEqual(["old_fail"]);
-    expect(inventory.succeeded.map((entry) => entry.id)).toEqual(["new_success"]);
-  });
 
   it("reports a still-running job instead of failing the install", async () => {
     const handle = fakeSandbox({

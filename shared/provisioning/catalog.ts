@@ -34,10 +34,7 @@ export type IntegrationId = (typeof INTEGRATION_IDS)[number];
 /** Bump when the catalog shape changes in a way the planner must reject. */
 export const PROVISIONING_VERSION = 1;
 
-/**
- * Transitional pins. The legacy Pi install path still uses
- * `shared/constants.PI_VERSION` until the reconciler is wired to this catalog.
- */
+/** Current provisioning pins; legacy Pi recovery retains its historical pin. */
 export const PROVISIONING_PI_VERSION = "1.5.2";
 export const PI_NEURALWATT_SOURCE = "npm:@aliou/pi-neuralwatt";
 export const PI_NEURALWATT_VERSION = "0.19.3";

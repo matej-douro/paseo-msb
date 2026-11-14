@@ -79,32 +79,6 @@ export function isPiInstallJob(job: SandboxJobInfoLike): boolean {
   return job.command.every((value, index) => value === argv[index]);
 }
 
-export interface InstallJobInventory {
-  readonly active: readonly SandboxJobInfoLike[];
-  readonly failed: readonly SandboxJobInfoLike[];
-  readonly succeeded: readonly SandboxJobInfoLike[];
-}
-
-export function classifyInstallJobs(
-  jobs: readonly SandboxJobInfoLike[],
-): InstallJobInventory {
-  const piJobs = jobs.filter(isPiInstallJob);
-  const active: SandboxJobInfoLike[] = [];
-  const failed: SandboxJobInfoLike[] = [];
-  const succeeded: SandboxJobInfoLike[] = [];
-
-  for (const job of piJobs) {
-    if (ACTIVE_STATES.has(job.state)) {
-      active.push(job);
-    } else if (job.state === "exited" && job.exitCode === 0) {
-      succeeded.push(job);
-    } else {
-      failed.push(job);
-    }
-  }
-
-  return { active, failed, succeeded };
-}
 
 export type InstallJobOutcome =
   | { readonly status: "succeeded"; readonly id: string }

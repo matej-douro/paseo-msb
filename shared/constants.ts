@@ -1,5 +1,5 @@
 /**
- * Fixed v1 values verified by the task 1 vertical slice.
+ * Fixed V1 values verified by the real-runtime release suite.
  *
  * This module is imported by both plugin runtimes, so it must stay
  * runtime-neutral: no Node APIs, React, or SDK imports.
@@ -12,12 +12,8 @@ export const PLUGIN_VERSION = "v1";
 export const PARENT_DAEMON_VERSION = "0.15.4";
 export const MICROSANDBOX_VERSION = "0.7.14";
 
-/** Verified guest image and Pi package pins. */
+/** Verified guest image tag and Pi package pins. */
 export const GUEST_IMAGE = "ghcr.io/getpaseo/paseo:0.15.4";
-export const GUEST_IMAGE_MANIFEST_DIGEST =
-  "sha256:9a67fa9cc06e4a2f9d763f21ae7334af2a633580cb8d81cb7deed184020975f5";
-export const GUEST_IMAGE_CONFIG_DIGEST =
-  "sha256:2ccf4bcedf02782107e24e08ee13d34598edfb3d6fb563fcd14b37459032f17a";
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "1.1.0";
 
@@ -47,7 +43,6 @@ export const ERROR_LABEL = "paseo-msb-error";
  * does not match the live handle quarantines the sandbox instead of adopting it.
  */
 export const SANDBOX_ID_LABEL = "paseo-msb-id";
-export const JOB_LABEL = "paseo-msb-job";
 /** Bounded, redacted diagnostic text. Never contains a credential value. */
 export const ERROR_DETAIL_LABEL = "paseo-msb-error-detail";
 
@@ -114,10 +109,6 @@ export const CREDENTIAL_ALLOWED_HOSTS: Record<CredentialName, readonly string[]>
   GH_TOKEN: ["api.github.com", "github.com", "uploads.github.com"],
 };
 
-export const CREDENTIALS = CREDENTIAL_NAMES.map((envVar) => ({
-  envVar,
-  allowedHosts: CREDENTIAL_ALLOWED_HOSTS[envVar],
-}));
 
 /** Registration metadata used to join sandboxes with parent registrations. */
 export const REGISTRATION_SOURCE = PLUGIN_ID;
