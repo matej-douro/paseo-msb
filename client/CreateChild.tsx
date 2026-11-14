@@ -31,7 +31,7 @@ import {
 } from "../shared/provisioning";
 import { INTEGRATION_ICONS, LLM_ICONS, PROVIDER_ICONS } from "./provider-icons";
 import { newRequestId } from "./request-id";
-import { credentialSourceLabel, errorMessage } from "./state";
+import { credentialSourceLabel, errorMessage, planSummary } from "./state";
 import { ActionButton, type PluginTheme } from "./ui";
 
 export interface CreateChildProps {
@@ -163,9 +163,6 @@ export function CreateChild({
 
         <SettingsSection title="Providers" trailing={<CountLabel count={providers.length} theme={theme} />}>
           <View style={{ gap: 8 }}>
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-              Secrets decide what can be added. Only the selected options are passed to the child.
-            </Text>
             <SettingsCard>
               {PROVIDER_CATALOG.map((entry, index) => {
                 const state = providerStates.find((candidate) => candidate.id === entry.id);
@@ -225,7 +222,7 @@ export function CreateChild({
             Will install
           </Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-            {installSummary(providers, integrations)}
+            {planSummary({ providers, integrations })}
           </Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
             Credentials:{" "}
@@ -311,28 +308,6 @@ function planIssue(
   return null;
 }
 
-function installSummary(
-  providers: readonly ProviderSelection[],
-  integrations: readonly IntegrationId[],
-): string {
-  const parts: string[] = [];
-
-  for (const selection of providers) {
-    const entry = PROVIDER_CATALOG.find((candidate) => candidate.id === selection.provider);
-    if (!entry) continue;
-    const llms = selection.llms
-      .map((llm) => entry.llms.find((candidate) => candidate.id === llm)?.label ?? llm)
-      .join(", ");
-    parts.push(llms.length > 0 ? `${entry.label} (${llms})` : entry.label);
-  }
-
-  for (const integration of integrations) {
-    const entry = INTEGRATION_CATALOG.find((candidate) => candidate.id === integration);
-    if (entry) parts.push(entry.label);
-  }
-
-  return parts.length > 0 ? parts.join(" · ") : "Nothing selected.";
-}
 
 function CountLabel({ count, theme }: { count: number; theme: PluginTheme }) {
   return (

@@ -42,6 +42,7 @@ export function ManageSecrets({
   const [drafts, setDrafts] = useState<Partial<Record<CredentialName, string>>>({});
   const [pending, setPending] = useState<CredentialName | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const mutating = pending !== null;
 
   useEffect(() => {
     if (!open) return;
@@ -114,6 +115,7 @@ export function ManageSecrets({
                 entry={entry}
                 draft={drafts[entry.name] ?? ""}
                 busy={pending === entry.name}
+                actionsDisabled={mutating}
                 last={index === data.secrets.length - 1}
                 theme={theme}
                 compact={compact}
@@ -139,6 +141,7 @@ function SecretRow({
   entry,
   draft,
   busy,
+  actionsDisabled,
   last,
   theme,
   compact,
@@ -149,6 +152,7 @@ function SecretRow({
   entry: SecretEntry;
   draft: string;
   busy: boolean;
+  actionsDisabled: boolean;
   last: boolean;
   theme: PluginTheme;
   compact: boolean;
@@ -226,7 +230,7 @@ function SecretRow({
           iconColor={theme.colors.foreground}
           size={22}
           onPress={onSave}
-          disabled={busy || draft.trim().length === 0}
+          disabled={actionsDisabled || draft.trim().length === 0}
         />
         {entry.stored ? (
           <IconButton
@@ -237,7 +241,7 @@ function SecretRow({
             tone="danger"
             size={22}
             onPress={onRemove}
-            disabled={busy}
+            disabled={actionsDisabled}
           />
         ) : null}
       </View>

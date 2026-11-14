@@ -1,5 +1,6 @@
 import {
   ERROR_LABEL,
+  MAX_LOG_ENTRIES,
   PHASE_LABEL,
   type CredentialName,
   type Phase,
@@ -9,7 +10,6 @@ import type {
   Availability,
   LogBundle,
   Registration,
-  SecretEntry,
   VmChild,
   VmListResult,
   VmReconcileResult,
@@ -29,33 +29,12 @@ export function errorMessage(error: unknown): string {
     : "The request failed.";
 }
 
-export function toggleCredential(
-  selected: readonly CredentialName[],
-  name: CredentialName,
-): CredentialName[] {
-  return selected.includes(name)
-    ? selected.filter((candidate) => candidate !== name)
-    : [...selected, name];
-}
-
-/** The create confirmation requires at least one credential name. */
-export function canCreate(selected: readonly CredentialName[]): boolean {
-  return selected.length > 0;
-}
-
 /** Where a credential value used for create will come from. */
 export function credentialSourceLabel(
   name: CredentialName,
   stored: readonly CredentialName[],
 ): string {
   return stored.includes(name) ? "Stored" : "Environment";
-}
-
-/** Management row source, including names that are not configured anywhere. */
-export function secretSource(entry: SecretEntry): { label: string; tone: Tone } {
-  if (entry.stored) return { label: "Stored", tone: "accent" };
-  if (entry.environment) return { label: "Environment", tone: "muted" };
-  return { label: "Not set", tone: "warning" };
 }
 
 export function phaseText(phase: Phase): string {
@@ -86,25 +65,6 @@ export function registrationText(
   if (registration) return `Registration ${registration.status}`;
   // Unavailable registrations are unknown, not confidently absent.
   return availability.status === "available" ? "Not registered" : "Registration unknown";
-}
-
-export function registrationTone(
-  registration: Registration | null,
-  availability: Availability = { status: "available" },
-): Tone {
-  if (!registration) return availability.status === "available" ? "muted" : "warning";
-  switch (registration.status) {
-    case "online":
-      return "success";
-    case "error":
-    case "disabled":
-      return "danger";
-    case "offline":
-    case "connecting":
-      return "warning";
-    default:
-      return "muted";
-  }
 }
 
 export function childPhase(child: VmChild): Phase {
@@ -260,12 +220,7 @@ export function vmPill(child: VmChild, registrations: Availability): Pill {
 
 /** Safe text plus bounded, redacted detail when the server has one. */
 export function childErrorText(child: VmChild): string | null {
-  if (child.kind === "pending") {
-    if (!child.error) return child.errorDetail ?? null;
-    return withDetail(child.error.message, child.error.detail ?? child.errorDetail);
-  }
-
-  if (child.kind === "registration") {
+  if (child.kind === "pending" || child.kind === "registration") {
     if (!child.error) return child.errorDetail ?? null;
     return withDetail(child.error.message, child.error.detail ?? child.errorDetail);
   }
@@ -294,6 +249,37 @@ export function registrationsNotice(availability: Availability): string | null {
     "Parent registrations are unavailable. Registration state may be stale.",
     availability.error.detail,
   );
+}
+
+/**
+ * Create reads credential availability only from a loaded list. A stale list
+ * whose refresh failed is not a trustworthy source, so Create is blocked
+ * instead of claiming credentials are missing.
+ */
+export function createBlockedMessage(
+  data: VmListResult | null,
+  error: string | null,
+): string | null {
+  if (error) return error;
+  if (!data) return "Credentials are still loading. Try again in a moment.";
+  return null;
+}
+
+/**
+ * A row is selected by exact generation when the id is known. A name-only
+ * selection follows a pending attempt into its sandbox, so the transition does
+ * not drop the selection or require re-selecting the row.
+ */
+export function isChildSelected(
+  child: VmChild,
+  selectedName: string | null,
+  selectedId: string | null,
+): boolean {
+  if (selectedName === null || child.name !== selectedName) return false;
+  if (selectedId !== null) return child.kind !== "pending" && child.id === selectedId;
+  // Pending rows have no id; prefer an attempt over a leftover registration
+  // when several rows share the selected name.
+  return child.kind !== "registration";
 }
 
 export function isEmptyInventory(data: VmListResult): boolean {
@@ -329,6 +315,36 @@ export function deleteConfirmationText(name: string): string {
   return `Delete ${name}? Its sandbox and parent registration are removed. This cannot be undone.`;
 }
 
+export function mergeLogBundles(...bundles: readonly LogBundle[]): LogBundle {
+  const available = bundles.filter((bundle) => bundle.available);
+  if (available.length === 0) {
+    return { available: false, truncated: false, entries: [] };
+  }
+
+  const seen = new Set<string>();
+  const entries = available
+    .flatMap((bundle) => bundle.entries)
+    .map((entry, index) => ({ entry, index }))
+    .sort(
+      (left, right) =>
+        left.entry.timestamp.localeCompare(right.entry.timestamp) || left.index - right.index,
+    )
+    .filter(({ entry }) => {
+      const key = `${entry.timestamp}\0${entry.stream}\0${entry.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(({ entry }) => entry);
+
+  return {
+    available: true,
+    truncated:
+      available.some((bundle) => bundle.truncated) || entries.length > MAX_LOG_ENTRIES,
+    entries: entries.slice(-MAX_LOG_ENTRIES),
+  };
+}
+
 export function logBundleSummary(bundle: LogBundle): string {
   if (!bundle.available) return "Logs are unavailable for this child.";
   if (bundle.entries.length === 0) return "No log output yet.";
@@ -347,12 +363,4 @@ export function logLineCountLabel(bundle: LogBundle): string {
 /** Clock time shown left of a log line; odd timestamps render unchanged. */
 export function logTimestamp(timestamp: string): string {
   return timestamp.length >= 19 ? timestamp.slice(11, 19) : timestamp;
-}
-
-export function findChild(
-  children: readonly VmChild[],
-  name: string | null,
-): VmChild | null {
-  if (!name) return null;
-  return children.find((child) => child.name === name) ?? null;
 }

@@ -1,29 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { ERROR_LABEL, MANAGED_LABEL, PARENT_LABEL, PHASE_LABEL } from "../../shared/constants";
-import type { VmChild } from "../../shared/contracts";
+import {
+  ERROR_LABEL,
+  MANAGED_LABEL,
+  MAX_LOG_ENTRIES,
+  PARENT_LABEL,
+  PHASE_LABEL,
+} from "../../shared/constants";
+import type { VmChild, VmListResult } from "../../shared/contracts";
 import { safeError } from "../../shared/errors";
 import type { CanonicalPlan } from "../../shared/provisioning";
 import {
   childErrorText,
   childPhase,
   childPlan,
+  createBlockedMessage,
   credentialSourceLabel,
   deleteConfirmationText,
-  findChild,
   inventoryNotice,
+  isChildSelected,
   isEmptyInventory,
   logBundleSummary,
   logLineCountLabel,
   logTimestamp,
+  mergeLogBundles,
   phaseText,
   planSummary,
   reconcileFailureMessage,
   reconcileSuccessMessage,
   registrationText,
-  registrationTone,
   registrationsNotice,
   runtimeText,
-  secretSource,
   setupPill,
   vmPill,
 } from "../state";
@@ -60,7 +66,7 @@ const SANDBOX: SandboxChild = {
 
 const sandbox = (patch: Partial<SandboxChild>): SandboxChild => ({ ...SANDBOX, ...patch });
 
-const REGISTRATION: VmChild = {
+const REGISTRATION: Extract<VmChild, { kind: "registration" }> = {
   kind: "registration",
   name: "paseo-gone",
   id: "sandbox_gone",
@@ -90,18 +96,6 @@ describe("plan presentation", () => {
   it("labels where a credential value comes from", () => {
     expect(credentialSourceLabel("GH_TOKEN", [])).toBe("Environment");
     expect(credentialSourceLabel("GH_TOKEN", ["GH_TOKEN"])).toBe("Stored");
-    expect(secretSource({ name: "GH_TOKEN", stored: true, environment: true })).toEqual({
-      label: "Stored",
-      tone: "accent",
-    });
-    expect(secretSource({ name: "GH_TOKEN", stored: false, environment: true })).toEqual({
-      label: "Environment",
-      tone: "muted",
-    });
-    expect(secretSource({ name: "GH_TOKEN", stored: false, environment: false })).toEqual({
-      label: "Not set",
-      tone: "warning",
-    });
   });
 });
 
@@ -189,9 +183,6 @@ describe("child presentation", () => {
     expect(
       vmPill(SANDBOX, { status: "unavailable", error: safeError("registrations_unavailable") }),
     ).toEqual({ label: "Running", tone: "success" });
-    expect(registrationTone({ registrationId: "reg", status: "error", serverId: null })).toBe(
-      "danger",
-    );
   });
 
   it("uses only safe error text plus bounded detail", () => {
@@ -214,16 +205,41 @@ describe("child presentation", () => {
         errorDetail: "npm exited 1",
       }),
     ).toBe(`${safeError("install_failed").message} npm exited 1`);
+    expect(childErrorText(REGISTRATION)).toBeNull();
+    expect(
+      childErrorText({ ...REGISTRATION, error: safeError("registration_failed") }),
+    ).toBe(safeError("registration_failed").message);
   });
 
-  it("finds a child by name", () => {
-    expect(findChild([PENDING, SANDBOX], "paseo-ready")).toBe(SANDBOX);
-    expect(findChild([PENDING], "paseo-missing")).toBeNull();
-    expect(findChild([PENDING], null)).toBeNull();
+  it("keeps a name-only selection through pending to sandbox", () => {
+    expect(isChildSelected(PENDING, PENDING.name, null)).toBe(true);
+    expect(isChildSelected(SANDBOX, SANDBOX.name, null)).toBe(true);
+    expect(isChildSelected(SANDBOX, SANDBOX.name, SANDBOX.id)).toBe(true);
+    expect(isChildSelected(SANDBOX, SANDBOX.name, "sandbox_other")).toBe(false);
+    expect(isChildSelected(PENDING, PENDING.name, SANDBOX.id)).toBe(false);
+    expect(isChildSelected(REGISTRATION, REGISTRATION.name, null)).toBe(false);
+    expect(isChildSelected(REGISTRATION, REGISTRATION.name, REGISTRATION.id)).toBe(true);
+    expect(isChildSelected(SANDBOX, "paseo-pending", null)).toBe(false);
+    expect(isChildSelected(SANDBOX, null, null)).toBe(false);
   });
 });
 
 describe("list states", () => {
+  it("blocks create without a fresh list", () => {
+    const data: VmListResult = {
+      inventory: { status: "available" },
+      registrations: { status: "available" },
+      credentials: [],
+      storedCredentials: [],
+      children: [],
+    };
+
+    expect(createBlockedMessage(null, null)).toContain("still loading");
+    expect(createBlockedMessage(null, "The request failed.")).toBe("The request failed.");
+    expect(createBlockedMessage(data, "The request failed.")).toBe("The request failed.");
+    expect(createBlockedMessage(data, null)).toBeNull();
+  });
+
   it("explains partial availability and includes detail", () => {
     expect(inventoryNotice({ status: "available" })).toBeNull();
     expect(
@@ -315,6 +331,46 @@ describe("repair and delete text", () => {
 });
 
 describe("log summaries", () => {
+  it("merges logs chronologically and removes exact duplicates", () => {
+    const first = { timestamp: "2026-01-01T00:00:00.000Z", stream: "stdout", text: "first" } as const;
+    const shared = { timestamp: "2026-01-01T00:00:01.000Z", stream: "stderr", text: "shared" } as const;
+    const last = { timestamp: "2026-01-01T00:00:02.000Z", stream: "stdout", text: "last" } as const;
+
+    const merged = mergeLogBundles(
+      { available: true, truncated: false, entries: [shared, first] },
+      { available: true, truncated: true, entries: [last, shared] },
+    );
+
+    expect(merged).toEqual({ available: true, truncated: true, entries: [first, shared, last] });
+  });
+
+  it("keeps available output when another log source is unavailable", () => {
+    const line = { timestamp: "2026-01-01T00:00:00.000Z", stream: "stdout", text: "line" } as const;
+    const unavailable = { available: false, truncated: false, entries: [] };
+
+    expect(mergeLogBundles(unavailable, unavailable).available).toBe(false);
+    expect(mergeLogBundles(unavailable, { available: true, truncated: false, entries: [line] })).toEqual({
+      available: true,
+      truncated: false,
+      entries: [line],
+    });
+  });
+
+  it("keeps only the newest bounded entries after merging", () => {
+    const entries = Array.from({ length: MAX_LOG_ENTRIES + 5 }, (_, index) => ({
+      timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+      stream: "stdout" as const,
+      text: `line ${index}`,
+    }));
+
+    const merged = mergeLogBundles({ available: true, truncated: false, entries });
+
+    expect(merged.truncated).toBe(true);
+    expect(merged.entries).toHaveLength(MAX_LOG_ENTRIES);
+    expect(merged.entries[0]?.text).toBe("line 5");
+    expect(merged.entries.at(-1)?.text).toBe(`line ${MAX_LOG_ENTRIES + 4}`);
+  });
+
   it("describes unavailable, empty, full, and truncated bundles", () => {
     expect(logBundleSummary({ available: false, truncated: false, entries: [] })).toContain(
       "unavailable",

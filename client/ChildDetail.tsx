@@ -7,6 +7,7 @@ import type {
   VmCreateInput,
   VmDeleteInput,
   VmDetailResult,
+  VmDismissInput,
   VmReconcileResult,
 } from "../shared/contracts";
 import {
@@ -15,6 +16,7 @@ import {
   childPlan,
   deleteConfirmationText,
   errorMessage,
+  mergeLogBundles,
   phaseText,
   planSummary,
   reconcileFailureMessage,
@@ -37,6 +39,8 @@ export interface ChildDetailProps {
   onRetry(): void;
   onRepair(name: string): Promise<VmReconcileResult>;
   onRetryCreate(input: VmCreateInput): Promise<void>;
+  onDismiss(input: VmDismissInput): Promise<void>;
+  onDismissed(): void;
   onDelete(input: VmDeleteInput): Promise<void>;
   onDeleted(): void;
 }
@@ -56,12 +60,15 @@ export function ChildDetail({
   onRetry,
   onRepair,
   onRetryCreate,
+  onDismiss,
+  onDismissed,
   onDelete,
   onDeleted,
 }: ChildDetailProps) {
   const toast = useToast();
   const [repairing, setRepairing] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [repairError, setRepairError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -118,6 +125,24 @@ export function ChildDetail({
       toast.error(message);
     } finally {
       setRetrying(false);
+    }
+  };
+
+  const dismissCreate = async () => {
+    if (child?.kind !== "pending" || dismissing) return;
+    setDismissing(true);
+    setRetryError(null);
+
+    try {
+      await onDismiss({ requestId: child.requestId });
+      toast.show("Create attempt dismissed.", { variant: "success" });
+      onDismissed();
+    } catch (dismissFailure) {
+      const message = errorMessage(dismissFailure);
+      setRetryError(message);
+      toast.error(message);
+    } finally {
+      setDismissing(false);
     }
   };
 
@@ -249,18 +274,25 @@ export function ChildDetail({
                   theme={theme}
                   variant="primary"
                   onPress={() => void retryCreate()}
-                  disabled={retrying}
+                  disabled={retrying || dismissing}
+                  compact
+                />
+                <ActionButton
+                  label={dismissing ? "Dismissing…" : "Dismiss"}
+                  theme={theme}
+                  onPress={() => void dismissCreate()}
+                  disabled={retrying || dismissing}
                   compact
                 />
               </View>
             ) : null}
 
-            {deleteTarget ? null : (
+            {child.kind === "pending" && child.phase !== "failed" ? (
               <Notice
                 text="Waiting for the sandbox to be created. Repair and Delete become available when it exists."
                 theme={theme}
               />
-            )}
+            ) : null}
 
             {retryError ? <Notice text={retryError} tone="danger" theme={theme} /> : null}
 
@@ -269,20 +301,12 @@ export function ChildDetail({
             ) : null}
 
             {sandbox && logs ? (
-              <View style={{ gap: 12 }}>
-                <LogBlock
-                  title="Sandbox logs"
-                  bundle={logs.sandbox}
-                  theme={theme}
-                  defaultOpen={logsDefaultOpen}
-                />
-                <LogBlock
-                  title="Provisioning logs"
-                  bundle={logs.job}
-                  theme={theme}
-                  defaultOpen={logsDefaultOpen}
-                />
-              </View>
+              <LogBlock
+                title="Logs"
+                bundle={mergeLogBundles(logs.sandbox, logs.job)}
+                theme={theme}
+                defaultOpen={logsDefaultOpen}
+              />
             ) : null}
           </>
         ) : null}

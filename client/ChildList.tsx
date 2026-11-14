@@ -4,6 +4,7 @@ import type { VmChild, VmListResult } from "../shared/contracts";
 import {
   childErrorText,
   inventoryNotice,
+  isChildSelected,
   isEmptyInventory,
   registrationsNotice,
   setupPill,
@@ -68,7 +69,7 @@ export function ChildList({
               textAlign: "center",
             }}
           >
-            Create one to install Pi and register it as a Paseo host.
+            Create one to install the selected agent providers and register it as a Paseo host.
           </Text>
         </View>
       ) : null}
@@ -78,10 +79,7 @@ export function ChildList({
           key={`${child.kind}:${child.name}:${child.kind === "pending" ? "" : child.id}`}
           child={child}
           registrations={data.registrations}
-          selected={
-            child.name === selectedName &&
-            (child.kind === "pending" ? selectedId === null : child.id === selectedId)
-          }
+          selected={isChildSelected(child, selectedName, selectedId)}
           theme={theme}
           onSelect={() => onSelect(child)}
         />

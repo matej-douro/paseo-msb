@@ -1,16 +1,19 @@
 import { useRpc, type PluginScreenProps } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Text, View, type ViewStyle } from "react-native";
 import type { CredentialName } from "../shared/constants";
 import {
   secretsDeleteRpc,
+  secretsListRpc,
   secretsSetRpc,
   vmCreateRpc,
   vmDeleteRpc,
+  vmDismissRpc,
   vmReconcileRpc,
   type VmCreateInput,
   type VmDeleteInput,
+  type VmDismissInput,
 } from "../shared/contracts";
 import { ChildDetail } from "./ChildDetail";
 import { ChildList } from "./ChildList";
@@ -19,6 +22,7 @@ import { useSecrets } from "./hooks/useSecrets";
 import { useVmDetail } from "./hooks/useVmDetail";
 import { useVmList } from "./hooks/useVmList";
 import { ManageSecrets } from "./ManageSecrets";
+import { createBlockedMessage, errorMessage } from "./state";
 import { IconButton } from "./ui";
 
 /**
@@ -34,30 +38,50 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
   const selectedName = selection?.name ?? null;
   const detail = useVmDetail(selectedName, selection?.id);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createChecking, setCreateChecking] = useState(false);
   const [secretsOpen, setSecretsOpen] = useState(false);
 
   const create = useRpc(vmCreateRpc);
+  const dismiss = useRpc(vmDismissRpc);
   const reconcile = useRpc(vmReconcileRpc);
   const remove = useRpc(vmDeleteRpc);
+  const readSecrets = useRpc(secretsListRpc);
   const secrets = useSecrets();
   const setSecret = useRpc(secretsSetRpc);
   const removeSecret = useRpc(secretsDeleteRpc);
   const toast = useToast();
-
-  const refreshSecrets = useCallback(() => {
-    void secrets.refresh();
-  }, [secrets.refresh]);
 
   // Reconnect to the child named in the screen params after navigation.
   useEffect(() => {
     if (params.name) setSelection({ name: params.name });
   }, [params.name]);
 
-  const handleCreate = async (input: VmCreateInput) => {
+  const createChild = async (input: VmCreateInput) => {
     const result = await create(input);
     setSelection({ name: result.name });
-    toast.show(`Creating ${result.name}.`, { variant: "info" });
     await list.refresh();
+    return result;
+  };
+
+  const handleCreate = async (input: VmCreateInput) => {
+    try {
+      await readSecrets({});
+    } catch (error) {
+      toast.error(errorMessage(error));
+      throw error;
+    }
+    const result = await createChild(input);
+    toast.show(`Creating ${result.name}.`, { variant: "info" });
+  };
+
+  // ChildDetail owns the "Retrying" toast, so this path does not add another.
+  const handleRetryCreate = async (input: VmCreateInput) => {
+    await readSecrets({});
+    await createChild(input);
+  };
+
+  const handleDismiss = async (input: VmDismissInput) => {
+    await dismiss(input);
   };
 
   const handleRepair = async (name: string) => {
@@ -66,10 +90,30 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
     return result;
   };
 
+  // Selection and list cleanup live in onDeleted, after the success toast.
   const handleDelete = async (input: VmDeleteInput) => {
     await remove(input);
-    setSelection(null);
-    await list.refresh();
+  };
+
+  const openCreate = async () => {
+    if (createChecking) return;
+    const blocked = createBlockedMessage(list.data, list.error);
+    if (blocked) {
+      toast.error(blocked);
+      return;
+    }
+
+    setCreateChecking(true);
+    try {
+      // A fresh read turns an unreadable store into an action failure instead
+      // of presenting stale or empty credential availability as authoritative.
+      await readSecrets({});
+      setCreateOpen(true);
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setCreateChecking(false);
+    }
   };
 
   const handleSetSecret = async (name: CredentialName, value: string) => {
@@ -171,11 +215,12 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
           />
           <IconButton
             icon="Plus"
-            label="Create child"
+            label={createChecking ? "Checking credentials…" : "Create child"}
             theme={theme}
             variant="primary"
             size={compact ? 28 : 30}
-            onPress={() => setCreateOpen(true)}
+            disabled={createChecking}
+            onPress={() => void openCreate()}
           />
         </View>
       </View>
@@ -185,7 +230,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
 
   const detailPane = selection ? (
     <ChildDetail
-      key={`${selection.name}:${selection.id ?? "pending"}`}
+      key={selection.name}
       name={selection.name}
       data={detail.data}
       loading={detail.loading}
@@ -195,7 +240,12 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       onBack={() => setSelection(null)}
       onRetry={() => void detail.refresh()}
       onRepair={handleRepair}
-      onRetryCreate={handleCreate}
+      onRetryCreate={handleRetryCreate}
+      onDismiss={handleDismiss}
+      onDismissed={() => {
+        setSelection(null);
+        void list.refresh();
+      }}
       onDelete={handleDelete}
       onDeleted={() => {
         setSelection(null);
@@ -249,7 +299,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
         theme={theme}
         compact={compact}
         onOpenChange={setSecretsOpen}
-        onRefresh={refreshSecrets}
+        onRefresh={secrets.refresh}
         onSet={handleSetSecret}
         onDelete={handleDeleteSecret}
       />
