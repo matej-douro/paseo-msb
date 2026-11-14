@@ -1,4 +1,4 @@
-# Provisioning harnesses and tools
+# Provider and integration provisioning
 
 ## Selection model
 
@@ -62,7 +62,7 @@ The canonical plan contains identifiers only:
   Changing a pin changes the hash and therefore the provision job identity.
 - The plan is persisted in pending state and in the sandbox env as
   `PASEO_MSB_PLAN`. Values never appear there.
-- Pre-existing VMs without a plan are treated as Pi-only.
+- VMs without `PASEO_MSB_PLAN` are treated as Pi-only.
 - Repair only re-provisions when phase is not `ready`.
 
 ## Provisioning
@@ -119,7 +119,7 @@ different plan.
 
 The GitHub CLI integration installs `gh` only. It does not configure a git
 credential helper: git over HTTPS base64-encodes Basic credentials, so the
-microsandbox placeholder is no longer a raw header value and cannot be
+microsandbox placeholder is not a raw header value and cannot be
 substituted. `gh` works because it sends the placeholder as a raw
 `Authorization: Bearer` header to an already-allowed GitHub host.
 
@@ -127,8 +127,9 @@ substituted. `gh` works because it sends the placeholder as a raw
 
 - The catalog and plan contain credential **names**, never values.
 - The provision script contains no credential values and no `$MSB_`
-  placeholders. Harnesses read the placeholders from the sandbox environment;
-  microsandbox substitutes them only in headers for the fixed allowed hosts.
+  placeholders. Provision steps read the placeholders from the sandbox
+  environment; microsandbox substitutes them only in headers for the fixed
+  allowed hosts.
 - Steps run as the non-root `paseo` user. Root is not required.
 - Install downloads use general egress, not secret substitution. Claude Code
   pins a version and the native installer verifies its published checksum; `gh`
@@ -144,5 +145,5 @@ substituted. `gh` works because it sends the placeholder as a raw
 | `gh` | `2.104.0` |
 
 The NeuralWatt extension declares an exact `@earendil-works/pi-ai@1.5.0` peer
-while Pi `1.5.2` ships `1.5.2`. The mismatch is accepted deliberately; the live
-release test is the gate.
+while Pi `1.5.2` ships `1.5.2`. The mismatch is accepted deliberately;
+`npm run test:release` is the gate.
