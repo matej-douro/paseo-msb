@@ -159,9 +159,9 @@ function SecretRow({
   return (
     <View
       style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
+        flexDirection: compact ? "column" : "row",
+        alignItems: compact ? "stretch" : "center",
+        gap: compact ? 6 : 10,
         paddingVertical: 8,
         paddingHorizontal: compact ? 8 : 10,
         borderBottomColor: theme.colors.border,
@@ -169,11 +169,17 @@ function SecretRow({
       }}
     >
       <Text
+        numberOfLines={compact ? undefined : 2}
+        ellipsizeMode="middle"
         style={{
-          flex: 1,
+          width: compact ? undefined : 180,
+          maxWidth: "100%",
+          flexShrink: 1,
+          minWidth: 0,
           color: theme.colors.foreground,
           fontSize: 11,
           fontWeight: "600",
+          fontFamily: "monospace",
         }}
       >
         {entry.name}
@@ -182,8 +188,9 @@ function SecretRow({
       {/* The field is the cell: its actions live inside the same border. */}
       <View
         style={{
-          flex: 1.6,
+          flex: compact ? undefined : 1,
           minHeight: 28,
+          minWidth: 0,
           flexDirection: "row",
           alignItems: "center",
           backgroundColor: theme.colors.surface2,
@@ -216,7 +223,7 @@ function SecretRow({
           label={busy ? "Saving…" : `Save ${entry.name}`}
           theme={theme}
           variant="ghost"
-          tone="accent"
+          iconColor={theme.colors.foreground}
           size={22}
           onPress={onSave}
           disabled={busy || draft.trim().length === 0}

@@ -90,6 +90,8 @@ export interface IconButtonProps {
   variant?: "primary" | "secondary" | "danger" | "ghost";
   /** Icon color for the ghost variant. */
   tone?: Tone;
+  /** Explicit icon color; overrides the variant and tone color. */
+  iconColor?: string;
   /** Square side in pixels. */
   size?: number;
   disabled?: boolean;
@@ -106,6 +108,7 @@ export function IconButton({
   theme,
   variant = "secondary",
   tone = "accent",
+  iconColor,
   size = 26,
   disabled = false,
 }: IconButtonProps) {
@@ -118,11 +121,13 @@ export function IconButton({
       : variant === "danger"
         ? theme.colors.statusDanger
         : theme.colors.surface2;
-  const color = ghost
-    ? toneColor(theme, tone)
-    : variant === "secondary"
-      ? theme.colors.foreground
-      : theme.colors.accentForeground;
+  const color =
+    iconColor ??
+    (ghost
+      ? toneColor(theme, tone)
+      : variant === "secondary"
+        ? theme.colors.foreground
+        : theme.colors.accentForeground);
 
   return (
     <View style={{ position: "relative", zIndex: 10 }}>
