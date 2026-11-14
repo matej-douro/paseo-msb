@@ -63,14 +63,14 @@ export async function ensureProvisioned(
   const inventory = await listProvisionJobs(context, handle, provision.argv, token);
   if (inventory.active.length > 1) throw new SetupFailure("provision_conflict");
   if (inventory.active.length === 1) {
-    const outcome = await waitForInstallJob(
+    return awaitProvisionJob(
+      context,
       handle,
       inventory.active[0].id,
-      installTimeoutMs(context),
-      token.signal,
+      provision,
+      redaction,
+      token,
     );
-    interpretProvisionOutcome(outcome);
-    return confirmStatus(context, handle, provision, redaction, token);
   }
 
   await materializeProvisionScript(context, handle, provision, redaction, token);
@@ -91,31 +91,64 @@ export async function ensureProvisioned(
     const after = await listProvisionJobs(context, handle, provision.argv, token);
     if (after.active.length > 1) throw new SetupFailure("provision_conflict");
     if (after.active.length === 1) {
-      interpretProvisionOutcome(
-        await waitForInstallJob(
-          handle,
-          after.active[0].id,
-          installTimeoutMs(context),
-          token.signal,
-        ),
+      return awaitProvisionJob(
+        context,
+        handle,
+        after.active[0].id,
+        provision,
+        redaction,
+        token,
       );
-      return confirmStatus(context, handle, provision, redaction, token);
     }
 
     const uncertain = (error as { jobId?: unknown }).jobId;
     if (typeof uncertain === "string" && uncertain.length > 0) {
-      interpretProvisionOutcome(
-        await waitForInstallJob(handle, uncertain, installTimeoutMs(context), token.signal),
+      return awaitProvisionJob(
+        context,
+        handle,
+        uncertain,
+        provision,
+        redaction,
+        token,
       );
-      return confirmStatus(context, handle, provision, redaction, token);
     }
 
     throw new SetupFailure("provision_pending", failureDetail(error, redaction));
   }
 
-  interpretProvisionOutcome(
-    await waitForInstallJob(handle, jobId, installTimeoutMs(context), token.signal),
+  return awaitProvisionJob(context, handle, jobId, provision, redaction, token);
+}
+
+/**
+ * A non-zero exit is fatal, but the status file still knows which step failed.
+ * Surface that bounded step name instead of the generic job failure.
+ */
+async function awaitProvisionJob(
+  context: ReconcileContext,
+  handle: SandboxHandleLike,
+  jobId: string,
+  provision: ProvisionScript,
+  redaction: readonly string[],
+  token: LaneToken,
+): Promise<boolean> {
+  const outcome = await waitForInstallJob(
+    handle,
+    jobId,
+    installTimeoutMs(context),
+    token.signal,
   );
+
+  if (outcome.status === "failed") {
+    const status = await readProvisionStatus(context, handle, redaction, token);
+    throw new SetupFailure(
+      "provision_failed",
+      status?.failedStep
+        ? `provisioning step ${status.failedStep} failed`
+        : "the provision job did not exit successfully",
+    );
+  }
+
+  interpretProvisionOutcome(outcome);
   return confirmStatus(context, handle, provision, redaction, token);
 }
 

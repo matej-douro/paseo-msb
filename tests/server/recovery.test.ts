@@ -176,7 +176,11 @@ describe("recoverManagedSandboxes", () => {
     expect(hosts.added).toEqual([]);
     expect(creator.execSpecs).toHaveLength(1);
     expect(sandbox.config()).toMatchObject({
-      labels: { [PHASE_LABEL]: "installing", "paseo-msb-error": "provision_failed" },
+      labels: {
+        [PHASE_LABEL]: "installing",
+        "paseo-msb-error": "provision_failed",
+        "paseo-msb-error-detail": "provisioning step provision failed",
+      },
     });
   });
 
