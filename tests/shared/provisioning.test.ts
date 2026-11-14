@@ -369,6 +369,19 @@ describe("provision script", () => {
     expect(trapAt).toBeLessThan(guardAt);
   });
 
+  it("serializes concurrent runs with the guest lock", () => {
+    const script = buildProvisionScript(resolve(PI_NEURALWATT_GH).plan).script;
+    const lockAt = script.indexOf("flock -w 900 9");
+    const truncateAt = script.indexOf(': > "$STATUS_LINES"');
+    const firstStepAt = script.indexOf("run_step '");
+
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(truncateAt).toBeGreaterThan(-1);
+    expect(firstStepAt).toBeGreaterThan(-1);
+    expect(lockAt).toBeLessThan(truncateAt);
+    expect(lockAt).toBeLessThan(firstStepAt);
+  });
+
   it("is valid POSIX shell", () => {
     const plan = resolve({
       providers: [

@@ -133,6 +133,7 @@ function renderProvisionScript(hash: string, steps: readonly PlannedStep[]): str
     `STATE_DIR=${shellQuote(PROVISIONING_STATE_DIR)}`,
     'STATUS_FILE="$STATE_DIR/status.json"',
     'STATUS_LINES="$STATE_DIR/status.lines"',
+    'LOCK_FILE="$STATE_DIR/provision.lock"',
     `PLAN_HASH=${shellQuote(hash)}`,
     "FAILED_STEP=''",
     "record() { printf '%s\\t%s\\t%s\\n' \"$1\" \"$2\" \"$3\" >> \"$STATUS_LINES\"; }",
@@ -164,6 +165,9 @@ function renderProvisionScript(hash: string, steps: readonly PlannedStep[]): str
     "}",
     "trap finalize EXIT",
     'mkdir -p "$STATE_DIR" || { FAILED_STEP="setup"; exit 1; }',
+    ': > "$LOCK_FILE" || { FAILED_STEP="setup"; exit 1; }',
+    'exec 9<>"$LOCK_FILE"',
+    'flock -w 900 9 || { FAILED_STEP="lock"; exit 1; }',
     ': > "$STATUS_LINES" || { FAILED_STEP="setup"; exit 1; }',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional shell parameter expansion
     'if [ "${1:-}" != "$PLAN_HASH" ]; then',

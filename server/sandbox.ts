@@ -466,7 +466,12 @@ function readEnvRecord(env: unknown): Readonly<Record<string, string>> {
     const record: Record<string, string> = {};
     for (const entry of env) {
       const item = asRecord(entry);
-      const name = item?.name;
+      const name =
+        typeof item?.name === "string"
+          ? item.name
+          : typeof item?.key === "string"
+            ? item.key
+            : undefined;
       const value = item?.value;
       if (typeof name === "string" && typeof value === "string") record[name] = value;
     }
@@ -515,21 +520,8 @@ export function sandboxCredentialNames(handle: SandboxHandleLike): CredentialNam
 
   const names = new Set<CredentialName>();
 
-  const env = parsed.data.env;
-  if (Array.isArray(env)) {
-    for (const entry of env) {
-      const name = asRecord(entry)?.name;
-      if (typeof name === "string" && CREDENTIAL_SET.has(name)) {
-        names.add(name as CredentialName);
-      }
-    }
-  } else {
-    const record = asRecord(env);
-    if (record) {
-      for (const name of Object.keys(record)) {
-        if (CREDENTIAL_SET.has(name)) names.add(name as CredentialName);
-      }
-    }
+  for (const name of Object.keys(readEnvRecord(parsed.data.env))) {
+    if (CREDENTIAL_SET.has(name)) names.add(name as CredentialName);
   }
 
   const entries = asRecord(asRecord(parsed.data.network)?.secrets)?.secrets;

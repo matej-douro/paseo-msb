@@ -156,8 +156,12 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
         // `.init("auto")` fails; the verified fallback is explicit tini.
         .init(plan.init.command, [...plan.init.args])
         .port(plan.hostPort, plan.guestPort)
-        .env("PATH", plan.env.PATH)
         .labels({ ...plan.labels });
+
+      // Apply every planned env entry, including PATH and the persisted plan.
+      for (const [key, value] of Object.entries(plan.env)) {
+        builder = builder.env(key, value);
+      }
 
       builder = builder.network((network) => {
         let configured: NetworkBuilderLike = network;

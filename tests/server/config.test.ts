@@ -4,6 +4,7 @@ import {
   MANAGED_LABEL,
   PARENT_LABEL,
   PHASE_LABEL,
+  PLAN_ENV_VAR,
   PLUGIN_VERSION,
   SANDBOX_ID_LABEL,
 } from "../../shared/constants";
@@ -47,6 +48,23 @@ describe("decodeManagedSandbox", () => {
       [PHASE_LABEL]: "ready",
     });
     expect(JSON.stringify(decoded)).not.toContain(SECRET_VALUE);
+  });
+
+  it("decodes the persisted plan from SDK-shaped env entries", () => {
+    const plan = {
+      providers: [{ provider: "pi" as const, llms: ["neuralwatt" as const] }],
+      integrations: [],
+    };
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: {
+        env: [{ key: PLAN_ENV_VAR, value: JSON.stringify(plan) }],
+      },
+    });
+
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+    expect(decoded!.plan).toEqual(plan);
   });
 
   it("drops raw config, environment, and secret values", () => {
