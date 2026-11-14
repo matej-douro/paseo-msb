@@ -38,6 +38,31 @@ open.
   GitHub CLI (OpenAI environment canary, NeuralWatt and `GH_TOKEN` store
   canaries). `npm run typecheck`, `npm run lint`, and `npm test` pass.
 
+### `b46e200` — Use icon actions in the list header
+
+- Replaced the Manage secrets and Create child text buttons with `KeyRound` and
+  `Plus` icon buttons, reusing the hover-tooltip and accessibility pattern.
+- Raised the list header above the VM list so hover tooltips are not painted
+  under the rows.
+
+### `b3ff006` — Scale the credential table and improve save contrast
+
+- Credential rows keep a fixed monospace name column on wide layouts and stack
+  on compact; long names truncate in the middle instead of shifting the input
+  and action columns.
+- The save checkmark uses the foreground color for contrast, with an
+  `IconButton` `iconColor` override.
+
+### `b6a77a4` — Match the providers list to Paseo settings
+
+- Rebuilt the Providers and Integrations sections with `SettingsSection` and
+  `SettingsCard` and settings-style rows: leading chevron, provider icon,
+  `Available` status, and a trailing switch.
+- Unavailable rows are greyed out with their reason instead of a status pill.
+  Claude's exclusive auth options use radios; everything else uses switches.
+- Added inline SVG brand icons for Claude, Pi, Anthropic, OpenAI, Gemini,
+  NeuralWatt, and GitHub, with a unit test against the host SVG validator.
+
 ## 2026-11-13
 
 ### `01c2e76` — Add the shared provisioning catalog, planner, and provisioner
