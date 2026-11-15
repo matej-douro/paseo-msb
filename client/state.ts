@@ -11,6 +11,7 @@ import type {
   LogBundle,
   Registration,
   VmChild,
+  VmCreateInput,
   VmListResult,
   VmReconcileResult,
 } from "../shared/contracts";
@@ -76,6 +77,23 @@ export function childPhase(child: VmChild): Phase {
 export function childPlan(child: VmChild): CanonicalPlan | null {
   if (child.kind === "registration") return null;
   return child.plan;
+}
+
+/**
+ * Rebuilds the original Create input for a failed pending attempt. The name,
+ * plan, and request ID are always preserved; resources are re-sent only when
+ * the original request supplied them, so an omitted selection retries as the
+ * default shape instead of becoming an explicit one.
+ */
+export function retryCreateInput(child: Extract<VmChild, { kind: "pending" }>): VmCreateInput {
+  return {
+    requestId: child.requestId,
+    name: child.name,
+    plan: child.plan,
+    ...(child.resourcesSpecified
+      ? { resources: { memoryMib: child.resources.memoryMib, diskMib: child.resources.diskMib } }
+      : {}),
+  };
 }
 
 /** Human-readable provider, LLM, and integration labels. */

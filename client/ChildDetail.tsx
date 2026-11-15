@@ -22,6 +22,7 @@ import {
   reconcileFailureMessage,
   reconcileSuccessMessage,
   registrationText,
+  retryCreateInput,
   runtimeText,
   setupPill,
   vmPill,
@@ -114,10 +115,7 @@ export function ChildDetail({
     setRetryError(null);
 
     try {
-      await onRetryCreate({
-        requestId: child.requestId,
-        plan: child.plan,
-      });
+      await onRetryCreate(retryCreateInput(child));
       toast.show(`Retrying ${child.name}.`, { variant: "info" });
     } catch (retryFailure) {
       const message = errorMessage(retryFailure);

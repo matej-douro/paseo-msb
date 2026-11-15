@@ -29,6 +29,7 @@ import {
   reconcileSuccessMessage,
   registrationText,
   registrationsNotice,
+  retryCreateInput,
   runtimeText,
   setupPill,
   vmPill,
@@ -46,6 +47,8 @@ const PENDING: Extract<VmChild, { kind: "pending" }> = {
   plan: PLAN,
   phase: "creating",
   error: null,
+  resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+  resourcesSpecified: false,
 };
 
 type SandboxChild = Extract<VmChild, { kind: "sandbox" }>;
@@ -91,6 +94,28 @@ describe("plan presentation", () => {
     expect(childPlan(PENDING)).toEqual(PLAN);
     expect(childPlan(SANDBOX)).toEqual(PLAN);
     expect(childPlan(REGISTRATION)).toBeNull();
+  });
+
+  it("rebuilds the original create input for a retry", () => {
+    expect(retryCreateInput(PENDING)).toEqual({
+      requestId: PENDING.requestId,
+      name: PENDING.name,
+      plan: PLAN,
+    });
+
+    expect(
+      retryCreateInput({
+        ...PENDING,
+        name: "my-vm",
+        resources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+        resourcesSpecified: true,
+      }),
+    ).toEqual({
+      requestId: PENDING.requestId,
+      name: "my-vm",
+      plan: PLAN,
+      resources: { memoryMib: 8192, diskMib: 20480 },
+    });
   });
 
   it("labels where a credential value comes from", () => {
