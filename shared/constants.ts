@@ -17,10 +17,32 @@ export const GUEST_IMAGE = "ghcr.io/getpaseo/paseo:0.15.4";
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "1.1.0";
 
-/** Fixed child shape. */
+/** Fixed CPU count and default child shape. */
 export const CPUS = 2;
 export const MEMORY_MIB = 4096;
+export const ROOT_DISK_MIB = 10_240;
 export const GUEST_PORT = 6767;
+
+/** V1.1 resource bounds from DESIGN §7.2. */
+export const MEMORY_MIB_MIN = 1_024;
+export const MEMORY_MIB_MAX = 32_768;
+export const MEMORY_MIB_STEP = 256;
+export const ROOT_DISK_MIB_MIN = 1_024;
+export const ROOT_DISK_MIB_MAX = 262_144;
+export const ROOT_DISK_MIB_STEP = 1_024;
+
+/**
+ * The boot-time hotpluggable memory cap. New sandboxes always request the
+ * maximum so later RAM growth can use live hotplug where the runtime supports
+ * it; a restart-required resize may set the same value explicitly.
+ */
+export const MAX_MEMORY_MIB = MEMORY_MIB_MAX;
+
+/** V1.1 live-metrics cadence and freshness bounds. */
+export const METRICS_SAMPLE_INTERVAL_MS = 2_000;
+export const METRICS_POLL_INTERVAL_MS = 3_000;
+export const STALE_SAMPLE_MS = 10_000;
+export const MAX_SAMPLE_FUTURE_SKEW_MS = 5_000;
 
 /** Verified guest user, paths, and the image's explicit tini init. */
 export const GUEST_USER = "paseo";
@@ -48,6 +70,16 @@ export const ERROR_DETAIL_LABEL = "paseo-msb-error-detail";
 
 /** Sandbox environment variable holding the canonical provisioning plan. */
 export const PLAN_ENV_VAR = "PASEO_MSB_PLAN";
+
+/**
+ * V1.1 sandbox environment variables. They carry the request identity and the
+ * desired resources, which let a repeated Create distinguish its own generation
+ * from a different attempt that briefly shares the same name. Configuration
+ * only: these values never authorize a mutation.
+ */
+export const REQUEST_ENV_VAR = "PASEO_MSB_REQUEST";
+export const RESOURCES_ENV_VAR = "PASEO_MSB_RESOURCES";
+export const RESOURCES_SPECIFIED_ENV_VAR = "PASEO_MSB_RESOURCES_SPECIFIED";
 
 /** Upper bound for diagnostic text exposed in DTOs, pending state, and labels. */
 export const MAX_ERROR_DETAIL_CHARS = 1_000;

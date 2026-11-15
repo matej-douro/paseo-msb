@@ -1,15 +1,22 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import {
+  CPUS,
   CREDENTIAL_NAMES,
   ERROR_LABEL,
   MANAGED_LABEL,
   MAX_ERROR_DETAIL_CHARS,
+  MEMORY_MIB_MAX,
+  MEMORY_MIB_MIN,
+  MEMORY_MIB_STEP,
   PARENT_LABEL,
   PHASES,
   PHASE_LABEL,
   PLUGIN_VERSION,
   REGISTRATION_STATUSES,
+  ROOT_DISK_MIB_MAX,
+  ROOT_DISK_MIB_MIN,
+  ROOT_DISK_MIB_STEP,
   RUNTIME_STATUSES,
 } from "./constants";
 import { SafeErrorSchema, SAFE_ERROR_CODES } from "./errors";
@@ -20,6 +27,116 @@ const PhaseSchema = z.enum(PHASES);
 const RuntimeStatusSchema = z.enum(RUNTIME_STATUSES);
 const RegistrationStatusSchema = z.enum(REGISTRATION_STATUSES);
 const SafeErrorCodeSchema = z.enum(SAFE_ERROR_CODES);
+
+/**
+ * The only sandbox-name shape V1.1 accepts: 1–63 lowercase ASCII letters,
+ * digits, and internal hyphens, starting and ending with an alphanumeric
+ * character. The pinned runtime and parent are both more permissive, so this
+ * schema is the enforcement point.
+ */
+export const VmNameSchema = z
+  .string()
+  .min(1)
+  .max(63)
+  .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/, {
+    message: "name must be a lowercase slug of 1-63 characters",
+  });
+
+const MemoryMibSchema = z
+  .number()
+  .int()
+  .min(MEMORY_MIB_MIN)
+  .max(MEMORY_MIB_MAX)
+  .refine((value) => (value - MEMORY_MIB_MIN) % MEMORY_MIB_STEP === 0, {
+    message: `memoryMib must be a multiple of ${MEMORY_MIB_STEP} above ${MEMORY_MIB_MIN}`,
+  });
+
+const RootDiskMibSchema = z
+  .number()
+  .int()
+  .min(ROOT_DISK_MIB_MIN)
+  .max(ROOT_DISK_MIB_MAX)
+  .refine((value) => (value - ROOT_DISK_MIB_MIN) % ROOT_DISK_MIB_STEP === 0, {
+    message: `diskMib must be a multiple of ${ROOT_DISK_MIB_STEP} above ${ROOT_DISK_MIB_MIN}`,
+  });
+
+/** The optional complete resource pair accepted by Create. */
+export const ResourceRequestSchema = z
+  .object({
+    memoryMib: MemoryMibSchema,
+    diskMib: RootDiskMibSchema,
+  })
+  .strict();
+
+/** Desired resources: both values are always known. */
+export const VmResourcesSchema = z
+  .object({
+    cpus: z.literal(CPUS),
+    memoryMib: MemoryMibSchema,
+    diskMib: RootDiskMibSchema,
+  })
+  .strict();
+
+/**
+ * Observed resources. `memoryMib` and `diskMib` are null when the pinned
+ * runtime does not report that field for a legacy sandbox; the plugin never
+ * invents a missing observation.
+ */
+export const VmObservedResourcesSchema = z
+  .object({
+    cpus: z.literal(CPUS),
+    memoryMib: z.number().int().min(MEMORY_MIB_MIN).max(MEMORY_MIB_MAX).nullable(),
+    diskMib: z.number().int().min(ROOT_DISK_MIB_MIN).max(ROOT_DISK_MIB_MAX).nullable(),
+  })
+  .strict();
+
+/** Fixed reasons why a metrics snapshot is unavailable. Never raw SDK text. */
+export const METRICS_UNAVAILABLE_REASONS = [
+  "no_sandbox",
+  "not_running",
+  "disabled",
+  "unavailable",
+] as const;
+
+const MetricsUnavailableReasonSchema = z.enum(METRICS_UNAVAILABLE_REASONS);
+
+const ByteCountSchema = z.number().finite().nonnegative();
+
+/** A metrics sample carries only numeric SDK fields and an ISO timestamp. */
+export const MetricsSampleSchema = z
+  .object({
+    timestamp: z.iso.datetime(),
+    cpuPercent: z.number().finite().nonnegative().max(100 * CPUS),
+    memoryBytes: ByteCountSchema,
+    memoryLimitBytes: ByteCountSchema,
+    memoryAvailableBytes: ByteCountSchema.nullable(),
+    diskReadBytes: ByteCountSchema,
+    diskWriteBytes: ByteCountSchema,
+    netRxBytes: ByteCountSchema,
+    netTxBytes: ByteCountSchema,
+    upperUsedBytes: ByteCountSchema.nullable(),
+    upperFreeBytes: ByteCountSchema.nullable(),
+    uptimeMs: z.number().finite().nonnegative(),
+  })
+  .strict();
+
+const MetricsAvailabilitySchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("available"), sample: MetricsSampleSchema }).strict(),
+  z
+    .object({ status: z.literal("unavailable"), reason: MetricsUnavailableReasonSchema })
+    .strict(),
+]);
+
+/** Aggregate outcome of a resize. */
+export const RESIZE_OUTCOMES = [
+  "applied",
+  "unchanged",
+  "converging",
+  "restart_required",
+  "resize_failed",
+] as const;
+
+const ResizeOutcomeSchema = z.enum(RESIZE_OUTCOMES);
 
 const AvailabilitySchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("available") }).strict(),
@@ -50,7 +167,7 @@ const ManagedLabelsSchema = z
 const PendingChildSchema = z
   .object({
     kind: z.literal("pending"),
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     /** Original identify for an idempotent retry. */
     requestId: z.string().uuid(),
     /** Original provider/integration selection; retries must preserve it. */
@@ -59,13 +176,17 @@ const PendingChildSchema = z
     error: SafeErrorSchema.nullable(),
     /** Bounded, redacted reason when the attempt failed. */
     errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
+    /** Requested resources; a V1.1 pending row always carries a complete value. */
+    resources: VmResourcesSchema.optional(),
+    /** Whether the original Create supplied an explicit resource selection. */
+    resourcesSpecified: z.boolean().optional(),
   })
   .strict();
 
 const SandboxChildSchema = z
   .object({
     kind: z.literal("sandbox"),
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     id: z.string().min(1),
     labels: ManagedLabelsSchema,
     runtimeStatus: RuntimeStatusSchema,
@@ -74,13 +195,17 @@ const SandboxChildSchema = z
     registration: RegistrationSchema.nullable(),
     /** Bounded, redacted reason when the child failed. */
     errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
+    /** Resources observed from the sandbox config; null fields are unreported. */
+    resources: VmObservedResourcesSchema.optional(),
+    /** Persisted desired resources when they differ from the observation. */
+    requestedResources: VmResourcesSchema.nullable().optional(),
   })
   .strict();
 
 const RegistrationChildSchema = z
   .object({
     kind: z.literal("registration"),
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     /** The generation token from `registration.source.key`. */
     id: z.string().min(1),
     phase: PhaseSchema,
@@ -127,11 +252,16 @@ export const VmListOutputSchema = z
 
 export const VmDetailInputSchema = z
   .object({
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     /** Optional generation id to disambiguate rows that share a name. */
     id: z.string().min(1).optional(),
+    /** Optional request token to select one same-name pending attempt. */
+    requestId: z.string().uuid().optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !(value.id && value.requestId), {
+    message: "id and requestId are mutually exclusive",
+  });
 
 export const VmDetailOutputSchema = z
   .object({
@@ -150,13 +280,17 @@ export const VmDetailOutputSchema = z
 export const VmCreateInputSchema = z
   .object({
     requestId: z.string().uuid(),
+    /** Optional name; omitted keeps the generated `paseo-<requestId>` identity. */
+    name: VmNameSchema.optional(),
     plan: ProvisionPlanSchema,
+    /** Omitted means the default 4096 MiB RAM and 10240 MiB root disk. */
+    resources: ResourceRequestSchema.optional(),
   })
   .strict();
 
 export const VmCreateOutputSchema = z
   .object({
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
   })
   .strict();
 
@@ -168,16 +302,16 @@ export const VmDismissInputSchema = z
 
 export const VmDismissOutputSchema = z
   .object({
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     dismissed: z.literal(true),
   })
   .strict();
 
 export const VmDeleteInputSchema = z
   .object({
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     id: z.string().min(1),
-    confirmName: z.string().min(1).max(128),
+    confirmName: VmNameSchema,
   })
   .strict()
   .refine((value) => value.confirmName === value.name, {
@@ -186,30 +320,67 @@ export const VmDeleteInputSchema = z
 
 export const VmDeleteOutputSchema = z
   .object({
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     removed: z.literal(true),
   })
   .strict();
 
 export const VmReconcileInputSchema = z
   .object({
-    name: z.string().min(1).max(128).optional(),
+    name: VmNameSchema.optional(),
   })
   .strict();
 
 const ReconcileErrorSchema = z
   .object({
-    name: z.string().min(1).max(128),
+    name: VmNameSchema,
     error: SafeErrorSchema,
   })
   .strict();
 
 export const VmReconcileOutputSchema = z
   .object({
-    repaired: z.array(z.string().min(1).max(128)),
+    repaired: z.array(VmNameSchema),
     errors: z.array(ReconcileErrorSchema),
   })
   .strict();
+
+export const VmResizeInputSchema = z
+  .object({
+    name: VmNameSchema,
+    id: z.string().min(1),
+    /** RAM target in MiB; grow or shrink within the allowed range. */
+    memoryMib: MemoryMibSchema.optional(),
+    /** Root-disk target in MiB; growth only, checked against the observation. */
+    diskMib: RootDiskMibSchema.optional(),
+    /** Use the runtime restart policy after explicit user confirmation. */
+    restart: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => value.memoryMib !== undefined || value.diskMib !== undefined, {
+    message: "at least one of memoryMib or diskMib is required",
+  });
+
+export const VmResizeOutputSchema = z
+  .object({
+    name: VmNameSchema,
+    id: z.string().min(1),
+    result: ResizeOutcomeSchema,
+    /** Observed resources after the attempt. */
+    resources: VmObservedResourcesSchema,
+    /** Persisted desired resources, or null when none are pending. */
+    requestedResources: VmResourcesSchema.nullable(),
+  })
+  .strict();
+
+export const VmMetricsInputSchema = z
+  .object({
+    name: VmNameSchema,
+    id: z.string().min(1),
+  })
+  .strict();
+
+export const VmMetricsOutputSchema = MetricsAvailabilitySchema;
 
 const SecretEntrySchema = z
   .object({
@@ -293,6 +464,18 @@ export const vmReconcileRpc = defineRpc({
   output: VmReconcileOutputSchema,
 });
 
+export const vmResizeRpc = defineRpc({
+  name: "vm.resize",
+  input: VmResizeInputSchema,
+  output: VmResizeOutputSchema,
+});
+
+export const vmMetricsRpc = defineRpc({
+  name: "vm.metrics",
+  input: VmMetricsInputSchema,
+  output: VmMetricsOutputSchema,
+});
+
 export const secretsListRpc = defineRpc({
   name: "secrets.list",
   input: z.object({}).strict().optional(),
@@ -324,6 +507,17 @@ export type VmDeleteInput = z.infer<typeof VmDeleteInputSchema>;
 export type VmDeleteResult = z.infer<typeof VmDeleteOutputSchema>;
 export type VmReconcileInput = z.infer<typeof VmReconcileInputSchema>;
 export type VmReconcileResult = z.infer<typeof VmReconcileOutputSchema>;
+export type VmResizeInput = z.infer<typeof VmResizeInputSchema>;
+export type VmResizeResult = z.infer<typeof VmResizeOutputSchema>;
+export type VmMetricsInput = z.infer<typeof VmMetricsInputSchema>;
+export type VmMetricsResult = z.infer<typeof VmMetricsOutputSchema>;
+export type MetricsSample = z.infer<typeof MetricsSampleSchema>;
+export type MetricsUnavailableReason = (typeof METRICS_UNAVAILABLE_REASONS)[number];
+export type ResizeOutcome = z.infer<typeof ResizeOutcomeSchema>;
+export type VmName = z.infer<typeof VmNameSchema>;
+export type ResourceRequest = z.infer<typeof ResourceRequestSchema>;
+export type VmResources = z.infer<typeof VmResourcesSchema>;
+export type VmObservedResources = z.infer<typeof VmObservedResourcesSchema>;
 export type SecretsListResult = z.infer<typeof SecretsListOutputSchema>;
 export type SecretEntry = z.infer<typeof SecretEntrySchema>;
 export type SecretsSetInput = z.infer<typeof SecretsSetInputSchema>;
