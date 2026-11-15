@@ -9,6 +9,7 @@ import {
   vmDismissRpc,
   vmListRpc,
   vmReconcileRpc,
+  vmResizeRpc,
 } from "../shared/contracts";
 import { CLEANUP_SETTLE_MS, type CredentialName } from "../shared/constants";
 import { safeError } from "../shared/errors";
@@ -20,6 +21,7 @@ import { createPendingCreateStore, dismissPendingCreate } from "./pending";
 import { reconcileVm } from "./reconcile";
 import { recoverManagedSandboxes } from "./recovery";
 import { readVmDetail, readVmList, type ReadContext } from "./rpc";
+import { resizeVm } from "./resize";
 import { createMicrosandboxHost, createMicrosandboxRuntime } from "./runtime";
 import { listSecrets, storedCredentialNames } from "./secrets";
 import {
@@ -121,6 +123,18 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
   server.handle(vmReconcileRpc, (input, { paseo }) =>
     reconcileVm(reconcileContext(paseo), input),
   );
+
+  server.handle(vmResizeRpc, (input, { paseo }) => {
+    const context = { ...reconcileContext(paseo), redactionValues: [] };
+    return lanes
+      .run(input.name, (token) => resizeVm(context, input, token))
+      .catch((error) => {
+        if (error instanceof LifecycleAbortedError) {
+          throw new Error(safeError("mutation_pending").message);
+        }
+        throw error;
+      });
+  });
 
   server.handle(secretsListRpc, () => listSecrets(secretsStore, process.env));
 

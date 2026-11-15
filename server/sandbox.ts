@@ -110,6 +110,17 @@ export interface SandboxModifyOptionsLike {
   readonly dryRun?: boolean;
 }
 
+/** The subset of a `modify()` plan the resize outcome depends on. */
+export interface SandboxModificationPlanLike {
+  readonly applied: boolean;
+  readonly conflicts: readonly { readonly field: string; readonly message: string }[];
+  readonly changes: readonly {
+    readonly field: string;
+    readonly disposition: "live" | "next start" | "requires restart" | "unsupported";
+  }[];
+  readonly resizeStatus: readonly { readonly resource: string; readonly state: string }[];
+}
+
 /** The subset of a metrics sample the server projects. */
 export interface SandboxMetricsLike {
   readonly cpuPercent: number;
@@ -767,7 +778,7 @@ export async function guardedModify(
   handle: SandboxHandleLike,
   options: SandboxModifyOptionsLike,
   tracking?: MutationTracking,
-): Promise<void> {
+): Promise<unknown> {
   let current: SandboxHandleLike;
   try {
     current = await handle.refresh();
@@ -789,12 +800,29 @@ export async function guardedModify(
   tracking?.mutations.track(tracking.name, operation);
 
   try {
-    await operation;
+    return await operation;
   } catch (error) {
     if (isSandboxNotFoundError(error)) throw new SandboxMissingError();
     if (isSandboxReplacedError(error)) throw new SandboxGenerationError("id_mismatch");
     throw error;
   }
+}
+
+/** Reads the observed boot-time memory cap, or null when unreported. */
+export function readSandboxMaxMemoryMib(handle: SandboxHandleLike): number | null {
+  let raw: unknown;
+  try {
+    raw = handle.config();
+  } catch {
+    return null;
+  }
+
+  const resources = asRecord(firstValue(asRecord(raw), ["resources"]));
+  return readBoundedInteger(
+    firstValue(resources, ["maxMemoryMib", "max_memory_mib"]),
+    MEMORY_MIB_MIN,
+    MEMORY_MIB_MAX,
+  );
 }
 
 export function isSandboxReplacedError(error: unknown): boolean {

@@ -28,6 +28,7 @@ import type {
   SandboxJobListBuilderLike,
   SandboxLogEntryLike,
   SandboxMetricsLike,
+  SandboxModificationPlanLike,
   SandboxModifyOptionsLike,
   SandboxRuntime,
 } from "../../server/sandbox";
@@ -132,6 +133,10 @@ export interface FakeSandboxOptions {
   modifyGate?: Promise<void>;
   /** Every `modify()` call, in order. */
   modifyCalls?: SandboxModifyOptionsLike[];
+  /** Apply resource/env changes to the fake config. Defaults to true. */
+  modifyApplies?: boolean;
+  /** Overrides the plan returned by `modify()`; changes still apply. */
+  modifyPlan?: (options: SandboxModifyOptionsLike) => unknown;
   /** One metrics sample; defaults to a minimal idle snapshot. */
   metrics?: SandboxMetricsLike;
   metricsError?: Error;
@@ -198,6 +203,65 @@ function jobList(options: FakeSandboxOptions): FakeJobOptions[] {
 
 function isPiCommand(command: readonly string[]): boolean {
   return command.join(" ") === PI_COMMAND.join(" ");
+}
+
+/** Applies a modify call to the fake config so a refresh observes it. */
+function applyModify(config: Record<string, unknown>, update: SandboxModifyOptionsLike): void {
+  const resources = config.resources as Record<string, unknown> | undefined;
+  if (resources) {
+    if (update.memory !== undefined) resources.memoryMib = update.memory;
+    if (update.maxMemory !== undefined) resources.maxMemoryMib = update.maxMemory;
+  }
+
+  if (update.rootDiskSize !== undefined) {
+    const image = config.image as { Oci?: { rootDisk?: Record<string, unknown> } } | undefined;
+    const rootDisk = image?.Oci?.rootDisk;
+    if (rootDisk) rootDisk.sizeMib = update.rootDiskSize;
+  }
+
+  if (!update.env) return;
+  const env = config.env;
+  if (!Array.isArray(env)) return;
+
+  for (const [name, value] of Object.entries(update.env)) {
+    const entry = env.find((candidate) => {
+      const item = candidate as { name?: string; key?: string };
+      return (item.name ?? item.key) === name;
+    }) as { name?: string; value?: unknown } | undefined;
+    if (entry) entry.value = value;
+    else env.push({ name, value });
+  }
+}
+
+function defaultModifyPlan(
+  update: SandboxModifyOptionsLike,
+  applied: boolean,
+): SandboxModificationPlanLike {
+  const changes: {
+    field: string;
+    disposition: "live" | "next start" | "requires restart" | "unsupported";
+  }[] = [];
+  if (update.memory !== undefined) changes.push({ field: "memory", disposition: "live" });
+  if (update.maxMemory !== undefined) changes.push({ field: "max_memory", disposition: "live" });
+  if (update.rootDiskSize !== undefined) {
+    changes.push({ field: "root_disk_size", disposition: "live" });
+  }
+  if (update.env) {
+    changes.push({
+      field: "env",
+      disposition: update.policy === "restart" ? "live" : "next start",
+    });
+  }
+
+  return {
+    applied,
+    conflicts: [],
+    changes,
+    resizeStatus:
+      update.memory === undefined
+        ? []
+        : [{ resource: "memory", state: applied ? "applied" : "converging" }],
+  };
 }
 
 export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
@@ -325,10 +389,13 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
       if (options.modifyGate) await options.modifyGate;
       if (options.modifyError) throw options.modifyError;
       options.modifyCalls?.push(update);
+      const applies = options.modifyApplies ?? true;
+      if (applies) applyModify(config, update);
       if (update.labels) {
         currentLabels = { ...currentLabels, ...update.labels };
         options.labelUpdates?.push({ ...update.labels });
       }
+      return options.modifyPlan?.(update) ?? defaultModifyPlan(update, applies);
     },
     metrics: async () => {
       if (options.metricsError) throw options.metricsError;
