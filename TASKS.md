@@ -174,19 +174,19 @@ by request ID.
 
 Acceptance:
 
-- [ ] Pending entries and pending DTOs retain `name`, canonical `resources`,
+- [x] Pending entries and pending DTOs retain `name`, canonical `resources`,
       and the resources-specified flag.
-- [ ] Same request ID with the same name/plan/resources/specified flag joins
+- [x] Same request ID with the same name/plan/resources/specified flag joins
       the running attempt or restarts a failed one.
-- [ ] Same request ID with a different name, plan, resources, or specified flag
+- [x] Same request ID with a different name, plan, resources, or specified flag
       is `invalid_request`.
-- [ ] Different request IDs may reserve the same name; both entries remain
+- [x] Different request IDs may reserve the same name; both entries remain
       distinct and visible until reconciliation or dismissal resolves them.
-- [ ] Create returns the derived name immediately and never waits for sandbox
+- [x] Create returns the derived name immediately and never waits for sandbox
       work.
-- [ ] Retry-create input reconstructs the original request ID, name, resources,
+- [x] Retry-create input reconstructs the original request ID, name, resources,
       and plan.
-- [ ] Pending-store tests cover join, restart, conflict, same-name attempts, and
+- [x] Pending-store tests cover join, restart, conflict, same-name attempts, and
       settlement.
 
 Files: `server/pending.ts`, `server/create.ts`,
