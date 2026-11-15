@@ -138,29 +138,29 @@ DTOs without exposing raw config. Keep `paseo-msb=v1` as the managed-label value
 
 Acceptance:
 
-- [ ] Name schema accepts `paseo-<uuid>` and lowercase slugs, and rejects
+- [x] Name schema accepts `paseo-<uuid>` and lowercase slugs, and rejects
       uppercase, `/`, whitespace, leading/trailing hyphens, and names over 63
       characters.
-- [ ] `vm.create` accepts optional `name` and a complete optional `resources`
+- [x] `vm.create` accepts optional `name` and a complete optional `resources`
       pair; defaults are 4096 MiB RAM and 10240 MiB disk with CPU fixed at 2.
-- [ ] `vm.resize` requires `name`, `id`, and at least one of `memoryMib` or
+- [x] `vm.resize` requires `name`, `id`, and at least one of `memoryMib` or
       `diskMib`; `restart` is optional.
-- [ ] Resource bounds match DESIGN §7.2. Observed `memoryMib`/`diskMib` may be
+- [x] Resource bounds match DESIGN §7.2. Observed `memoryMib`/`diskMib` may be
       null for legacy VMs; pending resources are non-null. Create accepts any
       valid disk, while resize rejects a shrink, a null disk baseline, and a
       memory target with a null baseline.
-- [ ] `vm.detail` accepts an optional `requestId` to select a pending attempt;
+- [x] `vm.detail` accepts an optional `requestId` to select a pending attempt;
       `id` and `requestId` are mutually exclusive, and detail does not include
       metrics.
-- [ ] Pending child DTOs include `resourcesSpecified`; sandbox and
+- [x] Pending child DTOs include `resourcesSpecified`; sandbox and
       registration-only DTOs do not.
-- [ ] `vm.metrics` has a discriminated availability result with fixed reasons
+- [x] `vm.metrics` has a discriminated availability result with fixed reasons
       for no sandbox, not running, disabled, and unavailable.
-- [ ] `mutation_pending` and `resize_failed` are safe error codes; metrics
+- [x] `mutation_pending` and `resize_failed` are safe error codes; metrics
       reasons are a fixed enum, not raw strings.
-- [ ] Constants include the 2-second sample interval, 3-second client poll,
+- [x] Constants include the 2-second sample interval, 3-second client poll,
       `STALE_SAMPLE_MS` threshold (10 seconds), and a 5-second future-skew bound.
-- [ ] Contract tests cover valid and invalid payloads.
+- [x] Contract tests cover valid and invalid payloads.
 
 Files: `shared/constants.ts`, `shared/contracts.ts`, `shared/errors.ts`,
 `tests/server/contracts.test.ts`
