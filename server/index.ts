@@ -8,6 +8,7 @@ import {
   vmDetailRpc,
   vmDismissRpc,
   vmListRpc,
+  vmMetricsRpc,
   vmReconcileRpc,
   vmResizeRpc,
 } from "../shared/contracts";
@@ -16,6 +17,7 @@ import { safeError } from "../shared/errors";
 import { createVm } from "./create";
 import { deleteVm } from "./delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "./lanes";
+import { createMetricsCoalescer, createParentIdCache, readVmMetrics } from "./metrics";
 import { createMutationRegistry } from "./mutations";
 import { createPendingCreateStore, dismissPendingCreate } from "./pending";
 import { reconcileVm } from "./reconcile";
@@ -41,6 +43,8 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
   });
   const lanes = createLifecycleLanes();
   const mutations = createMutationRegistry();
+  const parents = createParentIdCache();
+  const metrics = createMetricsCoalescer();
   let recovery: Promise<void> | null = null;
   let recoveryDone = false;
 
@@ -56,6 +60,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
       env: process.env,
       storedCredentials: storedCredentialNames(values),
       storedSecrets: values,
+      onParentId: (parentId) => parents.remember(parentId),
     };
   }
 
@@ -135,6 +140,18 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
         throw error;
       });
   });
+
+  server.handle(vmMetricsRpc, (input, { paseo }) =>
+    readVmMetrics(
+      {
+        hosts: paseo.hosts,
+        sandboxHost: createMicrosandboxHost(paseo),
+        parents,
+        coalescer: metrics,
+      },
+      input,
+    ),
+  );
 
   server.handle(secretsListRpc, () => listSecrets(secretsStore, process.env));
 

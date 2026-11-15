@@ -34,6 +34,8 @@ export interface ReadContext {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly storedCredentials: readonly CredentialName[];
   readonly storedSecrets: ReadonlyMap<CredentialName, string>;
+  /** Refreshes the cached parent id used by `vm.metrics`. */
+  readonly onParentId?: (parentId: string) => void;
   /** Bound for one parent directory read; tests shorten it. */
   readonly hostCallTimeoutMs?: number;
 }
@@ -80,6 +82,7 @@ async function readProjection(context: ReadContext): Promise<Projection> {
   );
   const registrations = registrationsView(loaded);
   const parentId = loaded.status === "available" ? loaded.directory.self.serverId : null;
+  if (parentId) context.onParentId?.(parentId);
 
   const inventory: SandboxInventory = parentId
     ? await loadManagedSandboxes(context.runtime, parentId, redaction)

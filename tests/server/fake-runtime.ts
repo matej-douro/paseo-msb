@@ -140,6 +140,10 @@ export interface FakeSandboxOptions {
   /** One metrics sample; defaults to a minimal idle snapshot. */
   metrics?: SandboxMetricsLike;
   metricsError?: Error;
+  /** Holds every `metrics()` call until released. */
+  metricsGate?: Promise<void>;
+  /** Counts native `metrics()` invocations. */
+  metricsCalls?: number[];
   refreshError?: Error;
   connectError?: Error;
   execError?: Error;
@@ -398,6 +402,8 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
       return options.modifyPlan?.(update) ?? defaultModifyPlan(update, applies);
     },
     metrics: async () => {
+      options.metricsCalls?.push(1);
+      if (options.metricsGate) await options.metricsGate;
       if (options.metricsError) throw options.metricsError;
       return options.metrics ?? DEFAULT_METRICS;
     },
