@@ -135,6 +135,8 @@ describe("readVmDetail", () => {
       requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       name: "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       plan,
+      resources: { cpus: 2 as const, memoryMib: 4096, diskMib: 10240 },
+      resourcesSpecified: false,
       phase: "creating" as const,
       createdAt: 1,
       errorCode: null,
@@ -153,6 +155,8 @@ describe("readVmDetail", () => {
       phase: "creating",
       error: null,
       errorDetail: null,
+      resources: pending.resources,
+      resourcesSpecified: false,
     });
     expect(detail.logs.sandbox.available).toBe(false);
     expect(detail.logs.job.available).toBe(false);
@@ -229,6 +233,8 @@ describe("readVmDetail", () => {
         providers: [{ provider: "pi" as const, llms: ["anthropic-api-key" as const] }],
         integrations: [],
       },
+      resources: { cpus: 2 as const, memoryMib: 4096, diskMib: 10240 },
+      resourcesSpecified: false,
       phase: "failed" as const,
       createdAt: 1,
       errorCode: "registration_failed" as const,

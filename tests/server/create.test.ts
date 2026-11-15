@@ -100,6 +100,8 @@ describe("createVm", () => {
     expect(context.pending.find(REQUEST_ID)).toMatchObject({
       name: NAME,
       plan: INPUT.plan,
+      resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+      resourcesSpecified: false,
       phase: "creating",
       errorCode: null,
     });
@@ -172,6 +174,59 @@ describe("createVm", () => {
     gate.resolve();
     await first.started;
     expect(creator.createCount).toBe(1);
+  });
+
+  it("returns a chosen name immediately and keeps the requested resources pending", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator({ createGate: gate.promise });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, {
+      ...INPUT,
+      name: "my-vm",
+      resources: { memoryMib: 8192, diskMib: 20480 },
+    });
+
+    expect(attempt.name).toBe("my-vm");
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      name: "my-vm",
+      resources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      resourcesSpecified: true,
+    });
+
+    gate.resolve();
+    await attempt.started;
+
+    expect(creator.requests[0]).toMatchObject({ name: "my-vm" });
+    expect(await creator.find("my-vm")).not.toBeNull();
+  });
+
+  it("rejects a repeated request with a different name, resources, or specified flag", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator({ createGate: gate.promise });
+    const context = createContext(creator);
+
+    const first = startCreate(context, INPUT);
+
+    expect(() => startCreate(context, { ...INPUT, name: "other-vm" })).toThrow(
+      safeError("invalid_request").message,
+    );
+    expect(() =>
+      startCreate(context, {
+        ...INPUT,
+        resources: { memoryMib: 8192, diskMib: 10240 },
+      }),
+    ).toThrow(safeError("invalid_request").message);
+    // Same values as the defaults, but supplied explicitly: a different request.
+    expect(() =>
+      startCreate(context, {
+        ...INPUT,
+        resources: { memoryMib: 4096, diskMib: 10240 },
+      }),
+    ).toThrow(safeError("invalid_request").message);
+
+    gate.resolve();
+    await first.started;
   });
 
   it("joins an owned sandbox from an earlier attempt without creating another", async () => {

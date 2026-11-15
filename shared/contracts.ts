@@ -176,10 +176,10 @@ const PendingChildSchema = z
     error: SafeErrorSchema.nullable(),
     /** Bounded, redacted reason when the attempt failed. */
     errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
-    /** Requested resources; a V1.1 pending row always carries a complete value. */
-    resources: VmResourcesSchema.optional(),
+    /** Requested resources; a pending row always has a complete value. */
+    resources: VmResourcesSchema,
     /** Whether the original Create supplied an explicit resource selection. */
-    resourcesSpecified: z.boolean().optional(),
+    resourcesSpecified: z.boolean(),
   })
   .strict();
 

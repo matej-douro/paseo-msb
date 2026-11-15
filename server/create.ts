@@ -11,6 +11,7 @@ import { failureDetail } from "./diagnostics";
 import { credentialValues } from "./logs";
 import { LifecycleAbortedError, type LifecycleLanes, type LaneToken } from "./lanes";
 import type { PendingCreate, PendingCreateStore } from "./pending";
+import { createRequestFor } from "./pending";
 import { reconcileName, type ReconcileContext } from "./reconciler";
 import { SetupFailure } from "./registration";
 import type { SandboxHost } from "./sandbox";
@@ -31,7 +32,7 @@ export interface CreateAttempt {
 }
 
 /**
- * `vm.create`: reserves the request synchronously, returns the generated name
+ * `vm.create`: reserves the request synchronously, returns the derived name
  * before any external work, and starts one per-name reconciliation. Store
  * reads, credential resolution, and sandbox lookup all happen inside the lane.
  */
@@ -46,8 +47,9 @@ export async function createVm(
 
 /**
  * Reserves the request without awaiting anything. A repeated request with the
- * same credential names joins the running attempt; a failed attempt restarts
- * under the same request ID; different names are rejected here and only here.
+ * same name, plan, resources, and resources-specified flag joins the running
+ * attempt; a failed attempt restarts under the same request ID; any other
+ * reuse of the request ID is rejected here and only here.
  */
 export function startCreate(context: CreateContext, input: VmCreateInput): CreateAttempt {
   if (context.lanes.closed) {
@@ -59,7 +61,7 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
     throw new Error(safeError("invalid_request").message);
   }
 
-  const reservation = context.pending.reserve(input.requestId, parsed.plan);
+  const reservation = context.pending.reserve(createRequestFor(input, parsed.plan));
   if (reservation.status === "conflict") {
     throw new Error(safeError("invalid_request").message);
   }

@@ -21,6 +21,8 @@ const PENDING = {
   requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
   name: "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
   plan: PENDING_PLAN,
+  resources: { cpus: 2 as const, memoryMib: 4096, diskMib: 10240 },
+  resourcesSpecified: false,
   phase: "creating" as const,
   createdAt: 1,
   errorCode: null,
@@ -187,7 +189,34 @@ describe("buildVmList", () => {
       phase: "creating",
       error: null,
       errorDetail: null,
+      resources: PENDING.resources,
+      resourcesSpecified: false,
     });
+    expect(VmListOutputSchema.parse(result)).toEqual(result);
+  });
+
+  it("keeps same-name pending attempts distinct by request ID", () => {
+    const other = {
+      ...PENDING,
+      requestId: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      name: "shared-vm",
+    };
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory: { status: "available", sandboxes: [], failures: [] },
+      registrations: { status: "available", hosts: [] },
+      pending: [{ ...PENDING, name: "shared-vm" }, other],
+      env: {},
+    });
+
+    expect(result.children.map((child) => [child.kind, child.name])).toEqual([
+      ["pending", "shared-vm"],
+      ["pending", "shared-vm"],
+    ]);
+    expect(
+      result.children.map((child) => (child.kind === "pending" ? child.requestId : null)),
+    ).toEqual([PENDING.requestId, other.requestId]);
     expect(VmListOutputSchema.parse(result)).toEqual(result);
   });
 

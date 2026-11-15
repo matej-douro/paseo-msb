@@ -115,6 +115,8 @@ function pendingChild(pending: PendingCreate): VmChild {
     phase: pending.phase,
     error: pending.errorCode ? safeError(pending.errorCode) : null,
     errorDetail: pending.errorDetail,
+    resources: pending.resources,
+    resourcesSpecified: pending.resourcesSpecified,
   };
 }
 
