@@ -196,9 +196,9 @@ const SandboxChildSchema = z
     /** Bounded, redacted reason when the child failed. */
     errorDetail: z.string().min(1).max(MAX_ERROR_DETAIL_CHARS).nullable().optional(),
     /** Resources observed from the sandbox config; null fields are unreported. */
-    resources: VmObservedResourcesSchema.optional(),
+    resources: VmObservedResourcesSchema,
     /** Persisted desired resources when they differ from the observation. */
-    requestedResources: VmResourcesSchema.nullable().optional(),
+    requestedResources: VmResourcesSchema.nullable(),
   })
   .strict();
 

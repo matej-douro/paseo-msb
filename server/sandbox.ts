@@ -12,6 +12,8 @@ import {
   MANAGED_LABEL,
   MAX_MEMORY_MIB,
   MEMORY_MIB,
+  MEMORY_MIB_MAX,
+  MEMORY_MIB_MIN,
   METRICS_SAMPLE_INTERVAL_MS,
   PARENT_LABEL,
   PHASE_LABEL,
@@ -22,13 +24,20 @@ import {
   RESOURCES_ENV_VAR,
   RESOURCES_SPECIFIED_ENV_VAR,
   ROOT_DISK_MIB,
+  ROOT_DISK_MIB_MAX,
+  ROOT_DISK_MIB_MIN,
   RUNTIME_STATUSES,
   SANDBOX_ID_LABEL,
   type CredentialName,
   type Phase,
   type RuntimeStatus,
 } from "../shared/constants";
-import type { ManagedLabels, VmResources } from "../shared/contracts";
+import {
+  VmResourcesSchema,
+  type ManagedLabels,
+  type VmObservedResources,
+  type VmResources,
+} from "../shared/contracts";
 import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors";
 import { parseProvisionPlan, type CanonicalPlan } from "../shared/provisioning";
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
@@ -322,6 +331,14 @@ export interface DecodedSandbox {
   readonly plan: CanonicalPlan | null;
   /** Bounded, redacted diagnostic for a failed or retrying sandbox. */
   readonly errorDetail: string | null;
+  /** Observed from the sandbox config; unreported fields are null. */
+  readonly resources: VmObservedResources;
+  /** Desired resources from the managed environment; null for legacy VMs. */
+  readonly requestedResources: VmResources | null;
+  /** Internal request marker. Never projected into a public DTO. */
+  readonly requestId: string | null;
+  /** Internal resources-specified flag. Never projected into a public DTO. */
+  readonly resourcesSpecified: boolean | null;
 }
 
 export interface LoadedSandbox {
@@ -392,11 +409,16 @@ function normalizeRuntimeStatus(value: string): RuntimeStatus {
   return parsed.success ? parsed.data : "unknown";
 }
 
+type LabelProjection = Omit<
+  DecodedSandbox,
+  "plan" | "resources" | "requestedResources" | "requestId" | "resourcesSpecified"
+>;
+
 function decodeLabels(
   labels: Readonly<Record<string, string>>,
   handle: SandboxHandleLike,
   redaction: readonly string[] = [],
-): DecodedSandbox {
+): LabelProjection {
   const phaseParsed = PhaseSchema.safeParse(labels[PHASE_LABEL]);
   const phase: Phase = phaseParsed.success ? phaseParsed.data : "failed";
 
@@ -423,7 +445,6 @@ function decodeLabels(
     name: handle.name,
     runtimeStatus: normalizeRuntimeStatus(handle.status),
     labels: projected,
-    plan: null,
     errorDetail: detail,
   };
 }
@@ -460,6 +481,8 @@ export function decodeManagedSandbox(
   return {
     ...decodeLabels(labels, handle, redaction),
     plan: readPlanFromEnv(parsedConfig.data.env),
+    resources: decodeObservedResources(asRecord(parsedConfig.data)),
+    ...readResourcesEnv(parsedConfig.data.env),
   };
 }
 
@@ -596,6 +619,102 @@ function readPlanFromEnv(env: unknown): CanonicalPlan | null {
   const plan = parseProvisionPlan(parsed);
   if (!plan.ok) throw new SandboxDecodeError("invalid_config");
   return plan.plan;
+}
+
+const UUID_SCHEMA = z.string().uuid();
+
+/** First defined value under any of the SDK's camelCase or snake_case keys. */
+function firstValue(
+  record: Readonly<Record<string, unknown>> | null,
+  keys: readonly string[],
+): unknown {
+  if (!record) return undefined;
+  for (const key of keys) {
+    if (record[key] !== undefined) return record[key];
+  }
+  return undefined;
+}
+
+function readBoundedInteger(value: unknown, min: number, max: number): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max
+    ? value
+    : null;
+}
+
+/**
+ * Observed resources come from the sandbox config only. An unreported field is
+ * null and is never filled from the requested resources or a default.
+ */
+function decodeObservedResources(
+  config: Readonly<Record<string, unknown>> | null,
+): VmObservedResources {
+  const resources = asRecord(firstValue(config, ["resources"]));
+  const reportedCpus = readBoundedInteger(firstValue(resources, ["cpus"]), 1, 1_024);
+  if (reportedCpus !== null && reportedCpus !== CPUS) {
+    throw new SandboxDecodeError("invalid_config");
+  }
+
+  const image = asRecord(firstValue(config, ["image"]));
+  const oci = asRecord(firstValue(image, ["Oci", "oci"]));
+  const rootDisk = asRecord(firstValue(oci, ["rootDisk", "root_disk"]));
+
+  return {
+    cpus: CPUS,
+    memoryMib: readBoundedInteger(
+      firstValue(resources, ["memoryMib", "memory_mib"]),
+      MEMORY_MIB_MIN,
+      MEMORY_MIB_MAX,
+    ),
+    diskMib: readBoundedInteger(
+      firstValue(rootDisk, ["sizeMib", "size_mib"]),
+      ROOT_DISK_MIB_MIN,
+      ROOT_DISK_MIB_MAX,
+    ),
+  };
+}
+
+/** Desired resources and the internal request marker from the environment. */
+function readResourcesEnv(env: unknown): {
+  readonly requestId: string | null;
+  readonly requestedResources: VmResources | null;
+  readonly resourcesSpecified: boolean | null;
+} {
+  const record = readEnvRecord(env);
+  const requestId = record[REQUEST_ENV_VAR];
+  const rawResources = record[RESOURCES_ENV_VAR];
+  const rawSpecified = record[RESOURCES_SPECIFIED_ENV_VAR];
+
+  if (requestId === undefined) {
+    // A markerless legacy child has no resource variables. Stray variables mean
+    // a partially written configuration, not a V1 sandbox.
+    if (rawResources !== undefined || rawSpecified !== undefined) {
+      throw new SandboxDecodeError("invalid_config");
+    }
+    return { requestId: null, requestedResources: null, resourcesSpecified: null };
+  }
+
+  if (!UUID_SCHEMA.safeParse(requestId).success) throw new SandboxDecodeError("invalid_config");
+  if (rawResources === undefined || rawSpecified === undefined) {
+    throw new SandboxDecodeError("invalid_config");
+  }
+  if (rawSpecified !== "0" && rawSpecified !== "1") {
+    throw new SandboxDecodeError("invalid_config");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawResources);
+  } catch {
+    throw new SandboxDecodeError("invalid_config");
+  }
+  const resources = VmResourcesSchema.safeParse(parsed);
+  if (!resources.success) throw new SandboxDecodeError("invalid_config");
+
+  return {
+    requestId,
+    requestedResources: resources.data,
+    resourcesSpecified: rawSpecified === "1",
+  };
 }
 
 /**

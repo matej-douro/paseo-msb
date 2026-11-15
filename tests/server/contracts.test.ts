@@ -68,6 +68,8 @@ const sandboxChild: VmChild = {
   runtimeStatus: "running",
   plan: null,
   registration: null,
+  resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+  requestedResources: null,
 };
 
 describe("RPC contracts", () => {

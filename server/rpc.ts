@@ -147,13 +147,21 @@ export async function readVmDetail(
 }
 
 /**
- * Rows can share a name (a settled failed attempt plus its leftover
- * registration). An explicit id selects the exact generation; otherwise the
- * first matching row wins.
+ * Rows can share a name (two pending attempts, or a settled failed attempt plus
+ * its leftover registration). A request token selects exactly one pending
+ * attempt, an explicit id selects the exact generation, and otherwise the first
+ * matching row wins.
  */
 function selectChild(children: readonly VmChild[], input: VmDetailInput): VmChild | null {
   const named = children.filter((candidate) => candidate.name === input.name);
   if (named.length === 0) return null;
+  if (input.requestId) {
+    return (
+      named.find(
+        (candidate) => candidate.kind === "pending" && candidate.requestId === input.requestId,
+      ) ?? null
+    );
+  }
   if (!input.id) return named[0] ?? null;
   return (
     named.find((candidate) => candidate.kind !== "pending" && candidate.id === input.id) ?? null

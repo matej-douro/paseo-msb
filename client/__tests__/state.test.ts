@@ -65,6 +65,8 @@ const SANDBOX: SandboxChild = {
   runtimeStatus: "running",
   plan: PLAN,
   registration: { registrationId: "reg_1", status: "online", serverId: "srv_child" },
+  resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+  requestedResources: null,
 };
 
 const sandbox = (patch: Partial<SandboxChild>): SandboxChild => ({ ...SANDBOX, ...patch });

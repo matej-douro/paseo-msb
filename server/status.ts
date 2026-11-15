@@ -1,4 +1,5 @@
 import {
+  CPUS,
   CREDENTIAL_NAMES,
   ERROR_LABEL,
   MANAGED_LABEL,
@@ -7,13 +8,26 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_STATUSES,
+  sandboxName,
   type CredentialName,
   type RegistrationStatus,
 } from "../shared/constants";
-import type { Availability, ManagedLabels, Registration, VmChild, VmListResult } from "../shared/contracts";
+import type {
+  Availability,
+  ManagedLabels,
+  Registration,
+  VmChild,
+  VmListResult,
+  VmResources,
+} from "../shared/contracts";
 import { safeError, type SafeError } from "../shared/errors";
 import type { PendingCreate } from "./pending";
-import type { LoadedSandbox, SandboxDecodeFailure, SandboxInventory } from "./sandbox";
+import type {
+  DecodedSandbox,
+  LoadedSandbox,
+  SandboxDecodeFailure,
+  SandboxInventory,
+} from "./sandbox";
 
 /** The subset of the parent host directory this plugin reads. */
 export interface HostRegistrationLike {
@@ -130,7 +144,19 @@ function sandboxChild(sandbox: LoadedSandbox, registrations: RegistrationsView):
     plan: sandbox.sandbox.plan,
     registration: registrationFor(sandbox, registrations),
     errorDetail: sandbox.sandbox.errorDetail,
+    resources: sandbox.sandbox.resources,
+    requestedResources: pendingRestartFor(sandbox.sandbox),
   };
+}
+
+/** Desired resources are only exposed while they differ from the observation. */
+function pendingRestartFor(sandbox: DecodedSandbox): VmResources | null {
+  const requested = sandbox.requestedResources;
+  if (!requested) return null;
+  return sandbox.resources.memoryMib === requested.memoryMib &&
+    sandbox.resources.diskMib === requested.diskMib
+    ? null
+    : requested;
 }
 
 function failedChild(parentId: string, failure: SandboxDecodeFailure): VmChild {
@@ -149,6 +175,9 @@ function failedChild(parentId: string, failure: SandboxDecodeFailure): VmChild {
     plan: null,
     registration: null,
     errorDetail: null,
+    // A quarantined config reports no observation; memory and disk stay null.
+    resources: { cpus: CPUS, memoryMib: null, diskMib: null },
+    requestedResources: null,
   };
 }
 
@@ -181,12 +210,21 @@ function registrationsAvailability(registrations: RegistrationsView): Availabili
     : { status: "unavailable", error: registrations.error };
 }
 
+function pendingSuperseded(entry: PendingCreate, sandboxes: readonly DecodedSandbox[]): boolean {
+  return sandboxes.some((sandbox) =>
+    sandbox.requestId !== null
+      ? sandbox.requestId === entry.requestId
+      : sandbox.name === entry.name && entry.name === sandboxName(entry.requestId),
+  );
+}
+
 /**
  * Projects inventory, pending creates, and parent registrations into the
  * read-side DTO. Raw sandbox config and environment never enter the result.
  */
 export function buildVmList(input: VmListInput): VmListResult {
   const sandboxNames = new Set<string>();
+  const decoded: DecodedSandbox[] = [];
 
   if (input.inventory.status === "available") {
     if (!input.parentId) {
@@ -194,14 +232,17 @@ export function buildVmList(input: VmListInput): VmListResult {
     }
     for (const sandbox of input.inventory.sandboxes) {
       sandboxNames.add(sandbox.sandbox.name);
+      decoded.push(sandbox.sandbox);
     }
     for (const failure of input.inventory.failures) {
       sandboxNames.add(failure.name);
     }
   }
 
-  // A live sandbox replaces a pending row with the same name.
-  const pending = input.pending.filter((entry) => !sandboxNames.has(entry.name));
+  // A live sandbox replaces the pending attempt it owns: by request marker for
+  // V1.1 sandboxes, or by generated name for a markerless legacy sandbox. A
+  // different request under the same name keeps its own row visible.
+  const pending = input.pending.filter((entry) => !pendingSuperseded(entry, decoded));
   const children: VmChild[] = pending.map(pendingChild);
 
   if (input.inventory.status === "available") {

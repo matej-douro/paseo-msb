@@ -29,6 +29,8 @@ const PENDING = {
   errorDetail: null,
 };
 
+const OTHER_REQUEST_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
 describe("buildVmList", () => {
   it("joins a managed sandbox with its parent registration", async () => {
     const inventory = await loadManagedSandboxes(
@@ -218,6 +220,127 @@ describe("buildVmList", () => {
       result.children.map((child) => (child.kind === "pending" ? child.requestId : null)),
     ).toEqual([PENDING.requestId, other.requestId]);
     expect(VmListOutputSchema.parse(result)).toEqual(result);
+  });
+
+  it("reports observed resources and a pending restart", async () => {
+    const handle = fakeSandbox({
+      id: "sandbox_1",
+      name: "paseo-1",
+      requestId: PENDING.requestId,
+      requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      resourcesSpecified: true,
+    });
+    const inventory = await loadManagedSandboxes(fakeRuntime([handle]), PARENT_ID);
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [],
+      env: { ANTHROPIC_API_KEY: SECRET_VALUE },
+    });
+
+    expect(result.children[0]).toMatchObject({
+      kind: "sandbox",
+      resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+      requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+    });
+    expect(VmListOutputSchema.parse(result)).toEqual(result);
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(PENDING.requestId);
+    expect(serialized).not.toContain(SECRET_VALUE);
+  });
+
+  it("hides requested resources once the observation matches", async () => {
+    const handle = fakeSandbox({
+      id: "sandbox_1",
+      name: "paseo-1",
+      requestId: PENDING.requestId,
+      requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+      resourcesSpecified: true,
+    });
+    const inventory = await loadManagedSandboxes(fakeRuntime([handle]), PARENT_ID);
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [],
+      env: {},
+    });
+
+    expect(result.children[0]).toMatchObject({
+      kind: "sandbox",
+      requestedResources: null,
+    });
+  });
+
+  it("supersedes only the pending attempt its request marker owns", async () => {
+    const handle = fakeSandbox({
+      id: "sandbox_1",
+      name: "shared-vm",
+      requestId: PENDING.requestId,
+      requestedResources: PENDING.resources,
+      resourcesSpecified: false,
+    });
+    const inventory = await loadManagedSandboxes(fakeRuntime([handle]), PARENT_ID);
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [
+        { ...PENDING, name: "shared-vm" },
+        { ...PENDING, requestId: OTHER_REQUEST_ID, name: "shared-vm", createdAt: 2 },
+      ],
+      env: {},
+    });
+
+    expect(
+      result.children.map((child) => [
+        child.kind,
+        child.name,
+        child.kind === "pending" ? child.requestId : null,
+      ]),
+    ).toEqual([
+      ["pending", "shared-vm", OTHER_REQUEST_ID],
+      ["sandbox", "shared-vm", null],
+    ]);
+  });
+
+  it("supersedes a generated-name pending attempt for a markerless sandbox", async () => {
+    const inventory = await loadManagedSandboxes(
+      fakeRuntime([fakeSandbox({ id: "sandbox_1", name: PENDING.name })]),
+      PARENT_ID,
+    );
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [PENDING],
+      env: {},
+    });
+
+    expect(result.children.map((child) => child.kind)).toEqual(["sandbox"]);
+  });
+
+  it("keeps a custom-named pending attempt beside a markerless sandbox", async () => {
+    const inventory = await loadManagedSandboxes(
+      fakeRuntime([fakeSandbox({ id: "sandbox_1", name: "my-vm" })]),
+      PARENT_ID,
+    );
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [{ ...PENDING, name: "my-vm" }],
+      env: {},
+    });
+
+    expect(result.children.map((child) => child.kind)).toEqual(["pending", "sandbox"]);
   });
 
   it("keeps pending creates and reports unavailable inventory explicitly", async () => {

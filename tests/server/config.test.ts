@@ -35,6 +35,10 @@ describe("decodeManagedSandbox", () => {
       "labels",
       "name",
       "plan",
+      "requestId",
+      "requestedResources",
+      "resources",
+      "resourcesSpecified",
       "runtimeStatus",
     ]);
     expect(decoded!.errorDetail).toBeNull();
@@ -78,7 +82,7 @@ describe("decodeManagedSandbox", () => {
     expect(serialized).not.toContain("substitution");
   });
 
-  it("does not project the request or resources variables as plan or labels", () => {
+  it("reads the request marker and desired resources internally", () => {
     const handle = fakeSandbox({
       id: "sbx_1",
       name: "paseo-1",
@@ -95,19 +99,114 @@ describe("decodeManagedSandbox", () => {
     });
 
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
-    const serialized = JSON.stringify(decoded);
 
     expect(decoded!.plan).toBeNull();
-    expect(serialized).not.toContain("2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f");
-    expect(serialized).not.toContain("8192");
-    expect(Object.keys(decoded!).sort()).toEqual([
-      "errorDetail",
-      "id",
-      "labels",
-      "name",
-      "plan",
-      "runtimeStatus",
-    ]);
+    expect(decoded!.requestId).toBe("2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f");
+    expect(decoded!.requestedResources).toEqual({
+      cpus: 2,
+      memoryMib: 8192,
+      diskMib: 20480,
+    });
+    expect(decoded!.resourcesSpecified).toBe(true);
+    // No observed resources were reported, so none are invented.
+    expect(decoded!.resources).toEqual({ cpus: 2, memoryMib: null, diskMib: null });
+  });
+
+  it("reports observed resources from the sandbox config", () => {
+    const handle = fakeSandbox({ id: "sbx_1", name: "paseo-1" });
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+
+    expect(decoded!.resources).toEqual({ cpus: 2, memoryMib: 4096, diskMib: 10240 });
+    expect(decoded!.requestId).toBeNull();
+    expect(decoded!.requestedResources).toBeNull();
+    expect(decoded!.resourcesSpecified).toBeNull();
+  });
+
+  it("accepts snake_case resource keys", () => {
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: {
+        resources: { cpus: 2, memory_mib: 6144 },
+        image: { oci: { root_disk: { size_mib: 12288 } } },
+      },
+    });
+
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+    expect(decoded!.resources).toEqual({ cpus: 2, memoryMib: 6144, diskMib: 12288 });
+  });
+
+  it("leaves an unreported memory and root disk null", () => {
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: { resources: { cpus: 2 } },
+    });
+
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+    expect(decoded!.resources).toEqual({ cpus: 2, memoryMib: null, diskMib: null });
+  });
+
+  it("rejects a config that reports a different CPU count", () => {
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: { resources: { cpus: 4 } },
+    });
+
+    expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
+  });
+
+  it("rejects malformed request, resources, and specified-flag values", () => {
+    const request = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
+    const resources = JSON.stringify({ cpus: 2, memoryMib: 4096, diskMib: 10240 });
+    const handleWith = (env: { name: string; value: string }[]) =>
+      fakeSandbox({ id: "sbx_1", name: "paseo-1", rawConfig: { env } });
+
+    expect(() =>
+      decodeManagedSandbox(
+        handleWith([{ name: REQUEST_ENV_VAR, value: "not-a-uuid" }]),
+        PARENT_ID,
+      ),
+    ).toThrow(SandboxDecodeError);
+
+    expect(() =>
+      decodeManagedSandbox(handleWith([{ name: REQUEST_ENV_VAR, value: request }]), PARENT_ID),
+    ).toThrow(SandboxDecodeError);
+
+    for (const badResources of ["{not json", JSON.stringify({ cpus: 2, memoryMib: 1000 })] ) {
+      expect(() =>
+        decodeManagedSandbox(
+          handleWith([
+            { name: REQUEST_ENV_VAR, value: request },
+            { name: RESOURCES_ENV_VAR, value: badResources },
+            { name: RESOURCES_SPECIFIED_ENV_VAR, value: "0" },
+          ]),
+          PARENT_ID,
+        ),
+      ).toThrow(SandboxDecodeError);
+    }
+
+    expect(() =>
+      decodeManagedSandbox(
+        handleWith([
+          { name: REQUEST_ENV_VAR, value: request },
+          { name: RESOURCES_ENV_VAR, value: resources },
+          { name: RESOURCES_SPECIFIED_ENV_VAR, value: "yes" },
+        ]),
+        PARENT_ID,
+      ),
+    ).toThrow(SandboxDecodeError);
+
+    expect(() =>
+      decodeManagedSandbox(
+        handleWith([
+          { name: RESOURCES_ENV_VAR, value: resources },
+          { name: RESOURCES_SPECIFIED_ENV_VAR, value: "0" },
+        ]),
+        PARENT_ID,
+      ),
+    ).toThrow(SandboxDecodeError);
   });
 
   it("ignores unmanaged sandboxes and other parents", () => {
@@ -206,6 +305,18 @@ describe("loadManagedSandboxes", () => {
       expect(inventory.sandboxes).toHaveLength(0);
       expect(inventory.failures).toEqual([
         { id: "sbx_1", name: "paseo-1", runtimeStatus: "running", code: "invalid_config" },
+      ]);
+    }
+  });
+
+  it("keeps a malformed V1.1 environment visible as invalid_config", async () => {
+    const handle = fakeSandbox({ id: "sbx_2", name: "paseo-2", requestId: "not-a-uuid" });
+    const inventory = await loadManagedSandboxes(fakeRuntime([handle]), PARENT_ID);
+
+    expect(inventory.status).toBe("available");
+    if (inventory.status === "available") {
+      expect(inventory.failures).toEqual([
+        { id: "sbx_2", name: "paseo-2", runtimeStatus: "running", code: "invalid_config" },
       ]);
     }
   });

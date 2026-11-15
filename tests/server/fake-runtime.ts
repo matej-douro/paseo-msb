@@ -9,6 +9,9 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
+  REQUEST_ENV_VAR,
+  RESOURCES_ENV_VAR,
+  RESOURCES_SPECIFIED_ENV_VAR,
   type CredentialName,
   type Phase,
 } from "../../shared/constants";
@@ -148,6 +151,10 @@ export interface FakeSandboxOptions {
   getJobError?: Error;
   /** Persisted provisioning plan for decode and provisioning tests. */
   plan?: CanonicalPlan;
+  /** Managed request marker and desired resources written to the environment. */
+  requestId?: string;
+  requestedResources?: { cpus: number; memoryMib: number; diskMib: number };
+  resourcesSpecified?: boolean;
   /** Pre-existing provision status, for resume tests. */
   provisionStatus?: ProvisionStatus | null;
 }
@@ -206,11 +213,26 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
   let provisionStatus: ProvisionStatus | null = options.provisionStatus ?? null;
 
   const config = {
-    image: "ghcr.io/getpaseo/paseo:0.15.4",
+    image: { Oci: { rootDisk: { sizeMib: 10_240 } } },
+    resources: { cpus: 2, memoryMib: 4_096 },
     env: [
       { name: "PATH", value: "/home/paseo/.local/bin:/usr/local/bin:/usr/bin:/bin" },
       ...(options.plan
         ? [{ name: PLAN_ENV_VAR, value: JSON.stringify(options.plan) }]
+        : []),
+      ...(options.requestId !== undefined
+        ? [{ name: REQUEST_ENV_VAR, value: options.requestId }]
+        : []),
+      ...(options.requestedResources !== undefined
+        ? [{ name: RESOURCES_ENV_VAR, value: JSON.stringify(options.requestedResources) }]
+        : []),
+      ...(options.resourcesSpecified !== undefined
+        ? [
+            {
+              name: RESOURCES_SPECIFIED_ENV_VAR,
+              value: options.resourcesSpecified ? "1" : "0",
+            },
+          ]
         : []),
       { name: "ANTHROPIC_API_KEY", value: SECRET_VALUE },
     ],
