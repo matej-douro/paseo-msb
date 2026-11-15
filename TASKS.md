@@ -201,17 +201,17 @@ tests can assert the pinned values.
 
 Acceptance:
 
-- [ ] New create plans include `PASEO_MSB_REQUEST`,
+- [x] New create plans include `PASEO_MSB_REQUEST`,
       `PASEO_MSB_RESOURCES`, `PASEO_MSB_RESOURCES_SPECIFIED`, the requested root
       disk, 2 CPUs, requested memory, `maxMemory` at the allowed maximum, and a
       2-second metrics interval.
-- [ ] The real runtime sets `.image(...).rootDisk(...).cpus(...)
+- [x] The real runtime sets `.image(...).rootDisk(...).cpus(...)
       .memory(...).maxMemory(...).metricsSampleIntervalMs(...)` in SDK order.
-- [ ] `SandboxHandleLike` exposes the raw `modify()` promise, metrics, and the
+- [x] `SandboxHandleLike` exposes the raw `modify()` promise, metrics, and the
       modify options the server needs; fake sandboxes implement them.
-- [ ] Create tests assert the plan and builder inputs, including the absence of
+- [x] Create tests assert the plan and builder inputs, including the absence of
       secret values in labels and resource variables.
-- [ ] No raw config is added to any public DTO.
+- [x] No raw config is added to any public DTO.
 
 Files: `server/sandbox.ts`, `server/runtime.ts`,
 `tests/server/fake-runtime.ts`, `tests/server/create.test.ts`,
