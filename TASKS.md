@@ -295,24 +295,24 @@ proceed while a mutation remains unsettled.
 
 Acceptance:
 
-- [ ] A per-name mutation registry records every raw native `modify()` promise,
+- [x] A per-name mutation registry records every raw native `modify()` promise,
       including phase/error labels and the `deleting` tombstone, and clears it
       only when that promise settles.
-- [ ] The resize lane is held until the native call settles or the short
+- [x] The resize lane is held until the native call settles or the short
       settlement bound expires; an RPC timeout does not free the lane.
-- [ ] Delete aborts the logical resize, then checks the registry. An unsettled
+- [x] Delete aborts the logical resize, then checks the registry. An unsettled
       mutation returns `mutation_pending` without tombstoning or destroying.
-- [ ] The `deleting` tombstone is registered and awaited. If it does not settle,
+- [x] The `deleting` tombstone is registered and awaited. If it does not settle,
       Delete returns `mutation_pending` and does not destroy.
-- [ ] Same-name Create/Repair checks the registry and returns
+- [x] Same-name Create/Repair checks the registry and returns
       `mutation_pending` instead of allocating or advancing.
-- [ ] `bounded()` is not treated as cancellation or settlement anywhere in the
+- [x] `bounded()` is not treated as cancellation or settlement anywhere in the
       label/resize/Delete path.
-- [ ] The raw-SDK identity contract is extended to label, environment, and
+- [x] The raw-SDK identity contract is extended to label, environment, and
       resource `modify()` writes against a same-name replacement.
-- [ ] Unit tests cover settled, timed-out, aborted, tombstone, label-write, and
+- [x] Unit tests cover settled, timed-out, aborted, tombstone, label-write, and
       process-cleanup paths.
-- [ ] The external-replacement residual window remains documented and is not
+- [x] The external-replacement residual window remains documented and is not
       claimed closed.
 
 Files: `server/mutations.ts`, `server/lanes.ts`, `server/sandbox.ts`,
