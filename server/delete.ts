@@ -1,6 +1,7 @@
 import type { VmDeleteInput, VmDeleteResult } from "../shared/contracts";
 import { safeError } from "../shared/errors";
 import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
+import { runMutation, type MutationRegistry } from "./mutations";
 import {
   matchingRegistrations,
   removeRegistration,
@@ -18,12 +19,22 @@ import {
   type SandboxHost,
 } from "./sandbox";
 
-/** Bound for one parent/runtime call made by Delete. */
-const DELETE_CALL_TIMEOUT_MS = 60_000;
+/** Bound for one Delete parent/runtime call. */
+const DEFAULT_DELETE_TIMEOUT_MS = 60_000;
+
+function deleteTimeout(context: DeleteContext): number {
+  return context.deleteTimeoutMs ?? DEFAULT_DELETE_TIMEOUT_MS;
+}
 
 export interface DeleteContext extends RegistrationContext {
   readonly hosts: RegistrationContext["hosts"];
   readonly sandboxHost: SandboxHost;
+  /** Raw native mutation settlement, shared with Create and Repair. */
+  readonly mutations: MutationRegistry;
+  /** Bound for one Delete parent/runtime call; tests shorten it. */
+  readonly deleteTimeoutMs?: number;
+  /** Settlement bound for native mutations; tests shorten it. */
+  readonly mutationSettleMs?: number;
 }
 
 /**
@@ -44,6 +55,12 @@ export async function deleteVm(
   }
 
   token.throwIfAborted();
+
+  // The lane runner aborts the logical resize before Delete starts. An
+  // unsettled native mutation still blocks tombstoning and destruction.
+  if (context.mutations.pending(input.name)) {
+    throw new Error(safeError("mutation_pending").message);
+  }
 
   // Registrations must be readable before anything is destroyed, so an
   // unavailable daemon never leaves an unmanaged running VM behind.
@@ -71,12 +88,22 @@ export async function deleteVm(
   let vanished = false;
   let incomplete = false;
   try {
-    await bounded(markSandboxPhase(handle, "deleting"), {
-      timeoutMs: DELETE_CALL_TIMEOUT_MS,
-      signal: token.signal,
-    });
+    await runMutation(
+      context.mutations,
+      input.name,
+      () =>
+        markSandboxPhase(handle, "deleting", {
+          tracking: { mutations: context.mutations, name: input.name },
+        }),
+      { timeoutMs: deleteTimeout(context), signal: token.signal },
+      context.mutationSettleMs,
+    );
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
+    // A bounded timeout is not settlement: the native write may still apply.
+    if (context.mutations.pending(input.name)) {
+      throw new Error(safeError("mutation_pending").message);
+    }
     if (isIncompleteSandboxError(error)) {
       incomplete = true;
     } else if (error instanceof SandboxMissingError || isSandboxNotFoundError(error)) {
@@ -86,17 +113,21 @@ export async function deleteVm(
     }
   }
 
+  if (!vanished && context.mutations.pending(input.name)) {
+    throw new Error(safeError("mutation_pending").message);
+  }
+
   if (!vanished) {
     // Re-read after a successful tombstone: `modify()` can hit a replacement.
     // Incomplete creation cannot be refreshed; destroy() still rejects a stale
     // handle, so a replacement remains protected in that path as well.
-    const current = incomplete ? handle : await refreshExact(handle, token);
+    const current = incomplete ? handle : await refreshExact(context, handle, token);
     token.throwIfAborted();
 
     if (current) {
       try {
         await bounded(context.sandboxHost.destroy(current), {
-          timeoutMs: DELETE_CALL_TIMEOUT_MS,
+          timeoutMs: deleteTimeout(context),
           signal: token.signal,
         });
       } catch (error) {
@@ -152,7 +183,7 @@ async function removeRegistrationWithoutSandbox(
 async function listDirectory(context: DeleteContext, token: LaneToken) {
   try {
     return await bounded(context.hosts.list(), {
-      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      timeoutMs: deleteTimeout(context),
       signal: token.signal,
     });
   } catch (error) {
@@ -168,7 +199,7 @@ async function findSandbox(
 ): Promise<SandboxHandleLike | null> {
   try {
     return await bounded(context.sandboxHost.find(name), {
-      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      timeoutMs: deleteTimeout(context),
       signal: token.signal,
     });
   } catch (error) {
@@ -179,12 +210,13 @@ async function findSandbox(
 
 
 async function refreshExact(
+  context: DeleteContext,
   handle: SandboxHandleLike,
   token: LaneToken,
 ): Promise<SandboxHandleLike | null> {
   try {
     const current = await bounded(handle.refresh(), {
-      timeoutMs: DELETE_CALL_TIMEOUT_MS,
+      timeoutMs: deleteTimeout(context),
       signal: token.signal,
     });
     if (current.id !== handle.id) throw new SandboxGenerationError("id_mismatch");

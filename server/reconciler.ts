@@ -15,6 +15,7 @@ import {
 
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
 import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
+import { runMutation, type MutationRegistry } from "./mutations";
 import { ensureProvisioned } from "./provision";
 import {
   ensureRegistration,
@@ -56,12 +57,16 @@ export interface ReconcileContext extends RegistrationContext {
   readonly hosts: RegistrationHostsLike;
   readonly runtime: SandboxRuntime;
   readonly sandboxHost: SandboxHost;
+  /** Raw native mutation settlement, shared by every per-name lane. */
+  readonly mutations: MutationRegistry;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly secretsStore: SecretsStore;
   /** Bounded wait for one detached Pi install; tests shorten it. */
   readonly installTimeoutMs?: number;
   /** Bounded wait for one non-job SDK call; tests shorten it. */
   readonly sdkCallTimeoutMs?: number;
+  /** Settlement bound for native mutations; tests shorten it. */
+  readonly mutationSettleMs?: number;
 }
 
 export interface ReconcileRequest {
@@ -100,6 +105,11 @@ export async function reconcileName(
   token: LaneToken,
 ): Promise<ReconcileOutcome> {
   token.throwIfAborted();
+
+  // An unsettled native mutation blocks advancing or allocating this name.
+  if (context.mutations.pending(request.name)) {
+    throw new SetupFailure("mutation_pending");
+  }
 
   const directory = await readDirectory(context, request.redactionValues, token);
   const parentId = directory.self.serverId;
@@ -283,7 +293,7 @@ async function advanceSandbox(
 
     if (phase !== "ready") {
       phase = "installing";
-      if (await writePhase(context, handle, phase, token)) changed = true;
+      if (await writePhase(context, request.name, handle, phase, token)) changed = true;
       if (await ensureProvisioned(context, handle, plan, redaction, token)) changed = true;
     }
 
@@ -291,7 +301,7 @@ async function advanceSandbox(
 
     if (phase !== "ready") {
       phase = "registering";
-      if (await writePhase(context, handle, phase, token)) changed = true;
+      if (await writePhase(context, request.name, handle, phase, token)) changed = true;
     }
 
     const hostPort = readSandboxHostPort(handle);
@@ -313,7 +323,7 @@ async function advanceSandbox(
 
     if (phase !== "ready") {
       phase = "ready";
-      if (await writePhase(context, handle, phase, token)) changed = true;
+      if (await writePhase(context, request.name, handle, phase, token)) changed = true;
     }
 
     return {
@@ -325,7 +335,7 @@ async function advanceSandbox(
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
     const failure = asSetupFailure(error, redaction);
-    await recordFailure(context, handle, phase, failure, token);
+    await recordFailure(context, request.name, handle, phase, failure, token);
     throw failure;
   }
 }
@@ -414,16 +424,23 @@ function isPortFailure(error: unknown): boolean {
 
 async function writePhase(
   context: ReconcileContext,
+  name: string,
   handle: SandboxHandleLike,
   phase: Phase,
   token: LaneToken,
 ): Promise<boolean> {
   token.throwIfAborted();
   try {
-    await bounded(markSandboxPhase(handle, phase), {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
+    await runMutation(
+      context.mutations,
+      name,
+      () => markSandboxPhase(handle, phase, { tracking: tracking(context, name) }),
+      {
+        timeoutMs: sdkTimeoutMs(context),
+        signal: token.signal,
+      },
+      context.mutationSettleMs,
+    );
     return true;
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
@@ -436,6 +453,7 @@ async function writePhase(
 
 async function recordFailure(
   context: ReconcileContext,
+  name: string,
   handle: SandboxHandleLike,
   phase: Phase,
   failure: SetupFailure,
@@ -443,13 +461,26 @@ async function recordFailure(
 ): Promise<void> {
   const detail = failure.detail ?? null;
   try {
-    await bounded(markSandboxError(handle, phase, failure.code, detail), {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
+    await runMutation(
+      context.mutations,
+      name,
+      () => markSandboxError(handle, phase, failure.code, detail, tracking(context, name)),
+      {
+        timeoutMs: sdkTimeoutMs(context),
+        signal: token.signal,
+      },
+      context.mutationSettleMs,
+    );
   } catch {
     // Error labels are a diagnostic hint. Never mask the original failure.
   }
+}
+
+function tracking(
+  context: ReconcileContext,
+  name: string,
+): { mutations: MutationRegistry; name: string } {
+  return { mutations: context.mutations, name };
 }
 
 function registrationOnlyForName(

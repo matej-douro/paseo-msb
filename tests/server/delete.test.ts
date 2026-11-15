@@ -3,6 +3,7 @@ import { MANAGED_LABEL, PLAN_ENV_VAR, REGISTRATION_PRODUCER_ID } from "../../sha
 import { safeError } from "../../shared/errors";
 import { deleteVm, type DeleteContext } from "../../server/delete";
 import type { LaneToken } from "../../server/lanes";
+import { createMutationRegistry } from "../../server/mutations";
 import {
   fakeHostDirectory,
   fakeRegistration,
@@ -30,7 +31,7 @@ function deleteContext(
   creator: FakeSandboxCreator,
   hosts: FakePaseoHosts,
 ): DeleteContext {
-  return { hosts, sandboxHost: creator, timeoutMs: 100, pollMs: 1 };
+  return { hosts, sandboxHost: creator, timeoutMs: 100, pollMs: 1, mutations: createMutationRegistry() };
 }
 
 function ownedRegistration(overrides: Parameters<typeof fakeRegistration>[0] = {}) {
@@ -55,6 +56,49 @@ function incompleteError(): Error {
 }
 
 describe("deleteVm", () => {
+  it("refuses while a native mutation is unsettled", async () => {
+    const creator = new FakeSandboxCreator({
+      existing: fakeSandbox({ id: "sandbox_1", name: NAME }),
+    });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+    const context = deleteContext(creator, hosts);
+    context.mutations.track(NAME, new Promise(() => {}));
+
+    await expect(deleteVm(context, INPUT, token())).rejects.toThrow(
+      safeError("mutation_pending").message,
+    );
+    expect(creator.destroyed).toEqual([]);
+    expect(hosts.removed).toEqual([]);
+  });
+
+  it("does not destroy when the deleting tombstone does not settle", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const creator = new FakeSandboxCreator({
+      existing: fakeSandbox({ id: "sandbox_1", name: NAME, modifyGate: gate }),
+    });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+    const context = {
+      ...deleteContext(creator, hosts),
+      deleteTimeoutMs: 20,
+      mutationSettleMs: 20,
+    };
+
+    await expect(deleteVm(context, INPUT, token())).rejects.toThrow(
+      safeError("mutation_pending").message,
+    );
+    expect(creator.destroyed).toEqual([]);
+    expect(hosts.removed).toEqual([]);
+
+    release();
+  });
+
   it("destroys the exact sandbox and removes its registration", async () => {
     const creator = new FakeSandboxCreator({
       existing: fakeSandbox({ id: "sandbox_1", name: NAME }),

@@ -21,6 +21,7 @@ import type { CanonicalPlan } from "../../shared/provisioning";
 import { safeError } from "../../shared/errors";
 import { createVm, startCreate, type CreateContext } from "../../server/create";
 import { createLifecycleLanes } from "../../server/lanes";
+import { createMutationRegistry } from "../../server/mutations";
 import { createPendingCreateStore } from "../../server/pending";
 import { buildSandboxCreatePlan, applySandboxCreatePlan, type SandboxBuilderLike } from "../../server/sandbox";
 import { resolveSelectedSecrets } from "../../server/secrets";
@@ -87,6 +88,7 @@ function createContext(
     pending: createPendingCreateStore(),
     secretsStore: memorySecretsStore(),
     lanes: createLifecycleLanes(),
+    mutations: createMutationRegistry(),
     installTimeoutMs: 250,
     timeoutMs: 250,
     pollMs: 1,
@@ -234,6 +236,21 @@ describe("createVm", () => {
 
     gate.resolve();
     await first.started;
+  });
+
+  it("refuses to start while a native mutation is unsettled", async () => {
+    const creator = new FakeSandboxCreator();
+    const context = createContext(creator);
+    context.mutations.track(NAME, new Promise(() => {}));
+
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "mutation_pending",
+    });
+    expect(creator.createCount).toBe(0);
   });
 
   it("joins the generation its request marker owns after readiness", async () => {

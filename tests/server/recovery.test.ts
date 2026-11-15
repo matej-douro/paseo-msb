@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PHASE_LABEL, REGISTRATION_PRODUCER_ID } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
 import { createLifecycleLanes } from "../../server/lanes";
+import { createMutationRegistry } from "../../server/mutations";
 import { recoverManagedSandboxes, type RecoveryContext } from "../../server/recovery";
 import {
   failingRuntime,
@@ -38,6 +39,7 @@ function recoveryContext(
     env: {},
     secretsStore: memorySecretsStore(),
     lanes: createLifecycleLanes(),
+    mutations: createMutationRegistry(),
     timeoutMs: 100,
     pollMs: 1,
     installTimeoutMs: 100,

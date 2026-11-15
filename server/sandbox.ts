@@ -42,6 +42,7 @@ import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors
 import { parseProvisionPlan, type CanonicalPlan } from "../shared/provisioning";
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
 import { bounded } from "./lanes";
+import type { MutationRegistry } from "./mutations";
 import type { ResolvedSecret } from "./secrets";
 
 /**
@@ -752,12 +753,20 @@ export function sandboxCredentialNames(handle: SandboxHandleLike): CredentialNam
 }
 
 /**
- * Writes labels only after re-reading the exact generation. The pinned SDK's
- * `modify()` applies to a same-name replacement, so this guard is mandatory.
+ * Writes modify options only after re-reading the exact generation. The pinned
+ * SDK's `modify()` applies to a same-name replacement, so this guard is
+ * mandatory. The residual window remains: an external replacement created
+ * between this refresh and the write can still inherit it.
  */
+export interface MutationTracking {
+  readonly mutations: MutationRegistry;
+  readonly name: string;
+}
+
 export async function guardedModify(
   handle: SandboxHandleLike,
-  labels: Readonly<Record<string, string>>,
+  options: SandboxModifyOptionsLike,
+  tracking?: MutationTracking,
 ): Promise<void> {
   let current: SandboxHandleLike;
   try {
@@ -774,8 +783,13 @@ export async function guardedModify(
 
   if (current.id !== handle.id) throw new SandboxGenerationError("id_mismatch");
 
+  const operation = current.modify(options);
+  // Register the raw native promise before awaiting it: a wrapper timeout must
+  // not hide that the call is still in flight.
+  tracking?.mutations.track(tracking.name, operation);
+
   try {
-    await current.modify({ labels });
+    await operation;
   } catch (error) {
     if (isSandboxNotFoundError(error)) throw new SandboxMissingError();
     if (isSandboxReplacedError(error)) throw new SandboxGenerationError("id_mismatch");
@@ -817,7 +831,11 @@ export function isSandboxNotFoundError(error: unknown): boolean {
 export async function markSandboxPhase(
   handle: SandboxHandleLike,
   phase: Phase,
-  options: { readonly code?: SafeErrorCode; readonly detail?: string | null } = {},
+  options: {
+    readonly code?: SafeErrorCode;
+    readonly detail?: string | null;
+    readonly tracking?: MutationTracking;
+  } = {},
 ): Promise<void> {
   const labels: Record<string, string> = { [PHASE_LABEL]: phase };
 
@@ -830,7 +848,7 @@ export async function markSandboxPhase(
     labels[ERROR_DETAIL_LABEL] = "";
   }
 
-  await guardedModify(handle, labels);
+  await guardedModify(handle, { labels }, options.tracking);
 }
 
 /**
@@ -842,10 +860,12 @@ export async function markSandboxError(
   phase: Phase,
   code: SafeErrorCode,
   detail: string | null = null,
+  tracking?: MutationTracking,
 ): Promise<void> {
   await markSandboxPhase(handle, phase === "failed" ? "installing" : phase, {
     code,
     detail,
+    tracking,
   });
 }
 

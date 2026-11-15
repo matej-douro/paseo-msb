@@ -128,6 +128,8 @@ export interface FakeSandboxOptions {
   jobLogs?: readonly { timestamp: number; source: string; data: Uint8Array }[];
   labelUpdates?: Record<string, string>[];
   modifyError?: Error;
+  /** Holds every `modify()` until released, for settlement tests. */
+  modifyGate?: Promise<void>;
   /** Every `modify()` call, in order. */
   modifyCalls?: SandboxModifyOptionsLike[];
   /** One metrics sample; defaults to a minimal idle snapshot. */
@@ -320,6 +322,7 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
       return raw;
     },
     modify: async (update) => {
+      if (options.modifyGate) await options.modifyGate;
       if (options.modifyError) throw options.modifyError;
       options.modifyCalls?.push(update);
       if (update.labels) {
@@ -621,6 +624,7 @@ export interface FakeCreatorOptions {
   execError?: Error;
   execDetachedError?: Error;
   modifyError?: Error;
+  modifyGate?: Promise<void>;
   destroyError?: Error;
   destroyGate?: Promise<void>;
   hostPorts?: readonly number[];
@@ -685,7 +689,7 @@ export class FakeSandboxCreator implements SandboxHost {
       hostPort: request.hostPort,
       plan: request.plan,
       labelUpdates: this.labelUpdates,
-      modifyError: this.options.modifyError,
+      modifyGate: this.options.modifyGate,
       execError: this.options.execError,
       execOutput: this.options.execOutput,
       jobs,

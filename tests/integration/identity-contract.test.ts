@@ -78,6 +78,32 @@ function sandboxLabels(handle: SandboxHandle): Record<string, string> {
   return labels ?? {};
 }
 
+function sandboxEnv(handle: SandboxHandle, name: string): string | undefined {
+  const env = (handle.config() as { env?: unknown }).env;
+  if (Array.isArray(env)) {
+    for (const entry of env) {
+      const item = entry as { name?: string; key?: string; value?: unknown };
+      if ((item.name ?? item.key) === name && typeof item.value === "string") {
+        return item.value;
+      }
+    }
+    return undefined;
+  }
+  if (typeof env === "object" && env !== null) {
+    const value = (env as Record<string, unknown>)[name];
+    return typeof value === "string" ? value : undefined;
+  }
+  return undefined;
+}
+
+function sandboxRootDiskMib(handle: SandboxHandle): number | undefined {
+  const config = handle.config() as {
+    image?: { Oci?: { rootDisk?: { sizeMib?: unknown } } };
+  };
+  const size = config.image?.Oci?.rootDisk?.sizeMib;
+  return typeof size === "number" ? size : undefined;
+}
+
 /**
  * After a same-name replacement, every captured-handle operation must reject
  * except `modify()`, which the pinned SDK applies to the replacement. That
@@ -128,14 +154,28 @@ describe.skipIf(!RELEASE_ENABLED)("stale handle identity contract", () => {
 
       // A stale modify is not generation-bound in microsandbox 0.7.14. The
       // plugin compensates by refreshing and comparing the id before every
-      // label write; this assertion records the underlying SDK limitation.
-      const staleModify = await attempt(() =>
+      // label, environment, or resource write; these assertions record the
+      // underlying SDK limitation for each kind of write.
+      const staleLabel = await attempt(() =>
         original.modify({ labels: { "stale-handle": "applied" } }),
       );
-      expect(staleModify.rejected).toBe(false);
+      expect(staleLabel.rejected).toBe(false);
+
+      const staleEnv = await attempt(() =>
+        original.modify({
+          env: { STALE_HANDLE_ENV: "applied" },
+          policy: "next_start",
+        }),
+      );
+      expect(staleEnv.rejected).toBe(false);
+
+      const staleDisk = await attempt(() => original.modify({ rootDiskSize: 20_480 }));
+      expect(staleDisk.rejected).toBe(false);
 
       const afterModify = await replacement.refresh();
       expect(sandboxLabels(afterModify)["stale-handle"]).toBe("applied");
+      expect(sandboxEnv(afterModify, "STALE_HANDLE_ENV")).toBe("applied");
+      expect(sandboxRootDiskMib(afterModify)).toBe(20_480);
 
       const outcomes: readonly [string, Attempt][] = [
         ["refresh", await attempt(() => original.refresh())],

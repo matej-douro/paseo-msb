@@ -9,6 +9,7 @@ import { safeError } from "../../shared/errors";
 import { buildProvisionScript, legacyPiPlan } from "../../shared/provisioning";
 import { deleteVm } from "../../server/delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "../../server/lanes";
+import { createMutationRegistry } from "../../server/mutations";
 import { reconcileVm, type ReconcileVmContext } from "../../server/reconcile";
 import {
   failingRuntime,
@@ -38,6 +39,7 @@ function reconcileContext(
     env: {},
     secretsStore: memorySecretsStore(),
     lanes: createLifecycleLanes(),
+    mutations: createMutationRegistry(),
     timeoutMs: 100,
     pollMs: 1,
     installTimeoutMs: 100,
@@ -76,6 +78,28 @@ describe("reconcileVm", () => {
     expect(hosts.added).toHaveLength(1);
     expect(hosts.added[0].connection).toBe("127.0.0.1:43000");
     expect(hosts.added[0].metadata).toEqual({ source: "paseo-msb", name: NAME });
+  });
+
+  it("refuses to repair while a native mutation is unsettled", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+    const context = reconcileContext(
+      fakeRuntime([sandbox]),
+      hosts,
+      new FakeSandboxCreator({ existing: sandbox }),
+    );
+    context.mutations.track(NAME, new Promise(() => {}));
+
+    const result = await reconcileVm(context, INPUT);
+
+    expect(result).toEqual({
+      repaired: [],
+      errors: [{ name: NAME, error: safeError("mutation_pending") }],
+    });
+    expect(hosts.added).toEqual([]);
+    expect(hosts.updated).toEqual([]);
   });
 
   it("leaves a healthy ready sandbox alone", async () => {
@@ -645,7 +669,13 @@ describe("reconcileVm", () => {
       NAME,
       (token) =>
         deleteVm(
-          { hosts, sandboxHost: creator, timeoutMs: 100, pollMs: 1 },
+          {
+            hosts,
+            sandboxHost: creator,
+            timeoutMs: 100,
+            pollMs: 1,
+            mutations: createMutationRegistry(),
+          },
           { name: NAME, id: "sandbox_1", confirmName: NAME },
           token,
         ),

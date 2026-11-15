@@ -15,6 +15,7 @@ import { safeError } from "../shared/errors";
 import { createVm } from "./create";
 import { deleteVm } from "./delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "./lanes";
+import { createMutationRegistry } from "./mutations";
 import { createPendingCreateStore, dismissPendingCreate } from "./pending";
 import { reconcileVm } from "./reconcile";
 import { recoverManagedSandboxes } from "./recovery";
@@ -37,6 +38,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
     secureExistingDirectory: true,
   });
   const lanes = createLifecycleLanes();
+  const mutations = createMutationRegistry();
   let recovery: Promise<void> | null = null;
   let recoveryDone = false;
 
@@ -60,6 +62,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
       hosts: paseo.hosts,
       runtime: createMicrosandboxRuntime(paseo),
       sandboxHost: createMicrosandboxHost(paseo),
+      mutations,
       env: process.env,
       pending,
       secretsStore,
