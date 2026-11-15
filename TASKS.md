@@ -116,14 +116,14 @@ sample fields cannot be mapped without raw-error leakage.
 
 Acceptance:
 
-- [ ] Script records several consecutive samples, timestamps, configured
+- [x] Script records several consecutive samples, timestamps, configured
       sampling interval, and poll cadence.
-- [ ] Script records duplicate/stale behavior, counter regressions across a
+- [x] Script records duplicate/stale behavior, counter regressions across a
       restart, and the stopped/disabled/unavailable error codes.
-- [ ] Script records whether `upperUsedBytes`/`upperFreeBytes` describe the root
+- [x] Script records whether `upperUsedBytes`/`upperFreeBytes` describe the root
       filesystem or only the writable upper layer.
-- [ ] Result is captured in `docs/spikes/v11-metrics.md`.
-- [ ] Sandbox is removed in `finally`.
+- [x] Result is captured in `docs/spikes/v11-metrics.md`.
+- [x] Sandbox is removed in `finally`.
 
 Files: `scripts/spikes/verify-v11-metrics.mjs`,
 `docs/spikes/v11-metrics.md`
