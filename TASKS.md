@@ -257,25 +257,25 @@ label/metadata to the canonical name and repair drift.
 
 Acceptance:
 
-- [ ] A repeated request ID after readiness finds its generation and does not
+- [x] A repeated request ID after readiness finds its generation and does not
       create a second VM.
-- [ ] A repeated request ID with a different name, plan, or resources is
+- [x] A repeated request ID with a different name, plan, or resources is
       rejected as `invalid_request`, naming the already-owned generation.
-- [ ] A different request under the same name fails with `name_conflict` and
+- [x] A different request under the same name fails with `name_conflict` and
       never relabels, adopts, or destroys the existing sandbox.
-- [ ] A repeated request after readiness must match the persisted
+- [x] A repeated request after readiness must match the persisted
       resources-specified flag as well as name/plan/resources.
-- [ ] A legacy sandbox without `PASEO_MSB_REQUEST` is joinable only when its
+- [x] A legacy sandbox without `PASEO_MSB_REQUEST` is joinable only when its
       name is exactly `paseo-<requestId>` and the request did not explicitly
       supply resources. An explicit resource selection against a markerless
       legacy sandbox is `invalid_request`.
-- [ ] New registrations use `label = <name>` and
+- [x] New registrations use `label = <name>` and
       `metadata = { source: "paseo-msb", name }`.
-- [ ] Recovery/Repair update an enabled V1 registration from
+- [x] Recovery/Repair update an enabled V1 registration from
       `<parent>/<name>` to `<name>`; a disabled registration is untouched.
-- [ ] Recovery, Repair, and Create still produce at most one registration per
+- [x] Recovery, Repair, and Create still produce at most one registration per
       generation.
-- [ ] Tests cover same-request join, different-request conflict, post-ready
+- [x] Tests cover same-request join, different-request conflict, post-ready
       request reuse, legacy omitted-vs-explicit resources, foreign-name
       conflict, duplicate pending rows, and registration drift.
 
