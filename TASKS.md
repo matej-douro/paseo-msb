@@ -329,36 +329,36 @@ resources, and report an honest outcome.
 
 Acceptance:
 
-- [ ] `vm.resize` rejects an unknown child or name/id mismatch with
+- [x] `vm.resize` rejects an unknown child or name/id mismatch with
       `id_mismatch`, and unreadable inventory/runtime with a safe error.
-- [ ] An unknown/extra payload field is rejected.
-- [ ] A target equal to observed and requested returns `unchanged` without
+- [x] An unknown/extra payload field is rejected.
+- [x] A target equal to observed and requested returns `unchanged` without
       calling `modify()`; a target equal to observed but different from
       requested clears the pending desired value.
-- [ ] A disk target below observed is `invalid_request`; a disk change with an
+- [x] A disk target below observed is `invalid_request`; a disk change with an
       observed null baseline is `invalid_request`. A memory target with an
       observed null baseline is `invalid_request`.
-- [ ] `no_restart` produces `applied`, `converging`, or `restart_required`
+- [x] `no_restart` produces `applied`, `converging`, or `restart_required`
       according to the verified SDK outcome and the DESIGN §7.2 precedence
       table.
-- [ ] `applied` is returned only when observed config confirms the target;
+- [x] `applied` is returned only when observed config confirms the target;
       unreported or still-different values cannot be reported as applied.
-- [ ] A `no_restart` RAM target above the legacy/unknown `maxMemory` cap
+- [x] A `no_restart` RAM target above the legacy/unknown `maxMemory` cap
       returns `restart_required` before calling `modify()` and never includes
       `maxMemory`.
-- [ ] Legacy RAM growth includes `maxMemory` only on `restart: true`; the
+- [x] Legacy RAM growth includes `maxMemory` only on `restart: true`; the
       restart path returns `applied` or `resize_failed` per the spike, while the
       no-restart path returns `restart_required` as above.
-- [ ] `restart: true` is accepted only for the exact generation when it is
+- [x] `restart: true` is accepted only for the exact generation when it is
       `running`; created/stopped/crashed/paused VMs are rejected and never
       started.
-- [ ] The same modify call writes canonical `PASEO_MSB_RESOURCES`, and the
+- [x] The same modify call writes canonical `PASEO_MSB_RESOURCES`, and the
       response includes observed and requested resources.
-- [ ] Mixed RAM+disk changes use the stated severity order and are unit tested,
+- [x] Mixed RAM+disk changes use the stated severity order and are unit tested,
       including a converging-plus-restart-required request that must return
       `restart_required`.
-- [ ] Raw SDK messages never cross the RPC boundary.
-- [ ] Unit tests cover bounds, shrink, null baseline, no-op, clear-pending,
+- [x] Raw SDK messages never cross the RPC boundary.
+- [x] Unit tests cover bounds, shrink, null baseline, no-op, clear-pending,
       statuses, generation mismatch, legacy cap, restart states, modify failure,
       and concurrent Delete.
 
