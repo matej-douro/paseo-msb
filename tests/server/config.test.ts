@@ -6,6 +6,9 @@ import {
   PHASE_LABEL,
   PLAN_ENV_VAR,
   PLUGIN_VERSION,
+  REQUEST_ENV_VAR,
+  RESOURCES_ENV_VAR,
+  RESOURCES_SPECIFIED_ENV_VAR,
   SANDBOX_ID_LABEL,
 } from "../../shared/constants";
 import {
@@ -73,6 +76,38 @@ describe("decodeManagedSandbox", () => {
     expect(serialized).not.toContain("network");
     expect(serialized).not.toContain("env");
     expect(serialized).not.toContain("substitution");
+  });
+
+  it("does not project the request or resources variables as plan or labels", () => {
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: {
+        env: [
+          { name: REQUEST_ENV_VAR, value: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f" },
+          {
+            name: RESOURCES_ENV_VAR,
+            value: JSON.stringify({ cpus: 2, memoryMib: 8192, diskMib: 20480 }),
+          },
+          { name: RESOURCES_SPECIFIED_ENV_VAR, value: "1" },
+        ],
+      },
+    });
+
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+    const serialized = JSON.stringify(decoded);
+
+    expect(decoded!.plan).toBeNull();
+    expect(serialized).not.toContain("2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f");
+    expect(serialized).not.toContain("8192");
+    expect(Object.keys(decoded!).sort()).toEqual([
+      "errorDetail",
+      "id",
+      "labels",
+      "name",
+      "plan",
+      "runtimeStatus",
+    ]);
   });
 
   it("ignores unmanaged sandboxes and other parents", () => {

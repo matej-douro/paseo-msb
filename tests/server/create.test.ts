@@ -5,10 +5,16 @@ import {
   GUEST_INIT_COMMAND,
   GUEST_PATH,
   MANAGED_LABEL,
+  MAX_MEMORY_MIB,
+  METRICS_SAMPLE_INTERVAL_MS,
   PARENT_LABEL,
   PHASE_LABEL,
   PLAN_ENV_VAR,
   PLUGIN_VERSION,
+  REQUEST_ENV_VAR,
+  RESOURCES_ENV_VAR,
+  RESOURCES_SPECIFIED_ENV_VAR,
+  ROOT_DISK_MIB,
 } from "../../shared/constants";
 import type { VmCreateInput } from "../../shared/contracts";
 import type { CanonicalPlan } from "../../shared/provisioning";
@@ -16,7 +22,7 @@ import { safeError } from "../../shared/errors";
 import { createVm, startCreate, type CreateContext } from "../../server/create";
 import { createLifecycleLanes } from "../../server/lanes";
 import { createPendingCreateStore } from "../../server/pending";
-import { buildSandboxCreatePlan } from "../../server/sandbox";
+import { buildSandboxCreatePlan, applySandboxCreatePlan, type SandboxBuilderLike } from "../../server/sandbox";
 import { resolveSelectedSecrets } from "../../server/secrets";
 import { buildVmList } from "../../server/status";
 import {
@@ -580,18 +586,25 @@ describe("sandbox create plan", () => {
     );
     if (resolution.status !== "ok") throw new Error("expected resolved secrets");
 
+    const resources = { cpus: 2 as const, memoryMib: 8192, diskMib: 20480 };
     const createdPlan = buildSandboxCreatePlan({
       name: NAME,
       parentId: PARENT_ID,
       hostPort: 43_000,
       plan: INPUT.plan,
       secrets: resolution.secrets,
+      requestId: REQUEST_ID,
+      resources,
+      resourcesSpecified: true,
     });
 
     expect(createdPlan.name).toBe(NAME);
     expect(createdPlan.image).toBe(GUEST_IMAGE);
     expect(createdPlan.cpus).toBe(2);
-    expect(createdPlan.memoryMib).toBe(4096);
+    expect(createdPlan.memoryMib).toBe(8192);
+    expect(createdPlan.maxMemoryMib).toBe(MAX_MEMORY_MIB);
+    expect(createdPlan.rootDiskMib).toBe(20480);
+    expect(createdPlan.metricsSampleIntervalMs).toBe(METRICS_SAMPLE_INTERVAL_MS);
     expect(createdPlan.detached).toBe(true);
     expect(createdPlan.init).toEqual({ command: GUEST_INIT_COMMAND, args: GUEST_INIT_ARGS });
     expect(createdPlan.hostPort).toBe(43_000);
@@ -599,6 +612,9 @@ describe("sandbox create plan", () => {
     expect(createdPlan.env).toEqual({
       PATH: GUEST_PATH,
       [PLAN_ENV_VAR]: JSON.stringify(INPUT.plan),
+      [REQUEST_ENV_VAR]: REQUEST_ID,
+      [RESOURCES_ENV_VAR]: JSON.stringify(resources),
+      [RESOURCES_SPECIFIED_ENV_VAR]: "1",
     });
     expect(createdPlan.labels).toEqual({
       [MANAGED_LABEL]: PLUGIN_VERSION,
@@ -609,6 +625,64 @@ describe("sandbox create plan", () => {
     for (const secret of createdPlan.secrets) {
       expect(secret.substitution).toEqual({ headers: true, query: false, body: false });
     }
+
+    const projected = JSON.stringify({ labels: createdPlan.labels, env: createdPlan.env });
+    expect(projected).not.toContain("anthropic-secret");
+    expect(projected).not.toContain("gh-secret");
+  });
+
+  it("uses the default resources and reports an omitted selection", () => {
+    const createdPlan = buildSandboxCreatePlan({
+      name: NAME,
+      parentId: PARENT_ID,
+      hostPort: 43_000,
+      plan: INPUT.plan,
+      secrets: [],
+      requestId: REQUEST_ID,
+    });
+
+    expect(createdPlan.cpus).toBe(2);
+    expect(createdPlan.memoryMib).toBe(4096);
+    expect(createdPlan.rootDiskMib).toBe(ROOT_DISK_MIB);
+    expect(createdPlan.maxMemoryMib).toBe(MAX_MEMORY_MIB);
+    expect(createdPlan.env[RESOURCES_ENV_VAR]).toBe(
+      JSON.stringify({ cpus: 2, memoryMib: 4096, diskMib: ROOT_DISK_MIB }),
+    );
+    expect(createdPlan.env[RESOURCES_SPECIFIED_ENV_VAR]).toBe("0");
+  });
+
+  it("applies the create plan in the pinned SDK order", () => {
+    const createdPlan = buildSandboxCreatePlan({
+      name: NAME,
+      parentId: PARENT_ID,
+      hostPort: 43_000,
+      plan: INPUT.plan,
+      secrets: [],
+      requestId: REQUEST_ID,
+      resources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      resourcesSpecified: true,
+    });
+    const builder = new RecordingBuilder();
+
+    applySandboxCreatePlan(builder, createdPlan);
+
+    expect(builder.calls).toEqual([
+      ["image", GUEST_IMAGE],
+      ["rootDisk", 20480],
+      ["cpus", 2],
+      ["memory", 8192],
+      ["maxMemory", MAX_MEMORY_MIB],
+      ["metricsSampleIntervalMs", METRICS_SAMPLE_INTERVAL_MS],
+      ["detached", true],
+      ["init", GUEST_INIT_COMMAND, [...GUEST_INIT_ARGS]],
+      ["port", 43_000, 6767],
+      ["labels", createdPlan.labels],
+      ["env", "PATH", GUEST_PATH],
+      ["env", PLAN_ENV_VAR, JSON.stringify(INPUT.plan)],
+      ["env", REQUEST_ENV_VAR, REQUEST_ID],
+      ["env", RESOURCES_ENV_VAR, createdPlan.env[RESOURCES_ENV_VAR]],
+      ["env", RESOURCES_SPECIFIED_ENV_VAR, "1"],
+    ]);
   });
 
   it("reports only names with non-empty values and ignores duplicates", () => {
@@ -621,3 +695,57 @@ describe("sandbox create plan", () => {
     if (resolution.status === "missing") expect(resolution.missing).toEqual(["OPENAI_API_KEY"]);
   });
 });
+
+/** Records the builder calls so the create-plan order stays pinned. */
+class RecordingBuilder implements SandboxBuilderLike {
+  readonly calls: (readonly [string, ...unknown[]])[] = [];
+
+  image(image: string): this {
+    return this.record("image", image);
+  }
+
+  rootDisk(sizeMiB: number): this {
+    return this.record("rootDisk", sizeMiB);
+  }
+
+  cpus(count: number): this {
+    return this.record("cpus", count);
+  }
+
+  memory(mib: number): this {
+    return this.record("memory", mib);
+  }
+
+  maxMemory(mib: number): this {
+    return this.record("maxMemory", mib);
+  }
+
+  metricsSampleIntervalMs(ms: number): this {
+    return this.record("metricsSampleIntervalMs", ms);
+  }
+
+  detached(enabled: boolean): this {
+    return this.record("detached", enabled);
+  }
+
+  init(command: string, args?: string[]): this {
+    return this.record("init", command, args);
+  }
+
+  port(hostPort: number, guestPort: number): this {
+    return this.record("port", hostPort, guestPort);
+  }
+
+  labels(labels: Readonly<Record<string, string>>): this {
+    return this.record("labels", labels);
+  }
+
+  env(key: string, value: string): this {
+    return this.record("env", key, value);
+  }
+
+  private record(name: string, ...args: unknown[]): this {
+    this.calls.push([name, ...args]);
+    return this;
+  }
+}

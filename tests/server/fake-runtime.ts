@@ -24,6 +24,8 @@ import type {
   SandboxJobLike,
   SandboxJobListBuilderLike,
   SandboxLogEntryLike,
+  SandboxMetricsLike,
+  SandboxModifyOptionsLike,
   SandboxRuntime,
 } from "../../server/sandbox";
 import type {
@@ -123,6 +125,11 @@ export interface FakeSandboxOptions {
   jobLogs?: readonly { timestamp: number; source: string; data: Uint8Array }[];
   labelUpdates?: Record<string, string>[];
   modifyError?: Error;
+  /** Every `modify()` call, in order. */
+  modifyCalls?: SandboxModifyOptionsLike[];
+  /** One metrics sample; defaults to a minimal idle snapshot. */
+  metrics?: SandboxMetricsLike;
+  metricsError?: Error;
   refreshError?: Error;
   connectError?: Error;
   execError?: Error;
@@ -146,6 +153,21 @@ export interface FakeSandboxOptions {
 }
 
 const PI_COMMAND = ["npm", "install", "-g", "--ignore-scripts", "--prefix", PI_PREFIX, `@earendil-works/pi-coding-agent@${PI_VERSION}`];
+
+const DEFAULT_METRICS: SandboxMetricsLike = {
+  cpuPercent: 0,
+  memoryBytes: 0,
+  memoryLimitBytes: 4_096 * 1_024 * 1_024,
+  memoryAvailableBytes: null,
+  diskReadBytes: 0,
+  diskWriteBytes: 0,
+  netRxBytes: 0,
+  netTxBytes: 0,
+  upperUsedBytes: null,
+  upperFreeBytes: null,
+  uptimeMs: 0,
+  timestamp: new Date(0),
+};
 
 const provisionStatusSetters = new WeakMap<
   SandboxHandleLike,
@@ -277,8 +299,15 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
     },
     modify: async (update) => {
       if (options.modifyError) throw options.modifyError;
-      currentLabels = { ...currentLabels, ...update.labels };
-      options.labelUpdates?.push({ ...update.labels });
+      options.modifyCalls?.push(update);
+      if (update.labels) {
+        currentLabels = { ...currentLabels, ...update.labels };
+        options.labelUpdates?.push({ ...update.labels });
+      }
+    },
+    metrics: async () => {
+      if (options.metricsError) throw options.metricsError;
+      return options.metrics ?? DEFAULT_METRICS;
     },
     refresh: async () => {
       if (options.refreshError) throw options.refreshError;

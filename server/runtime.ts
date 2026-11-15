@@ -11,6 +11,7 @@ import {
   PLUGIN_VERSION,
 } from "../shared/constants";
 import {
+  applySandboxCreatePlan,
   buildSandboxCreatePlan,
   isSandboxNotFoundError,
   type ExecSpec,
@@ -168,26 +169,15 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
     },
 
     async create(request) {
-      const { Sandbox, MiB } = await loadMicrosandbox(paseo);
+      const { Sandbox } = await loadMicrosandbox(paseo);
       const plan = buildSandboxCreatePlan(request);
 
-      let builder = Sandbox.builder(plan.name)
-        .image(plan.image)
-        .cpus(plan.cpus)
-        .memory(MiB(plan.memoryMib))
-        .detached(plan.detached)
-        // The pinned image's entrypoint is tini, not a distro init, so
-        // `.init("auto")` fails; the verified fallback is explicit tini.
-        .init(plan.init.command, [...plan.init.args])
-        .port(plan.hostPort, plan.guestPort)
-        .labels({ ...plan.labels });
+      const builder = Sandbox.builder(plan.name);
+      // Image, root disk, CPUs, memory, the memory cap, and the metrics
+      // interval are applied in the pinned SDK order inside the helper.
+      applySandboxCreatePlan(builder, plan);
 
-      // Apply every planned env entry, including PATH and the persisted plan.
-      for (const [key, value] of Object.entries(plan.env)) {
-        builder = builder.env(key, value);
-      }
-
-      builder = builder.network((network) => {
+      const configured = builder.network((network) => {
         let configured: NetworkBuilderLike = network;
         for (const secret of plan.secrets) {
           configured = configured.secret((entry) => {
@@ -206,7 +196,7 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
         return configured;
       });
 
-      const sandbox = await builder.create();
+      const sandbox = await configured.create();
       return { id: sandbox.id, name: sandbox.name } satisfies SandboxCreateHandleLike;
     },
   };

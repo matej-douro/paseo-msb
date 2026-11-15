@@ -10,19 +10,25 @@ import {
   GUEST_PATH,
   GUEST_PORT,
   MANAGED_LABEL,
+  MAX_MEMORY_MIB,
   MEMORY_MIB,
+  METRICS_SAMPLE_INTERVAL_MS,
   PARENT_LABEL,
   PHASE_LABEL,
   PHASES,
   PLAN_ENV_VAR,
   PLUGIN_VERSION,
+  REQUEST_ENV_VAR,
+  RESOURCES_ENV_VAR,
+  RESOURCES_SPECIFIED_ENV_VAR,
+  ROOT_DISK_MIB,
   RUNTIME_STATUSES,
   SANDBOX_ID_LABEL,
   type CredentialName,
   type Phase,
   type RuntimeStatus,
 } from "../shared/constants";
-import type { ManagedLabels } from "../shared/contracts";
+import type { ManagedLabels, VmResources } from "../shared/contracts";
 import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors";
 import { parseProvisionPlan, type CanonicalPlan } from "../shared/provisioning";
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
@@ -83,12 +89,41 @@ export interface SandboxConnectHandleLike {
   exec(spec: ExecSpec): Promise<SandboxConnectResultLike>;
 }
 
+/** The subset of `modify()` options the server uses. MiB values throughout. */
+export interface SandboxModifyOptionsLike {
+  readonly memory?: number;
+  readonly maxMemory?: number;
+  readonly rootDiskSize?: number;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly policy?: "no_restart" | "next_start" | "restart";
+  readonly dryRun?: boolean;
+}
+
+/** The subset of a metrics sample the server projects. */
+export interface SandboxMetricsLike {
+  readonly cpuPercent: number;
+  readonly memoryBytes: number;
+  readonly memoryLimitBytes: number;
+  readonly memoryAvailableBytes: number | null;
+  readonly diskReadBytes: number;
+  readonly diskWriteBytes: number;
+  readonly netRxBytes: number;
+  readonly netTxBytes: number;
+  readonly upperUsedBytes: number | null;
+  readonly upperFreeBytes: number | null;
+  readonly uptimeMs: number;
+  readonly timestamp: Date;
+}
+
 export interface SandboxHandleLike {
   readonly id: string;
   readonly name: string;
   readonly status: string;
   config(): unknown;
-  modify(options: { readonly labels: Readonly<Record<string, string>> }): Promise<unknown>;
+  /** The raw native promise. Callers register it before awaiting settlement. */
+  modify(options: SandboxModifyOptionsLike): Promise<unknown>;
+  metrics(): Promise<SandboxMetricsLike>;
   refresh(): Promise<SandboxHandleLike>;
   connect(): Promise<SandboxConnectHandleLike>;
   listJobsWith(
@@ -133,6 +168,12 @@ export interface SandboxCreateRequest {
   readonly hostPort: number;
   readonly plan: CanonicalPlan;
   readonly secrets: readonly ResolvedSecret[];
+  /** The managed request identity, written into the guest environment. */
+  readonly requestId?: string;
+  /** Requested resources; omitted means the default child shape. */
+  readonly resources?: VmResources;
+  /** Whether the original Create supplied an explicit resource selection. */
+  readonly resourcesSpecified?: boolean;
 }
 
 /**
@@ -145,6 +186,9 @@ export interface SandboxCreatePlan {
   readonly image: string;
   readonly cpus: number;
   readonly memoryMib: number;
+  readonly maxMemoryMib: number;
+  readonly rootDiskMib: number;
+  readonly metricsSampleIntervalMs: number;
   readonly detached: true;
   readonly init: { readonly command: string; readonly args: readonly string[] };
   readonly hostPort: number;
@@ -187,16 +231,31 @@ export interface SandboxHost extends SandboxCreator {
 }
 
 export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCreatePlan {
+  const resources: VmResources = request.resources ?? {
+    cpus: CPUS,
+    memoryMib: MEMORY_MIB,
+    diskMib: ROOT_DISK_MIB,
+  };
+
   return {
     name: request.name,
     image: GUEST_IMAGE,
     cpus: CPUS,
-    memoryMib: MEMORY_MIB,
+    memoryMib: resources.memoryMib,
+    maxMemoryMib: MAX_MEMORY_MIB,
+    rootDiskMib: resources.diskMib,
+    metricsSampleIntervalMs: METRICS_SAMPLE_INTERVAL_MS,
     detached: true,
     init: { command: GUEST_INIT_COMMAND, args: GUEST_INIT_ARGS },
     hostPort: request.hostPort,
     guestPort: GUEST_PORT,
-    env: { PATH: GUEST_PATH, [PLAN_ENV_VAR]: JSON.stringify(request.plan) },
+    env: {
+      PATH: GUEST_PATH,
+      [PLAN_ENV_VAR]: JSON.stringify(request.plan),
+      ...(request.requestId ? { [REQUEST_ENV_VAR]: request.requestId } : {}),
+      [RESOURCES_ENV_VAR]: JSON.stringify(resources),
+      [RESOURCES_SPECIFIED_ENV_VAR]: request.resourcesSpecified ? "1" : "0",
+    },
     labels: {
       [MANAGED_LABEL]: PLUGIN_VERSION,
       [PARENT_LABEL]: request.parentId,
@@ -209,6 +268,49 @@ export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCr
       substitution: { headers: true, query: false, body: false },
     })),
   };
+}
+
+/**
+ * The subset of the SDK builder the create plan applies. Setters mutate in
+ * place and return `this`; keeping the interface structural lets tests record
+ * the exact order the runtime uses.
+ */
+export interface SandboxBuilderLike {
+  image(image: string): this;
+  rootDisk(sizeMiB: number): this;
+  cpus(count: number): this;
+  memory(mib: number): this;
+  maxMemory(mib: number): this;
+  metricsSampleIntervalMs(ms: number): this;
+  detached(enabled: boolean): this;
+  init(command: string, args?: string[]): this;
+  port(hostPort: number, guestPort: number): this;
+  labels(labels: Readonly<Record<string, string>>): this;
+  env(key: string, value: string): this;
+}
+
+/** Applies the pinned create chain in the order the SDK expects. */
+export function applySandboxCreatePlan(
+  builder: SandboxBuilderLike,
+  plan: SandboxCreatePlan,
+): void {
+  // The pinned image's entrypoint is tini, not a distro init, so
+  // `.init("auto")` fails; the verified fallback is explicit tini.
+  builder
+    .image(plan.image)
+    .rootDisk(plan.rootDiskMib)
+    .cpus(plan.cpus)
+    .memory(plan.memoryMib)
+    .maxMemory(plan.maxMemoryMib)
+    .metricsSampleIntervalMs(plan.metricsSampleIntervalMs)
+    .detached(plan.detached)
+    .init(plan.init.command, [...plan.init.args])
+    .port(plan.hostPort, plan.guestPort)
+    .labels({ ...plan.labels });
+
+  for (const [key, value] of Object.entries(plan.env)) {
+    builder.env(key, value);
+  }
 }
 
 export interface DecodedSandbox {
