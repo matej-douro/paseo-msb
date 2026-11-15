@@ -37,6 +37,7 @@ import {
 } from "./fake-runtime";
 
 const REQUEST_ID = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
+const OTHER_REQUEST_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 const NAME = `paseo-${REQUEST_ID}`;
 
 const INPUT: VmCreateInput = {
@@ -142,7 +143,7 @@ describe("createVm", () => {
     expect(hosts.added).toHaveLength(1);
     expect(hosts.added[0]).toMatchObject({
       connection: "127.0.0.1:41000",
-      label: `${PARENT_ID}/${NAME}`,
+      label: NAME,
       metadata: { source: "paseo-msb", name: NAME },
       sourceKey: "sandbox_1",
     });
@@ -233,6 +234,182 @@ describe("createVm", () => {
 
     gate.resolve();
     await first.started;
+  });
+
+  it("joins the generation its request marker owns after readiness", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_existing",
+      name: "my-vm",
+      phase: "ready",
+      plan: INPUT.plan,
+      requestId: REQUEST_ID,
+      requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      resourcesSpecified: true,
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator, { runtime: fakeRuntime([sandbox]) });
+
+    const attempt = await startCreate(context, {
+      ...INPUT,
+      name: "my-vm",
+      resources: { memoryMib: 8192, diskMib: 20480 },
+    });
+    await attempt.started;
+
+    expect(creator.createCount).toBe(0);
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
+  });
+
+  it("rejects a repeated request that now uses a different name", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_owned",
+      name: "my-vm",
+      phase: "ready",
+      plan: INPUT.plan,
+      requestId: REQUEST_ID,
+      requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      resourcesSpecified: true,
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator, { runtime: fakeRuntime([sandbox]) });
+
+    const attempt = await startCreate(context, {
+      ...INPUT,
+      name: "other-vm",
+      resources: { memoryMib: 8192, diskMib: 20480 },
+    });
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "invalid_request",
+    });
+    expect(context.pending.find(REQUEST_ID)?.errorDetail).toContain("sandbox_owned");
+    expect(creator.createCount).toBe(0);
+  });
+
+  it("rejects a repeated request with a different plan or resources-specified flag", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_owned",
+      name: "my-vm",
+      phase: "ready",
+      plan: INPUT.plan,
+      requestId: REQUEST_ID,
+      requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+      resourcesSpecified: true,
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+
+    const differentPlan = createContext(creator, { runtime: fakeRuntime([sandbox]) });
+    const planAttempt = await startCreate(differentPlan, {
+      ...INPUT,
+      name: "my-vm",
+      plan: OTHER_PLAN,
+      resources: { memoryMib: 4096, diskMib: 10240 },
+    });
+    await planAttempt.started;
+    expect(differentPlan.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "invalid_request",
+    });
+
+    // The same values are a different request once the original was explicit.
+    const omitted = createContext(creator, { runtime: fakeRuntime([sandbox]) });
+    const omittedAttempt = await startCreate(omitted, { ...INPUT, name: "my-vm" });
+    await omittedAttempt.started;
+    expect(omitted.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "invalid_request",
+    });
+
+    // A different resource selection is rejected even when the flag matches.
+    const differentResources = createContext(creator, { runtime: fakeRuntime([sandbox]) });
+    const resourceAttempt = await startCreate(differentResources, {
+      ...INPUT,
+      name: "my-vm",
+      resources: { memoryMib: 8192, diskMib: 10240 },
+    });
+    await resourceAttempt.started;
+    expect(differentResources.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "invalid_request",
+    });
+
+    expect(creator.createCount).toBe(0);
+  });
+
+  it("rejects a different request under an owned name without touching the sandbox", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_owned",
+      name: "shared-vm",
+      phase: "ready",
+      plan: INPUT.plan,
+      requestId: OTHER_REQUEST_ID,
+      requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      resourcesSpecified: true,
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator, { runtime: fakeRuntime([sandbox]) });
+
+    const attempt = await startCreate(context, {
+      ...INPUT,
+      name: "shared-vm",
+      resources: { memoryMib: 8192, diskMib: 20480 },
+    });
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "name_conflict",
+    });
+    expect(creator.createCount).toBe(0);
+    expect(creator.labelUpdates).toEqual([]);
+    expect(await creator.find("shared-vm")).toBe(sandbox);
+  });
+
+  it("rejects an explicit resource selection against a markerless legacy sandbox", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_legacy", name: NAME, phase: "ready" });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, {
+      ...INPUT,
+      resources: { memoryMib: 4096, diskMib: 10240 },
+    });
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "invalid_request",
+    });
+    expect(creator.createCount).toBe(0);
+  });
+
+  it("joins a markerless legacy sandbox only under its generated name", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_legacy", name: NAME, phase: "ready" });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(creator.createCount).toBe(0);
+  });
+
+  it("treats a markerless sandbox under a chosen name as a conflict", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_legacy", name: "my-vm", phase: "ready" });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, { ...INPUT, name: "my-vm" });
+    await attempt.started;
+
+    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+      phase: "failed",
+      errorCode: "name_conflict",
+    });
+    expect(creator.createCount).toBe(0);
   });
 
   it("joins an owned sandbox from an earlier attempt without creating another", async () => {

@@ -45,12 +45,13 @@ function recoveryContext(
   };
 }
 
-function ownedRegistration() {
+function ownedRegistration(overrides: Parameters<typeof fakeRegistration>[0] = {}) {
   return fakeRegistration({
     registrationId: "reg_owned",
-    label: `${PARENT_ID}/${NAME}`,
+    label: NAME,
     source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_1" },
     metadata: { source: "paseo-msb", name: NAME },
+    ...overrides,
   });
 }
 
@@ -74,7 +75,7 @@ describe("recoverManagedSandboxes", () => {
     expect(hosts.added).toEqual([
       {
         connection: "127.0.0.1:42000",
-        label: `${PARENT_ID}/${NAME}`,
+        label: NAME,
         metadata: { source: "paseo-msb", name: NAME },
         sourceKey: "sandbox_1",
       },
@@ -286,6 +287,23 @@ describe("recoverManagedSandboxes", () => {
     );
 
     expect(labels).toEqual([]);
+    expect(hosts.added).toEqual([]);
+  });
+
+  it("repairs a V1 registration label during recovery", async () => {
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([
+        ownedRegistration({ label: `${PARENT_ID}/${NAME}` }),
+      ]),
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+
+    await recoverManagedSandboxes(
+      recoveryContext(fakeRuntime([sandbox]), hosts, { sandboxHost: creator }),
+    );
+
+    expect(hosts.updated[0]?.patch.label).toBe(NAME);
     expect(hosts.added).toEqual([]);
   });
 

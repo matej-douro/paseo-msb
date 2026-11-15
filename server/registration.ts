@@ -1,7 +1,6 @@
 import {
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
-  registrationLabel,
 } from "../shared/constants";
 import type { SafeErrorCode } from "../shared/errors";
 import { abortableSleep, bounded, LifecycleAbortedError } from "./lanes";
@@ -148,14 +147,14 @@ export function pluginRegistrations(
  */
 export async function ensureRegistration(
   context: RegistrationContext,
-  parentId: string,
   sandbox: SandboxIdentity,
   hostPort: number,
   providers: readonly string[],
 ): Promise<{ readonly registration: HostRegistrationLike; readonly changed: boolean }> {
   const desired = {
     connection: `127.0.0.1:${hostPort}`,
-    label: registrationLabel(parentId, sandbox.name),
+    // The chosen name is the display label; identity is producer + source.key.
+    label: sandbox.name,
     metadata: registrationMetadata(sandbox),
   };
 

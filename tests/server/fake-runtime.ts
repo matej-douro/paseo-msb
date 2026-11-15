@@ -447,7 +447,7 @@ export function fakeRegistration(
     serverId: "srv_child",
     status: "online",
     enabled: true,
-    label: `${PARENT_ID}/${metadata.name}`,
+    label: metadata.name,
     source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_1" },
     metadata,
     targetDescription: "127.0.0.1:41000",

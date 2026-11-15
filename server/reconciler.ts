@@ -1,8 +1,10 @@
 import {
   ERROR_LABEL,
   PHASE_LABEL,
+  sandboxName,
   type Phase,
 } from "../shared/constants";
+import type { VmResources } from "../shared/contracts";
 import {
   legacyPiPlan,
   paseoProviderIds,
@@ -68,6 +70,12 @@ export interface ReconcileRequest {
   readonly allowCreate: boolean;
   /** Present for Create; absent for recovery and Repair. */
   readonly plan?: CanonicalPlan;
+  /** Present for Create; absent for recovery and Repair. */
+  readonly requestId?: string;
+  /** Canonical desired resources of the Create request. */
+  readonly resources?: VmResources;
+  /** Whether the original Create supplied an explicit resource selection. */
+  readonly resourcesSpecified?: boolean;
   /** Resolves selected values only when an initial create is needed. */
   readonly resolveCredentials?: () => readonly ResolvedSecret[];
   readonly redactionValues: readonly string[];
@@ -96,6 +104,21 @@ export async function reconcileName(
   const directory = await readDirectory(context, request.redactionValues, token);
   const parentId = directory.self.serverId;
   if (!parentId) throw new SetupFailure("runtime_unavailable");
+
+  if (request.requestId) {
+    // A request that already owns a generation is advanced through that exact
+    // handle, even when a different sandbox occupies the requested name.
+    const owned = await findOwnedGeneration(context, parentId, request, token);
+    if (owned) {
+      return advanceSandbox(
+        context,
+        { ...request, allowCreate: false },
+        parentId,
+        owned,
+        token,
+      );
+    }
+  }
 
   const handle = await findSandbox(context, request.name, request.redactionValues, token);
 
@@ -169,6 +192,9 @@ async function reconcileAbsent(
       parentId,
       plan,
       secrets: credentials,
+      requestId: request.requestId,
+      resources: request.resources,
+      resourcesSpecified: request.resourcesSpecified ?? false,
     },
     request.redactionValues,
     token,
@@ -225,6 +251,8 @@ async function advanceSandbox(
   }
   if (!decoded) throw new SetupFailure("name_conflict");
 
+  assertNameOwnership(request, decoded);
+
   if (decoded.labels[PHASE_LABEL] === "deleting") {
     // Cleanup-only: never resume setup after a Delete tombstone. A reload that
     // observed the tombstone before destruction completes that exact deletion.
@@ -271,7 +299,6 @@ async function advanceSandbox(
 
     const ensured = await ensureRegistration(
       { ...context, signal: token.signal },
-      parentId,
       { id: handle.id, name: handle.name },
       hostPort,
       providers,
@@ -624,6 +651,93 @@ async function findSandbox(
   } catch (error) {
     if (error instanceof LifecycleAbortedError) throw error;
     throw new SetupFailure("runtime_unavailable", failureDetail(error, redaction));
+  }
+}
+
+/**
+ * Scans managed inventory for the generation that carries this request marker.
+ * An unavailable inventory is a safe failure: allocation must not proceed
+ * without knowing whether this request already owns a VM. A malformed
+ * generation cannot prove ownership and is left to the name lookup to report.
+ */
+async function findOwnedGeneration(
+  context: ReconcileContext,
+  parentId: string,
+  request: ReconcileRequest,
+  token: LaneToken,
+): Promise<SandboxHandleLike | null> {
+  token.throwIfAborted();
+
+  let handles: readonly SandboxHandleLike[];
+  try {
+    handles = await bounded(context.runtime.list(parentId), {
+      timeoutMs: sdkTimeoutMs(context),
+      signal: token.signal,
+    });
+  } catch (error) {
+    if (error instanceof LifecycleAbortedError) throw error;
+    throw new SetupFailure("inventory_unavailable", failureDetail(error, request.redactionValues));
+  }
+
+  for (const handle of handles) {
+    let decoded: DecodedSandbox | null;
+    try {
+      decoded = decodeManagedSandbox(handle, parentId, request.redactionValues);
+    } catch {
+      continue;
+    }
+    if (decoded?.requestId === request.requestId) return handle;
+  }
+
+  return null;
+}
+
+function resourcesEqual(left: VmResources, right: VmResources): boolean {
+  return (
+    left.cpus === right.cpus &&
+    left.memoryMib === right.memoryMib &&
+    left.diskMib === right.diskMib
+  );
+}
+
+/**
+ * A Create request may only advance a generation it owns. A live sandbox with
+ * another request marker, or a markerless legacy sandbox under an explicitly
+ * chosen name, is a name conflict and is never adopted. A markerless legacy
+ * generation accepts only the generated name and an omitted resource selection.
+ */
+function assertNameOwnership(request: ReconcileRequest, decoded: DecodedSandbox): void {
+  const requestId = request.requestId;
+  if (!requestId) return;
+
+  if (decoded.requestId !== null) {
+    if (decoded.requestId !== requestId) {
+      throw new SetupFailure("name_conflict");
+    }
+
+    const owned = `the request already owns ${decoded.id}`;
+    if (decoded.name !== request.name) throw new SetupFailure("invalid_request", owned);
+    if (!request.plan || !decoded.plan || !plansEqual(request.plan, decoded.plan)) {
+      throw new SetupFailure("invalid_request", owned);
+    }
+    if (request.resourcesSpecified !== decoded.resourcesSpecified) {
+      throw new SetupFailure("invalid_request", owned);
+    }
+    if (
+      !request.resources ||
+      !decoded.requestedResources ||
+      !resourcesEqual(request.resources, decoded.requestedResources)
+    ) {
+      throw new SetupFailure("invalid_request", owned);
+    }
+    return;
+  }
+
+  if (request.name !== sandboxName(requestId)) {
+    throw new SetupFailure("name_conflict");
+  }
+  if (request.resourcesSpecified) {
+    throw new SetupFailure("invalid_request", "the legacy sandbox has no resource selection");
   }
 }
 

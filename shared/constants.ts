@@ -163,10 +163,6 @@ export function sandboxName(requestId: string): string {
   return `${MANAGED_NAME_PREFIX}${requestId}`;
 }
 
-export function registrationLabel(parentId: string, name: string): string {
-  return `${parentId}/${name}`;
-}
-
 /** Read-side size bounds. */
 export const MAX_JOB_PAGES = 100;
 export const MAX_LOG_ENTRIES = 100;

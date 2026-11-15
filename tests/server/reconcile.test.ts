@@ -48,7 +48,7 @@ function reconcileContext(
 function ownedRegistration(overrides: Parameters<typeof fakeRegistration>[0] = {}) {
   return fakeRegistration({
     registrationId: "reg_owned",
-    label: `${PARENT_ID}/${NAME}`,
+    label: NAME,
     source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_1" },
     metadata: { source: "paseo-msb", name: NAME },
     ...overrides,
@@ -277,12 +277,12 @@ describe("reconcileVm", () => {
     expect(hosts.updated).toEqual([]);
   });
 
-  it("repairs label drift without treating the label as ownership", async () => {
+  it("repairs a V1 registration label to the canonical name", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
     const hosts = new FakePaseoHosts({
       directory: fakeHostDirectory([
         ownedRegistration({
-          label: `srv_other/${NAME}`,
+          label: `${PARENT_ID}/${NAME}`,
           metadata: { source: "paseo-msb", name: NAME },
         }),
       ]),
@@ -295,7 +295,8 @@ describe("reconcileVm", () => {
 
     expect(result).toEqual({ repaired: [NAME], errors: [] });
     expect(hosts.removed).toEqual([]);
-    expect(hosts.updated[0]?.patch.label).toBe(`${PARENT_ID}/${NAME}`);
+    expect(hosts.added).toEqual([]);
+    expect(hosts.updated[0]?.patch.label).toBe(NAME);
   });
 
   it("ignores foreign registrations and still restores the owned one", async () => {
