@@ -374,23 +374,23 @@ so repeated timeouts or multiple clients do not accumulate `metrics()` calls.
 
 Acceptance:
 
-- [ ] `vm.metrics` resolves the named handle, compares `handle.id`, verifies the
+- [x] `vm.metrics` resolves the named handle, compares `handle.id`, verifies the
       managed and parent labels, and returns `not_running` without calling
       `metrics()` for a non-running generation.
-- [ ] A missing handle is `no_sandbox`; a different generation is the
+- [x] A missing handle is `no_sandbox`; a different generation is the
       `id_mismatch` RPC error; foreign/malformed labels are `unavailable`.
-- [ ] The parent ID comes from a cache refreshed by `vm.list`/`vm.detail`, with
+- [x] The parent ID comes from a cache refreshed by `vm.list`/`vm.detail`, with
       one bounded directory read when the cache is empty.
-- [ ] A running sandbox returns a sample with the DESIGN §7.3 numeric fields and
+- [x] A running sandbox returns a sample with the DESIGN §7.3 numeric fields and
       the SDK timestamp.
-- [ ] `metricsDisabled` maps to `disabled`; other read failures map to
+- [x] `metricsDisabled` maps to `disabled`; other read failures map to
       `unavailable`; a timeout does not stall or fail other reads.
-- [ ] The server coalesces by `(name, id)`: one raw `metrics()` promise is
+- [x] The server coalesces by `(name, id)`: one raw `metrics()` promise is
       shared, a timed-out RPC does not start another native read, and the entry
       clears only on actual settlement.
-- [ ] No raw SDK error text is returned.
-- [ ] `vm.metrics` does not read inventory, jobs, or logs.
-- [ ] Unit tests cover available, no-sandbox, stopped, disabled, unavailable,
+- [x] No raw SDK error text is returned.
+- [x] `vm.metrics` does not read inventory, jobs, or logs.
+- [x] Unit tests cover available, no-sandbox, stopped, disabled, unavailable,
       timeout, repeated timeout with one native invocation, malformed values,
       NaN/infinity/negative counters, invalid timestamps, foreign labels, and
       generation mismatch.
