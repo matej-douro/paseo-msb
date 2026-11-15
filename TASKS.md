@@ -225,22 +225,22 @@ managed environment. Do not substitute desired values for observations.
 
 Acceptance:
 
-- [ ] New sandboxes report CPU, memory, and root-disk size from config.
-- [ ] Legacy fields are `null` when not reported; an unreported root disk is
+- [x] New sandboxes report CPU, memory, and root-disk size from config.
+- [x] Legacy fields are `null` when not reported; an unreported root disk is
       never invented.
-- [ ] `requestedResources`, the internal request marker, and the
+- [x] `requestedResources`, the internal request marker, and the
       resources-specified flag are decoded from environment; malformed request,
       resources, or specified-flag values are `invalid_config`.
-- [ ] A live sandbox supersedes the pending attempt with the same request
+- [x] A live sandbox supersedes the pending attempt with the same request
       marker, or a legacy sandbox supersedes the pending attempt whose generated
       name matches; a different request's failed/slow pending row stays visible.
-- [ ] Pending, sandbox, and registration-only DTOs have explicit resource
+- [x] Pending, sandbox, and registration-only DTOs have explicit resource
       shapes; pending rows expose `resourcesSpecified`, sandbox rows expose
       requested resources, and registration-only rows have no fabricated
       resources.
-- [ ] The decoder never leaks raw config, env, credential values, or the request
+- [x] The decoder never leaks raw config, env, credential values, or the request
       marker through public DTOs.
-- [ ] List/detail tests cover new, legacy, malformed, partially reported, and
+- [x] List/detail tests cover new, legacy, malformed, partially reported, and
       same-name pending/sandbox merges.
 
 Files: `server/sandbox.ts`, `server/status.ts`, `server/rpc.ts`,
