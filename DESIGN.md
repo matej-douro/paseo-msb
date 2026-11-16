@@ -9,7 +9,7 @@ This V1.1 specification has two complementary parts:
 
 The first part describes what the user should see and be able to do. The second part is the implementation and verification contract; in particular, a simple UI must not imply weaker safety or recovery guarantees.
 
-The ASCII mockups are structural rather than pixel-perfect. They follow the current two-pane/compact layout in `client/screen.tsx`, the Create flow in `client/CreateChild.tsx`, and the detail sheet in `client/ChildDetail.tsx`. Proposed V1.1 additions are labelled explicitly: the current client detail does not yet render resource editing or live metrics.
+The ASCII mockups are structural rather than pixel-perfect. They follow the current two-pane/compact layout in `client/screen.tsx`, the Create flow in `client/CreateChild.tsx`, and the detail sheet in `client/ChildDetail.tsx`. Proposed additions are labelled explicitly: live metrics render today, while resource editing and the rolling metrics chart remain proposed.
 
 ## 1. The user experience
 
@@ -177,9 +177,11 @@ The V1.1 resource and metrics additions extend this existing detail sheet rather
 |   Requested  8192 MiB RAM -- restart required                           |
 |                                                                         |
 | Live metrics [V1.1]                                refreshes every 3 s  |
-|   CPU 18%       Memory 1.7 / 4.0 GiB       Uptime 12m 41s               |
-|   Disk   R 1.2 MiB/s   W 0.4 MiB/s                                      |
-|   Network RX 840 KiB/s   TX 96 KiB/s                                    |
+|   [stacked rolling chart: last 60 samples; gaps at discontinuities]     |
+|   [hover, focus, or tap a point for exact values]                       |
+|   tooltip: 14:32:03  CPU 18%  Mem 1.7/4.0 GiB  Uptime 12m 41s           |
+|            Disk R 1.2 MiB/s W 0.4 MiB/s  Net RX 840 KiB/s TX 96 KiB/s  |
+|   Root disk  [##########----------]  9.8 / 10.0 GiB (98%)               |
 |                                                                         |
 | > Logs (148 lines)                                                      |
 +-------------------------------------------------------------------------+
@@ -191,17 +193,34 @@ Raw microsandbox configuration, environment values, and secrets are never expose
 
 ### 1.7 Watch live metrics
 
-While the detail of a running sandbox is visible, the metrics panel refreshes every 3 seconds. It shows:
+While the detail of a running sandbox is visible, the metrics panel refreshes every 3 seconds. The chart plots:
 
 - CPU utilization;
-- absolute memory usage and limits;
-- root-disk usage when reported;
-- disk read/write and network receive/transmit totals, with rates derived from consecutive samples; and
-- uptime.
+- memory used and available;
+- root-disk used and free when reported; and
+- disk read/write and network receive/transmit rates derived from consecutive samples.
+
+The selected-sample tooltip also reports uptime and the exact values behind each series.
 
 The first sample has absolute values but no rates. Duplicate, stale, future-dated, or discontinuous samples do not produce misleading rates. Metrics unavailability has a fixed, safe explanation and does not prevent the detail or logs from loading.
 
-Metrics are live and display-only. V1.1 has no history, general metrics screen, or alerting, and metrics never trigger repair, restart, or deletion.
+The chart is the primary presentation; there is no persistent numeric row grid. Hovering, focusing, or tapping the chart selects the nearest sample and shows its timestamp plus every reported series value in a tooltip. The same values are exposed through the chart's accessibility label and value, so exact readings are never hover-only. Unreported values are omitted or shown as `—`, never zero.
+
+The chart is a bounded rolling view of the samples already received. It keeps at most the latest 60 samples—about three minutes at the 3-second cadence—in client memory for the selected generation and discards them when the selection changes, the detail closes, or metrics become unavailable. It is not persisted and requires no server API change.
+
+Series are stacked only within a shared unit so unlike values are never added together:
+
+- CPU is one line from `cpuPercent` and is never stacked with a byte-valued series;
+- memory used and available are stacked to the reported limit;
+- disk read and write rates are stacked;
+- network receive and transmit rates are stacked; and
+- root-disk used and free are stacked when both reported upper-layer fields are present.
+
+Missing or unreported values are gaps, never zeros. The first sample is a single point without a line, and a duplicate timestamp adds no point. A stale, future-dated, non-increasing, uptime-regressing, or counter-regressing sample starts a new segment, so the chart never connects across a discontinuity.
+
+Near the chart, a root-disk usage bar shows the latest sample's writable upper-layer usage against its reported capacity: `upperUsedBytes / (upperUsedBytes + upperFreeBytes)`. It is a current-state indicator, not a time series, and adds no history. The bar is hidden when either field is null or the total is non-positive; it never renders a missing disk as zero. It carries a progressbar role and a text value so the reading does not depend on color or width alone.
+
+Metrics are live and display-only; the chart is a bounded rolling view of samples already received, not stored history. V1.1 has no durable metrics history, general metrics screen, or alerting, and metrics never trigger repair, restart, or deletion.
 
 ### 1.8 Edit resources
 
@@ -253,7 +272,7 @@ V1.1 does not include:
 - CPU changes after Create, renaming, disk shrink, or image selection;
 - general stop, start, or restart controls—the only restart is the explicit resize confirmation;
 - `autoStart`, operation history, or Command Center items;
-- metrics history or alerting;
+- durable metrics history, a general metrics screen, or alerting—the detail chart is a bounded in-memory view of live samples;
 - adoption of unlabelled sandboxes;
 - other agents, custom provider forms, or generic provider mappings;
 - settings migration;
@@ -266,7 +285,7 @@ V1.1 does not include:
 
 | Component | Owns |
 | --- | --- |
-| Plugin client | The single sidebar screen, Create confirmation, list and detail views, progress and logs, live metrics, resize confirmation, Repair, and Delete. |
+| Plugin client | The single sidebar screen, Create confirmation, list and detail views, progress and logs, live metrics and its bounded rolling chart, resize confirmation, Repair, and Delete. |
 | Plugin server | Reconciliation and resize work serialized per VM name, background jobs, microsandbox SDK calls, registration and its cleanup scheduler, recovery, metrics reads, and redaction. |
 | Microsandbox | Authoritative sandbox inventory, generation IDs, configuration, resources, runtime state, labels, logs, metrics, and detached jobs. |
 | Parent daemon | Authoritative host registrations, routed connections, and online state. |
@@ -289,7 +308,7 @@ There is no atomic transaction spanning microsandbox and the parent daemon. Corr
 
 ### 2.2 State and observation
 
-There is **no Paseo settings document**. The only durable plugin-owned state is the credential store. There is no durable child inventory, registration mirror, cleanup queue, or cleanup journal. Volatile state is limited to disposable work state: pending creates, in-flight lifecycle lanes and native mutations, short-lived caches and metrics reads, and cleanup scheduling/cooldowns. None of it is authoritative, and a restart rebuilds cleanup work from the parent and microsandbox. A pending create retains its request ID, chosen name, canonical provider/integration plan, requested resources, and whether resources were explicitly supplied—never credential values.
+There is **no Paseo settings document**. The only durable plugin-owned state is the credential store. There is no durable child inventory, registration mirror, cleanup queue, or cleanup journal. Volatile state is limited to disposable work state: pending creates, in-flight lifecycle lanes and native mutations, short-lived caches and metrics reads, a bounded per-selection metrics chart buffer, and cleanup scheduling/cooldowns. None of it is authoritative, and a restart rebuilds cleanup work from the parent and microsandbox. A pending create retains its request ID, chosen name, canonical provider/integration plan, requested resources, and whether resources were explicitly supplied—never credential values.
 
 The client polls `vm.list` and `vm.detail` only while the screen is mounted. While a running sandbox's detail is visible, it also polls `vm.metrics` every 3 seconds; list and detail retain their normal cadence. Polling observes host-side work but does not drive it. Detached VMs and provisioning jobs continue without the UI, and the registration pruner has its own lightweight schedule while the plugin server is active.
 
@@ -485,6 +504,8 @@ The client displays `cpuPercent` directly, derives memory use from the absolute 
 
 A sample is stale when its SDK timestamp is more than `STALE_SAMPLE_MS` (10 seconds) behind receipt time or more than 5 seconds ahead of it. Stale or future samples update absolute values but do not compute rates and reset the baseline. Duplicate samples update absolute values without recomputing rates.
 
+On the client, the last 60 samples are retained in a bounded in-memory ring for the selected generation only. The ring is discarded on selection or generation change, when the detail closes, and when metrics become unavailable. The chart groups series by unit: CPU is a single line; memory used/available, disk read/write, network receive/transmit, and reported root-disk used/free are stacked within their families. Missing values are gaps. A duplicate timestamp adds no point; a stale, future-dated, non-increasing, uptime-regressing, or counter-regressing sample starts a new segment. The chart, not a persistent numeric grid, is the primary presentation: a hover, focus, or tap selects the nearest sample for a tooltip, and the chart exposes the same values through its accessibility label and value. A root-disk usage bar near the chart is derived only from the latest sample's upper-layer used and free values; it adds no point to the ring and implies no history. No samples are persisted, and no server call is added.
+
 A fixed unavailable reason covers no sandbox, a non-running VM, disabled metrics sampling in VM config, and runtime metrics-read failure. No raw SDK error text crosses the RPC boundary. Metrics never trigger lifecycle work, repair, or deletion.
 
 ### 2.9 Registration convergence, Repair, and Delete
@@ -559,7 +580,7 @@ The release test must drive all lifecycle RPCs through Create, background progre
 - the routed host returning online after a confirmed restart; and
 - live metrics values through `vm.metrics`, server-side coalescing of unresolved native reads, the 3-second single-flight poll, stale/future/duplicate handling, and unavailable reasons for stopped, disabled, and failed metrics reads.
 
-Deterministic barriers and fault cases cover foreign-name Create conflicts, conflicting active provision jobs, registration configuration drift, stale-generation destroy, stale-handle label/environment/resource writes, conflicting resize, an unsettled label write or tombstone blocking Delete, metrics-read coalescing under repeated timeouts, and concurrent Create/recovery/Repair/Resize/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active provision job, and one current registration per logical attempt. Unit suites cover transport-level call failures, malformed config, malformed metrics, invalid resource bounds, and pagination failures; none of these conditions may delete registrations.
+Deterministic barriers and fault cases cover foreign-name Create conflicts, conflicting active provision jobs, registration configuration drift, stale-generation destroy, stale-handle label/environment/resource writes, conflicting resize, an unsettled label write or tombstone blocking Delete, metrics-read coalescing under repeated timeouts, and concurrent Create/recovery/Repair/Resize/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active provision job, and one current registration per logical attempt. Unit suites cover transport-level call failures, malformed config, malformed metrics, the bounded chart buffer and its discontinuity handling, tooltip point selection, the root-disk usage ratio, invalid resource bounds, and pagination failures; none of these conditions may delete registrations.
 
 The credential store uses only the six fixed names, writes its file `0600`, and creates or tightens the plugin-owned default directory to `0700` without changing an existing override parent. Canary credentials—including removed or replaced creation-time values and injected upstream errors—never appear in RPC output, plugin logs, raw microsandbox sandbox/job/system logs, pending state, labels, or test artifacts outside approved secret config and intended upstream substitution. Store and environment paths are both covered.
 
