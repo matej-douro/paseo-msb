@@ -34,6 +34,8 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 - Parent directory reads and sandbox pagination are bounded.
 - Queued Create cancellation settles its pending reservation, and plugin-owned
   registrations use one recovery predicate.
+- The missing-status probe on a fresh VM no longer adds a `cat` error line to
+  the creation logs.
 - Secret-store overrides no longer chmod an unrelated existing parent directory.
 
 ### Removed
