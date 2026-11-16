@@ -102,6 +102,13 @@ Already-missing resources count as success, and failed or incomplete children
 need no CLI cleanup. Reload during deletion resumes cleanup, never setup; a
 failed registration removal leaves a registration-only child for Repair or Delete.
 
+A VM destroyed outside the plugin (for example with `msb`) shows as a
+registration-only child. `vm.list` starts a conservative cleanup sweep for those
+rows: an exact runtime lookup must show the generation gone or replaced before
+its registration is removed. The sweep never blocks the list response, at most
+one sweep runs at a time, and a name that could not be verified is retried after
+a short cooldown.
+
 ## Failure diagnostics
 
 List and detail show a fixed safe code plus a bounded, redacted reason where

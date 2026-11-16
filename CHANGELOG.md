@@ -26,6 +26,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Fixed
 
+- A VM destroyed outside the plugin (for example with `msb`) no longer leaves
+  its host registration behind: `vm.list` starts a conservative sweep that
+  removes a registration only after an exact lookup proves its generation is
+  gone or replaced.
 - Repeated Create and recovery can join an existing VM after its current
   credentials were removed or the store became unavailable.
 - Delete accepts an owned exact-generation VM with an invalid historical plan,
