@@ -1,6 +1,7 @@
 import { Loading, Modal, ScrollView, useToast } from "@getpaseo/plugin/client/ui";
 import { useState } from "react";
 import { Text, View } from "react-native";
+import { METRICS_POLL_INTERVAL_MS } from "../shared/constants";
 import type {
   Availability,
   VmChild,
@@ -8,8 +9,11 @@ import type {
   VmDeleteInput,
   VmDetailResult,
   VmDismissInput,
+  VmMetricsResult,
   VmReconcileResult,
 } from "../shared/contracts";
+import { useVmMetrics } from "./hooks/useVmMetrics";
+import { metricsRows, metricsUnavailableText, type MetricsSnapshot } from "./metrics";
 import {
   childErrorText,
   childPhase,
@@ -83,6 +87,14 @@ export function ChildDetail({
   const deleteTarget = sandbox ?? registrationOnly;
   const childError = child ? childErrorText(child) : null;
   const logs = data?.logs ?? null;
+  // Live metrics poll only while a running sandbox's detail is visible. Pending
+  // and registration-only children never show the panel.
+  const metricsEnabled = sandbox?.runtimeStatus === "running";
+  const metrics = useVmMetrics(
+    sandbox?.name ?? null,
+    sandbox?.id ?? null,
+    metricsEnabled,
+  );
   // Logs stay open while setup is in progress; a ready child starts collapsed.
   const logsDefaultOpen = child ? childPhase(child) !== "ready" : false;
 
@@ -265,6 +277,19 @@ export function ChildDetail({
 
             {childError ? <Notice text={childError} tone="danger" theme={theme} /> : null}
 
+            {sandbox ? (
+              <LiveMetricsPanel
+                theme={theme}
+                availability={
+                  metricsEnabled
+                    ? metrics.availability
+                    : { status: "unavailable", reason: "not_running" }
+                }
+                snapshot={metricsEnabled ? metrics.snapshot : null}
+                loading={metricsEnabled && metrics.loading}
+              />
+            ) : null}
+
             {child.kind === "pending" && child.error ? (
               <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
                 <ActionButton
@@ -355,6 +380,73 @@ function ChildPills({
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
       <StatusPill label={setup.label} tone={setup.tone} theme={theme} filled />
       <StatusPill label={vm.label} tone={vm.tone} theme={theme} filled />
+    </View>
+  );
+}
+
+function LiveMetricsPanel({
+  theme,
+  availability,
+  snapshot,
+  loading,
+}: {
+  theme: PluginTheme;
+  availability: VmMetricsResult | null;
+  snapshot: MetricsSnapshot | null;
+  loading: boolean;
+}) {
+  const sample = availability?.status === "available" ? snapshot : null;
+  const message =
+    availability?.status === "unavailable"
+      ? metricsUnavailableText(availability.reason)
+      : loading
+        ? "Reading metrics…"
+        : "Waiting for the first sample…";
+
+  return (
+    <View
+      style={{
+        borderColor: theme.colors.border,
+        borderWidth: 1,
+        borderRadius: 8,
+        padding: 10,
+        gap: 8,
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <Text
+          style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" }}
+        >
+          Live metrics
+        </Text>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+          {`refreshes every ${METRICS_POLL_INTERVAL_MS / 1000} s`}
+        </Text>
+      </View>
+
+      {sample ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
+          {metricsRows(sample).map((row) => (
+            <DetailRow
+              key={row.label}
+              theme={theme}
+              label={row.label}
+              value={row.value}
+            />
+          ))}
+        </View>
+      ) : (
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          {message}
+        </Text>
+      )}
     </View>
   );
 }
