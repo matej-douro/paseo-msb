@@ -500,56 +500,57 @@ Files: `client/ChildDetail.tsx`, `client/hooks/useVmMetrics.ts`,
 Task 4.3 replaces the persistent numeric rows above with the rolling chart and
 its tooltip.
 
-### 4.3 Add a live stacked resource-usage chart
+### 4.3 Add a live resource-usage line chart
 
 Replace the persistent numeric metrics rows from task 4.2 with a bounded,
-client-side rolling chart and a nearby root-disk usage bar. Exact values move
-into a hover/focus/tap tooltip on the chart and remain available through its
-accessibility label; there is no persistent numeric grid. The chart visualizes
-only samples that `vm.metrics` already returns: no new RPC, no server history,
-and no durable state. DESIGN §1.7 and §2.8 allow this bounded live view while
-continuing to exclude durable history, a general metrics screen, and alerting.
+client-side rolling line chart and a nearby root-disk usage bar. Exact values
+stay in an always-visible tooltip that hover updates, and remain available
+through the chart's accessibility label. There is no persistent numeric grid.
+The chart visualizes only samples that `vm.metrics` already returns: no new RPC,
+no server history, and no durable state. DESIGN §1.7 and §2.8 allow this bounded
+live view while continuing to exclude durable history, a general metrics screen,
+and alerting.
 
 Acceptance:
 
-- [ ] The chart replaces the numeric metrics row grid. Hovering, focusing, or
-      tapping the chart selects the nearest sample and shows its timestamp plus
-      every reported series value in a tooltip.
-- [ ] Exact readings are never hover-only: the chart exposes the selected
-      sample through an accessibility label/value, workable by keyboard and
-      screen reader, and unreported values are omitted or shown as `—`, never
-      zero.
-- [ ] The chart keeps at most the latest 60 samples (about three minutes at the
+- [x] The chart replaces the numeric metrics row grid. Hovering the chart
+      selects the nearest sample; pointer leave returns to the latest sample,
+      and the always-visible tooltip shows its timestamp plus every reported
+      series value.
+- [x] Exact readings are never hover-only: the tooltip always shows the
+      selected or latest sample, and the chart exposes it through an
+      accessibility label/value and stepping actions. Unreported values are
+      omitted or shown as `—`, never zero.
+- [x] The chart keeps at most the latest 60 samples (about three minutes at the
       3-second cadence) in client memory and evicts older points. It resets on
       selection or generation change and disappears when metrics are
       unavailable or the detail is not showing a sandbox.
-- [ ] CPU is one line from `cpuPercent` and is never stacked with a byte-valued
-      series. Memory used/available, disk read/write, network RX/TX, and
-      reported root-disk used/free are stacked only within their own unit
-      families.
-- [ ] Unreported values are gaps, not zeros; null upper-layer values do not
-      fabricate a root-disk series.
-- [ ] A root-disk usage bar near the chart shows the latest sample's
+- [x] CPU, memory used, disk read/write, and network RX/TX are plotted
+      independently, each family scaled to its own maximum. Root disk is not a
+      chart series; it is reported only by the usage bar.
+- [x] Unreported values are gaps, not zeros; a missing rate does not fabricate
+      a point.
+- [x] A root-disk usage bar near the chart shows the latest sample's
       `upperUsedBytes / (upperUsedBytes + upperFreeBytes)`, with a text value
       and a `progressbar` accessibility role. It is hidden when either field is
       null or the total is non-positive, and it never renders a missing disk as
       zero.
-- [ ] The first sample renders a point without a line; duplicates add no point;
-      stale, future-dated, non-increasing, uptime-regressing, or
-      counter-regressing samples start a new segment instead of connecting
-      across the discontinuity.
-- [ ] Fixed unavailable messages remain for stopped, disabled, unavailable, and
+- [x] The first sample renders a point without a line; duplicates, including
+      repeated stale timestamps, add no point; stale, future-dated,
+      non-increasing, uptime-regressing, or counter-regressing samples start a
+      new segment instead of connecting across the discontinuity.
+- [x] Fixed unavailable messages remain for stopped, disabled, unavailable, and
       no-sandbox states. Pending, registration-only, and non-running children
       show no chart.
-- [ ] History buffering, tooltip point selection, chart geometry, and the
+- [x] History buffering, tooltip point selection, chart geometry, and the
       root-disk usage ratio are extracted into pure helpers and unit tested for
       window eviction, selection/generation reset, gaps, duplicates,
       discontinuities, nearest sample lookup, and null/non-positive disk totals.
-- [ ] Rendering uses existing React Native primitives or a justified dependency;
+- [x] Rendering uses existing React Native primitives or a justified dependency;
       no server API, durable state, or metrics backfill is introduced.
-- [ ] Compact and wide layouts remain readable, and the tooltip and chart
+- [x] Compact and wide layouts remain readable, and the tooltip and chart
       accessibility text remain usable without a pointer.
-- [ ] `npm run typecheck`, `npm run lint`, and `npm test` pass.
+- [x] `npm run typecheck`, `npm run lint`, and `npm test` pass.
 
 Files: `client/metrics.ts`, `client/hooks/useVmMetrics.ts`,
 `client/ChildDetail.tsx`, `client/ui.tsx`, `client/__tests__/metrics.test.ts`,

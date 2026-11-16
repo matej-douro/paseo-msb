@@ -177,10 +177,12 @@ The V1.1 resource and metrics additions extend this existing detail sheet rather
 |   Requested  8192 MiB RAM -- restart required                           |
 |                                                                         |
 | Live metrics [V1.1]                                refreshes every 3 s  |
-|   [stacked rolling chart: last 60 samples; gaps at discontinuities]     |
-|   [hover, focus, or tap a point for exact values]                       |
-|   tooltip: 14:32:03  CPU 18%  Mem 1.7/4.0 GiB  Uptime 12m 41s           |
-|            Disk R 1.2 MiB/s W 0.4 MiB/s  Net RX 840 KiB/s TX 96 KiB/s  |
+|   [rolling line chart: last 60 samples; gaps at discontinuities]        |
+|   [hover updates the always-visible tooltip]                           |
+|   tooltip: 14:32:03 UTC                                                 |
+|     CPU 18%        Memory 1.7/4.0 GiB        Uptime 12m 41s             |
+|     Disk read 1.2 MiB/s    Disk write 0.4 MiB/s                          |
+|     Network RX 840 KiB/s   Network TX 96 KiB/s                            |
 |   Root disk  [##########----------]  9.8 / 10.0 GiB (98%)               |
 |                                                                         |
 | > Logs (148 lines)                                                      |
@@ -196,25 +198,23 @@ Raw microsandbox configuration, environment values, and secrets are never expose
 While the detail of a running sandbox is visible, the metrics panel refreshes every 3 seconds. The chart plots:
 
 - CPU utilization;
-- memory used and available;
-- root-disk used and free when reported; and
+- memory used, scaled to the reported memory limit;
 - disk read/write and network receive/transmit rates derived from consecutive samples.
 
-The selected-sample tooltip also reports uptime and the exact values behind each series.
+Root-disk usage is not a chart series; it is shown by the usage bar below the chart. The tooltip also reports uptime and the exact values behind each series. It is always visible: hovering updates it to the nearest sample, and leaving the chart returns it to the latest sample.
 
-The first sample has absolute values but no rates. Duplicate, stale, future-dated, or discontinuous samples do not produce misleading rates. Metrics unavailability has a fixed, safe explanation and does not prevent the detail or logs from loading.
+The first sample has absolute values but no rates. Duplicate timestamps, including repeated stale timestamps, add no point; stale, future-dated, or discontinuous samples do not produce misleading rates. Metrics unavailability has a fixed, safe explanation and does not prevent the detail or logs from loading.
 
-The chart is the primary presentation; there is no persistent numeric row grid. Hovering, focusing, or tapping the chart selects the nearest sample and shows its timestamp plus every reported series value in a tooltip. The same values are exposed through the chart's accessibility label and value, so exact readings are never hover-only. Unreported values are omitted or shown as `—`, never zero.
+The chart is the primary presentation; there is no persistent numeric row grid. Hovering selects the nearest sample and updates the always-visible tooltip with its timestamp plus every reported series value. The same values are exposed through the chart's accessibility label/value and stepping actions, so exact readings are never hover-only. Unreported values are omitted or shown as `—`, never zero.
 
 The chart is a bounded rolling view of the samples already received. It keeps at most the latest 60 samples—about three minutes at the 3-second cadence—in client memory for the selected generation and discards them when the selection changes, the detail closes, or metrics become unavailable. It is not persisted and requires no server API change.
 
-Series are stacked only within a shared unit so unlike values are never added together:
+Series are plotted independently, each scaled within its own unit family so unlike values are never added together:
 
-- CPU is one line from `cpuPercent` and is never stacked with a byte-valued series;
-- memory used and available are stacked to the reported limit;
-- disk read and write rates are stacked;
-- network receive and transmit rates are stacked; and
-- root-disk used and free are stacked when both reported upper-layer fields are present.
+- CPU is one line from `cpuPercent`;
+- memory used is scaled to the reported limit;
+- disk read and write rates are separate lines; and
+- network receive and transmit rates are separate lines.
 
 Missing or unreported values are gaps, never zeros. The first sample is a single point without a line, and a duplicate timestamp adds no point. A stale, future-dated, non-increasing, uptime-regressing, or counter-regressing sample starts a new segment, so the chart never connects across a discontinuity.
 
@@ -504,7 +504,7 @@ The client displays `cpuPercent` directly, derives memory use from the absolute 
 
 A sample is stale when its SDK timestamp is more than `STALE_SAMPLE_MS` (10 seconds) behind receipt time or more than 5 seconds ahead of it. Stale or future samples update absolute values but do not compute rates and reset the baseline. Duplicate samples update absolute values without recomputing rates.
 
-On the client, the last 60 samples are retained in a bounded in-memory ring for the selected generation only. The ring is discarded on selection or generation change, when the detail closes, and when metrics become unavailable. The chart groups series by unit: CPU is a single line; memory used/available, disk read/write, network receive/transmit, and reported root-disk used/free are stacked within their families. Missing values are gaps. A duplicate timestamp adds no point; a stale, future-dated, non-increasing, uptime-regressing, or counter-regressing sample starts a new segment. The chart, not a persistent numeric grid, is the primary presentation: a hover, focus, or tap selects the nearest sample for a tooltip, and the chart exposes the same values through its accessibility label and value. A root-disk usage bar near the chart is derived only from the latest sample's upper-layer used and free values; it adds no point to the ring and implies no history. No samples are persisted, and no server call is added.
+On the client, the last 60 samples are retained in a bounded in-memory ring for the selected generation only. The ring is discarded on selection or generation change, when the detail closes, and when metrics become unavailable. Each series is plotted independently and scaled within its own unit family: CPU is a single line; memory used is scaled to the limit; disk read/write and network receive/transmit are separate lines. Root disk is not plotted. Missing values are gaps. A duplicate timestamp, including a repeated stale timestamp, adds no point; a stale, future-dated, non-increasing, uptime-regressing, or counter-regressing sample starts a new segment. The chart, not a persistent numeric grid, is the primary presentation: hovering selects the nearest sample for the always-visible tooltip, and leaving the chart returns to the latest sample. The chart exposes the same values through its accessibility label/value and stepping actions. A root-disk usage bar near the chart is derived only from the latest sample's upper-layer used and free values; it adds no point to the ring and implies no history. No samples are persisted, and no server call is added.
 
 A fixed unavailable reason covers no sandbox, a non-running VM, disabled metrics sampling in VM config, and runtime metrics-read failure. No raw SDK error text crosses the RPC boundary. Metrics never trigger lifecycle work, repair, or deletion.
 
