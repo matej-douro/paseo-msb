@@ -80,6 +80,9 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
   }
 
   function ensureRecovery(paseo: PluginHandlerContext["paseo"]): void {
+    // The cleanup schedule starts with the same first-use activation as
+    // recovery. It is independent of the UI and of any single recovery attempt.
+    pruner.start(reconcileContext(paseo));
     if (recoveryDone || recovery) return;
 
     recovery = recoverManagedSandboxes(reconcileContext(paseo))
@@ -98,14 +101,10 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
     ensureRecovery(paseo);
     const result = await readVmList(await readContext(paseo));
 
-    // Registration-only rows are the read projection's own proof that a child
-    // has a registration but no live sandbox under that name. The sweep is
-    // fire-and-forget so polling never waits for runtime lookups, and it
-    // re-checks the exact generation before removing anything.
-    pruner.schedule(
-      reconcileContext(paseo),
-      result.children.flatMap((child) => (child.kind === "registration" ? [child.name] : [])),
-    );
+    // The sweep derives its own candidates from the parent directory and
+    // runtime inventory, so this read projection is never its work queue. It is
+    // fire-and-forget: polling never waits for a sweep.
+    pruner.schedule(reconcileContext(paseo));
 
     return result;
   });
@@ -192,6 +191,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
   // side effect during or after teardown. Never wait for an install or
   // registration timeout.
   return async () => {
+    pruner.stop();
     await lanes.settle(CLEANUP_SETTLE_MS);
   };
 }
