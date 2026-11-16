@@ -1,8 +1,32 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { useMemo, useRef, useState } from "react";
-import { PanResponder, Pressable, Text, View, type LayoutChangeEvent } from "react-native";
-import type { LogBundle } from "../shared/contracts";
+import { memo, useMemo, useRef, useState } from "react";
+import {
+  PanResponder,
+  Pressable,
+  Text,
+  View,
+  type LayoutChangeEvent,
+  type PointerEvent,
+} from "react-native";
+import type { LogBundle, MetricsSample } from "../shared/contracts";
+import {
+  METRICS_HISTORY_LIMIT,
+  metricsChart,
+  metricsChartAccessibility,
+  metricsChartLegend,
+  metricsGridlineTop,
+  metricsIndexByTimestamp,
+  metricsPointIndexAt,
+  metricsPointX,
+  metricsTooltip,
+  rootDiskUsage,
+  rootDiskUsageText,
+  type MetricsChartLine,
+  type MetricsChartPoint,
+  type MetricsHistoryPoint,
+  type MetricsTooltip,
+} from "./metrics";
 import {
   logBundleSummary,
   logLineCountLabel,
@@ -538,6 +562,364 @@ export function ResourceSlider({
       {hint ? (
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{hint}</Text>
       ) : null}
+    </View>
+  );
+}
+
+const METRICS_CHART_HEIGHT = 72;
+const METRICS_CHART_HEIGHT_COMPACT = 56;
+
+export interface MetricsChartProps {
+  points: readonly MetricsHistoryPoint[];
+  theme: PluginTheme;
+  compact?: boolean;
+}
+
+/**
+ * A bounded rolling line chart over samples already received. Every live
+ * series shares one graph; each family keeps its own scale so unlike units are
+ * never added together. Hovering selects the nearest sample for the tooltip;
+ * when the pointer leaves, the chart returns to the latest sample. The same
+ * reading is exposed through the accessibility value and stepping actions.
+ */
+export function MetricsChart({ points, theme, compact = false }: MetricsChartProps) {
+  const chartHeight = compact ? METRICS_CHART_HEIGHT_COMPACT : METRICS_CHART_HEIGHT;
+  const plotHeight = Math.max(0, chartHeight - 2);
+  const [width, setWidth] = useState(0);
+  const [selectedTimestamp, setSelectedTimestamp] = useState<string | null>(null);
+
+  const selectedIndex =
+    selectedTimestamp === null
+      ? null
+      : metricsIndexByTimestamp(points, selectedTimestamp);
+  const accessibility = metricsChartAccessibility(points, selectedIndex);
+  const model = useMemo(
+    () => metricsChart(points, width, plotHeight, METRICS_HISTORY_LIMIT),
+    [points, width, plotHeight],
+  );
+  const legend = useMemo(() => metricsChartLegend(model), [model]);
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    setWidth(event.nativeEvent.layout.width);
+  };
+
+  const selectPointer = (event: PointerEvent) => {
+    if (width <= 0 || points.length === 0) return;
+    const index = metricsPointIndexAt(
+      points,
+      event.nativeEvent.offsetX,
+      width,
+      METRICS_HISTORY_LIMIT,
+    );
+    if (index !== null) setSelectedTimestamp(points[index].sample.timestamp);
+  };
+
+  const stepSelection = (delta: number) => {
+    if (points.length === 0) return;
+    const from = selectedIndex ?? points.length - 1;
+    const next = Math.min(points.length - 1, Math.max(0, from + delta));
+    setSelectedTimestamp(points[next].sample.timestamp);
+  };
+
+  const clearSelection = () => {
+    setSelectedTimestamp(null);
+  };
+
+  // Touch has no hover-out; keep the last touch sample instead of clearing it.
+  const clearOnLeave = (event: PointerEvent) => {
+    if (event.nativeEvent.pointerType !== "touch") clearSelection();
+  };
+
+  if (points.length === 0) return null;
+
+  const displayIndex = selectedIndex ?? points.length - 1;
+  const markerX = metricsPointX(
+    points,
+    displayIndex,
+    width,
+    METRICS_HISTORY_LIMIT,
+  );
+  const tooltip = metricsTooltip(points[displayIndex]);
+
+  return (
+    <View style={{ gap: 6 }}>
+      <View
+        onLayout={handleLayout}
+        onPointerEnter={selectPointer}
+        onPointerMove={selectPointer}
+        onPointerLeave={clearOnLeave}
+        onPointerCancel={clearSelection}
+        accessible
+        focusable
+        accessibilityRole="adjustable"
+        accessibilityLabel={accessibility.label}
+        accessibilityValue={{ text: accessibility.value }}
+        accessibilityActions={[
+          { name: "increment", label: "Next sample" },
+          { name: "decrement", label: "Previous sample" },
+        ]}
+        onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === "increment") stepSelection(1);
+          if (event.nativeEvent.actionName === "decrement") stepSelection(-1);
+        }}
+        style={{
+          height: chartHeight,
+          borderRadius: 4,
+          overflow: "hidden",
+          backgroundColor: theme.colors.surface1,
+          borderColor: theme.colors.border,
+          borderWidth: 1,
+        }}
+      >
+          {[0.25, 0.5, 0.75].map((ratio) => (
+            <View
+              key={ratio}
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: Math.round(metricsGridlineTop(ratio, plotHeight)),
+                height: 1,
+                backgroundColor: theme.colors.border,
+                opacity: 0.4,
+              }}
+            />
+          ))}
+          {model.lines.map((line) => (
+            <MetricsLineView
+              key={`${line.series}:${line.points[0].x}`}
+              line={line}
+            />
+          ))}
+          {markerX !== null ? (
+            <View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                left: markerX - 0.5,
+                top: 0,
+                bottom: 0,
+                width: 1,
+                backgroundColor: theme.colors.foregroundMuted,
+                opacity: 0.7,
+              }}
+            />
+          ) : null}
+        </View>
+
+      {legend.length > 0 ? (
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            columnGap: 10,
+            rowGap: 4,
+          }}
+        >
+          {legend.map((item) => (
+            <View
+              key={item.series}
+              style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+            >
+              <View
+                style={{
+                  width: 12,
+                  height: 3,
+                  borderRadius: 1.5,
+                  backgroundColor: item.color,
+                }}
+              />
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
+                {item.label}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <MetricsTooltipView tooltip={tooltip} theme={theme} />
+    </View>
+  );
+}
+
+const MetricsLineView = memo(function MetricsLineView({
+  line,
+}: {
+  line: MetricsChartLine;
+}) {
+  const color = line.color;
+  const thickness = 2.5;
+  const lastPoint = line.points[line.points.length - 1];
+  const dotSize = line.points.length === 1 ? 5 : 3;
+
+  return (
+    <>
+      {line.points.map((point, index) => {
+        if (index === 0) return null;
+        const previous = line.points[index - 1];
+        return (
+          <MetricsLineSegment
+            key={`${previous.x}:${previous.y}-${point.x}:${point.y}`}
+            from={previous}
+            to={point}
+            color={color}
+            thickness={thickness}
+          />
+        );
+      })}
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          left: lastPoint.x - dotSize / 2,
+          top: lastPoint.y - dotSize / 2,
+          width: dotSize,
+          height: dotSize,
+          borderRadius: dotSize / 2,
+          backgroundColor: color,
+        }}
+      />
+    </>
+  );
+});
+
+function MetricsLineSegment({
+  from,
+  to,
+  color,
+  thickness,
+}: {
+  from: MetricsChartPoint;
+  to: MetricsChartPoint;
+  color: string;
+  thickness: number;
+}) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (!(length > 0)) return null;
+
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        left: (from.x + to.x) / 2 - length / 2,
+        top: (from.y + to.y) / 2 - thickness / 2,
+        width: length,
+        height: thickness,
+        borderRadius: thickness / 2,
+        backgroundColor: color,
+        transform: [{ rotate: `${Math.atan2(dy, dx)}rad` }],
+      }}
+    />
+  );
+}
+
+function MetricsTooltipView({
+  tooltip,
+  theme,
+}: {
+  tooltip: MetricsTooltip;
+  theme: PluginTheme;
+}) {
+  return (
+    <View
+      style={{
+        borderColor: theme.colors.border,
+        borderWidth: 1,
+        borderRadius: 6,
+        paddingVertical: 6,
+        paddingHorizontal: 8,
+        gap: 2,
+        backgroundColor: theme.colors.surface1,
+      }}
+    >
+      <Text
+        style={{ color: theme.colors.foreground, fontSize: 11, fontWeight: "600" }}
+      >
+        {`${tooltip.clock} UTC`}
+      </Text>
+      <View style={{ gap: 4 }}>
+        {tooltip.rows.map((row) => (
+          <View
+            key={row.label}
+            style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}
+          >
+            <Text
+              style={{
+                width: 70,
+                color: theme.colors.foregroundMuted,
+                fontSize: 10,
+              }}
+            >
+              {row.label}
+            </Text>
+            <Text
+              style={{
+                flex: 1,
+                flexShrink: 1,
+                color: theme.colors.foreground,
+                fontSize: 11,
+                fontWeight: "600",
+              }}
+            >
+              {row.value}
+            </Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+export interface RootDiskBarProps {
+  sample: MetricsSample;
+  theme: PluginTheme;
+}
+
+/**
+ * Current writable upper-layer usage with a text value and a progressbar role.
+ * Hidden when either side is unreported or the total is non-positive.
+ */
+export function RootDiskBar({ sample, theme }: RootDiskBarProps) {
+  const usage = rootDiskUsage(sample);
+  if (!usage) return null;
+
+  const tone: Tone =
+    usage.percent >= 90 ? "danger" : usage.percent >= 75 ? "warning" : "accent";
+  const percent = Math.min(100, Math.max(0, usage.percent));
+  const text = rootDiskUsageText(usage);
+
+  return (
+    <View style={{ gap: 3 }}>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+          Root disk
+        </Text>
+        <Text style={{ color: theme.colors.foreground, fontSize: 10 }}>{text}</Text>
+      </View>
+      <View
+        accessible
+        accessibilityRole="progressbar"
+        accessibilityLabel="Root disk usage"
+        accessibilityValue={{ min: 0, max: 100, now: Math.round(percent), text }}
+        style={{
+          height: 8,
+          borderRadius: 4,
+          overflow: "hidden",
+          backgroundColor: theme.colors.surface2,
+        }}
+      >
+        <View
+          style={{
+            height: 8,
+            width: `${percent}%`,
+            backgroundColor: toneColor(theme, tone),
+          }}
+        />
+      </View>
     </View>
   );
 }

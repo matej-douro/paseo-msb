@@ -2,14 +2,15 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { useEffect, useRef, useState } from "react";
 import { vmMetricsRpc, type VmMetricsResult } from "../../shared/contracts";
 import {
+  createMetricsHistory,
   createMetricsPoller,
-  createMetricsTracker,
-  type MetricsSnapshot,
+  type MetricsHistoryPoint,
 } from "../metrics";
 
 export interface VmMetricsState {
   readonly availability: VmMetricsResult | null;
-  readonly snapshot: MetricsSnapshot | null;
+  /** Bounded rolling history for the selected generation. */
+  readonly points: readonly MetricsHistoryPoint[];
   readonly loading: boolean;
 }
 
@@ -21,7 +22,8 @@ const UNAVAILABLE: VmMetricsResult = {
 /**
  * Polls `vm.metrics` every three seconds while a running sandbox's detail is
  * visible. The poller is single-flight and stops on unmount or selection
- * change; a failed read does not fail the detail or logs.
+ * change; a failed read does not fail the detail or logs. The history is
+ * discarded on selection or generation change and when metrics go unavailable.
  */
 export function useVmMetrics(
   name: string | null,
@@ -33,21 +35,21 @@ export function useVmMetrics(
   invokeRef.current = invoke;
 
   const [availability, setAvailability] = useState<VmMetricsResult | null>(null);
-  const [snapshot, setSnapshot] = useState<MetricsSnapshot | null>(null);
+  const [points, setPoints] = useState<readonly MetricsHistoryPoint[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!enabled || !name || !id) {
       setAvailability(null);
-      setSnapshot(null);
+      setPoints([]);
       setLoading(false);
       return;
     }
 
     let active = true;
-    const tracker = createMetricsTracker();
+    const history = createMetricsHistory();
     setAvailability(null);
-    setSnapshot(null);
+    setPoints([]);
     setLoading(true);
 
     const poll = async () => {
@@ -57,19 +59,19 @@ export function useVmMetrics(
 
         if (result.status === "available") {
           setAvailability(result);
-          setSnapshot(tracker.apply(result.sample, id, Date.now()));
+          setPoints(history.append(result.sample, id, Date.now()));
         } else {
-          tracker.reset();
+          history.reset();
           setAvailability(result);
-          setSnapshot(null);
+          setPoints([]);
         }
       } catch {
         if (!active) return;
         // A transport or generation error is reported as the fixed unavailable
         // reason; the detail and logs are unaffected.
-        tracker.reset();
+        history.reset();
         setAvailability(UNAVAILABLE);
-        setSnapshot(null);
+        setPoints([]);
       } finally {
         if (active) setLoading(false);
       }
@@ -84,5 +86,5 @@ export function useVmMetrics(
     };
   }, [name, id, enabled]);
 
-  return { availability, snapshot, loading };
+  return { availability, points, loading };
 }

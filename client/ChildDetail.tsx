@@ -13,7 +13,7 @@ import type {
   VmReconcileResult,
 } from "../shared/contracts";
 import { useVmMetrics } from "./hooks/useVmMetrics";
-import { metricsRows, metricsUnavailableText, type MetricsSnapshot } from "./metrics";
+import { metricsUnavailableText, type MetricsHistoryPoint } from "./metrics";
 import {
   childErrorText,
   childPhase,
@@ -31,7 +31,7 @@ import {
   setupPill,
   vmPill,
 } from "./state";
-import { ActionButton, IconButton, LogBlock, Notice, StatusPill, type PluginTheme } from "./ui";
+import { ActionButton, IconButton, LogBlock, MetricsChart, Notice, RootDiskBar, StatusPill, type PluginTheme } from "./ui";
 
 export interface ChildDetailProps {
   name: string;
@@ -280,12 +280,13 @@ export function ChildDetail({
             {sandbox ? (
               <LiveMetricsPanel
                 theme={theme}
+                compact={compact}
                 availability={
                   metricsEnabled
                     ? metrics.availability
                     : { status: "unavailable", reason: "not_running" }
                 }
-                snapshot={metricsEnabled ? metrics.snapshot : null}
+                points={metricsEnabled ? metrics.points : []}
                 loading={metricsEnabled && metrics.loading}
               />
             ) : null}
@@ -386,16 +387,20 @@ function ChildPills({
 
 function LiveMetricsPanel({
   theme,
+  compact,
   availability,
-  snapshot,
+  points,
   loading,
 }: {
   theme: PluginTheme;
+  compact: boolean;
   availability: VmMetricsResult | null;
-  snapshot: MetricsSnapshot | null;
+  points: readonly MetricsHistoryPoint[];
   loading: boolean;
 }) {
-  const sample = availability?.status === "available" ? snapshot : null;
+  const latest = availability?.status === "available" && points.length > 0
+    ? points[points.length - 1]
+    : null;
   const message =
     availability?.status === "unavailable"
       ? metricsUnavailableText(availability.reason)
@@ -431,16 +436,10 @@ function LiveMetricsPanel({
         </Text>
       </View>
 
-      {sample ? (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
-          {metricsRows(sample).map((row) => (
-            <DetailRow
-              key={row.label}
-              theme={theme}
-              label={row.label}
-              value={row.value}
-            />
-          ))}
+      {latest ? (
+        <View style={{ gap: 8 }}>
+          <MetricsChart points={points} theme={theme} compact={compact} />
+          <RootDiskBar sample={latest.sample} theme={theme} />
         </View>
       ) : (
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
