@@ -14,8 +14,8 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Changed
 
-- Create identity is now the child name: the form submits the generated
-  `paseo-<uuid>` name, only one attempt exists per name, and a same-name Create
+- Create identity is now the child name: the form submits a short generated
+  `paseo-<token>` name, only one attempt exists per name, and a same-name Create
   joins only when its plan and resource shape match. Request IDs and the guest
   `PASEO_MSB_REQUEST` marker were removed.
 - Create and Retry check credential-store availability before acting; store

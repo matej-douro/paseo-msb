@@ -6,6 +6,7 @@ import { createPaseoClient, type PaseoClient } from "@getpaseo/client";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { HostSummary } from "@getpaseo/protocol/hosts";
 import type { SandboxHandle } from "microsandbox";
+import { newGeneratedChildName } from "../../client/generated-name";
 import {
   CREDENTIAL_ALLOWED_HOSTS,
   ERROR_LABEL,
@@ -24,7 +25,6 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
-  generatedChildName,
   type CredentialName,
   type Phase,
 } from "../../shared/constants";
@@ -698,7 +698,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         throw new Error("the release test did not prepare any credential");
       }
 
-      const name = generatedChildName(randomUUID());
+      const name = newGeneratedChildName();
       createdName = name;
 
       // vm.create must return before host work. The sandbox does not exist yet.
@@ -1117,7 +1117,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         });
         storedByTest.add(credential.name);
       }
-      const staleName = generatedChildName(randomUUID());
+      const staleName = newGeneratedChildName();
       trackSandbox(staleName);
       await rpc<VmCreateResult>(vmCreateRpc.name, {
         name: staleName,
@@ -1253,7 +1253,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       }
       await ensureStoredCredentials();
 
-      const name = generatedChildName(randomUUID());
+      const name = newGeneratedChildName();
       trackSandbox(name);
 
       // Two identical Creates must join one attempt. A different plan for the
@@ -1391,7 +1391,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       }
       await ensureStoredCredentials();
 
-      const name = generatedChildName(randomUUID());
+      const name = newGeneratedChildName();
       trackSandbox(name);
 
       await rpc<VmCreateResult>(vmCreateRpc.name, { name, plan });
@@ -1522,7 +1522,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       if (!plan) throw new Error("the release test did not prepare a provisioning plan");
       await ensureStoredCredentials();
 
-      const name = generatedChildName(randomUUID());
+      const name = newGeneratedChildName();
       trackSandbox(name);
       const foreign = await createFixtureSandbox({ name, managed: false });
 
@@ -1585,7 +1585,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const plan = createdPlan;
       if (!plan) throw new Error("the release test did not prepare a provisioning plan");
 
-      const name = generatedChildName(randomUUID());
+      const name = newGeneratedChildName();
       trackSandbox(name);
       const fixture = await createFixtureSandbox({
         name,

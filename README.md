@@ -58,8 +58,9 @@ credentials enter the sandbox. Claude takes one auth option (Anthropic API key o
 Claude subscription); Pi takes one or more LLM options (Anthropic, OpenAI,
 Gemini, NeuralWatt). GitHub CLI is independent and unchecked by default.
 
-The name is the create identity; the form generates `paseo-<uuid>` when it is left
-blank, and the current generation is the exact microsandbox `handle.id`.
+The name is the create identity; the form generates `paseo-<token>` with a
+short random token when it is left blank, and the current generation is the
+exact microsandbox `handle.id`.
 `vm.create` returns immediately, then one idempotent reconciler per name creates
 the detached sandbox with the requested CPUs
 and RAM (defaults `2 CPU` / `4096 MiB`) and the requested root disk,

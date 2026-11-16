@@ -98,7 +98,7 @@ Create is a single confirmation flow with the following choices. This mockup mir
 
 #### Name
 
-The name is optional in the form. If omitted, the plugin generates `paseo-<uuid>` for that attempt and shows it as the field placeholder; the generated name is submitted explicitly. A custom name must:
+The name is optional in the form. If omitted, the plugin generates `paseo-<token>` with a short 10-character lowercase alphanumeric token for that attempt and shows it as the field placeholder; the generated name is submitted explicitly. A custom name must:
 
 - be 1–63 characters;
 - contain only lowercase ASCII letters, digits, and internal hyphens; and
@@ -328,7 +328,7 @@ The design distinguishes three identities:
 
 #### Names and Create attempts
 
-The form generates `paseo-<uuid>` when the name is left blank and submits it explicitly; a supplied name is used exactly after validation. `vm.create` requires the name. There is no rename operation: renaming would require replacing the sandbox and is outside V1.1.
+The form generates `paseo-<token>` from a short 10-character lowercase alphanumeric token when the name is left blank and submits it explicitly; a supplied name is used exactly after validation. `vm.create` requires the name. There is no rename operation: renaming would require replacing the sandbox and is outside V1.1.
 
 Pending attempts are keyed by name, so at most one is active per name. A repeated Create must match the original canonical provider/integration plan, resources, and resources-specified flag: an identical request joins the running attempt, a failed attempt restarts, and a different shape receives synchronous `invalid_request`. A live sandbox supersedes an active pending row; a failed attempt stays visible beside it.
 
