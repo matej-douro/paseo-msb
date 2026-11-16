@@ -568,6 +568,7 @@ The release test must drive all lifecycle RPCs through Create, background progre
 - background stale-registration convergence without UI polling, including older registrations hidden behind same-name live VMs, retry after removal failure, `VM state unknown` rather than `Missing` when proof is unavailable, and candidate reconstruction after plugin restart;
 - create-time RAM and root-disk values and resource decoding for new and legacy V1 sandboxes, including nullable legacy fields;
 - RAM growth and shrink, legacy `maxMemory` growth, live or restart-required convergence, mixed converging-plus-restart-required severity, root-disk growth, root-disk-shrink rejection, legacy-null disk rejection, stopped/created/crashed/paused restart rejection, exact-generation resize, and Delete waiting on an unsettled native mutation or tombstone;
+- a Create over a `deleting` tombstone: a shape-matched request completes that exact cleanup and reaches ready with a new generation, while a second tombstone fails safely;
 - the routed host returning online after a confirmed restart; and
 - live metrics values through `vm.metrics`, server-side coalescing of unresolved native reads, the 3-second single-flight poll, stale/future/duplicate handling, and unavailable reasons for stopped, disabled, and failed metrics reads.
 

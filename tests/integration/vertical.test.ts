@@ -25,6 +25,8 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
+  RESOURCES_ENV_VAR,
+  RESOURCES_SPECIFIED_ENV_VAR,
   type CredentialName,
   type Phase,
 } from "../../shared/constants";
@@ -58,6 +60,7 @@ import {
   type VmDetailResult,
   type VmListResult,
   type VmReconcileResult,
+  type VmResources,
 } from "../../shared/contracts";
 import { safeError } from "../../shared/errors";
 import {
@@ -414,6 +417,9 @@ async function createFixtureSandbox(options: {
   readonly managed: boolean;
   readonly plan?: CanonicalPlan;
   readonly phase?: Phase;
+  /** Managed fixtures may persist the desired resource shape for joining. */
+  readonly requestedResources?: VmResources;
+  readonly resourcesSpecified?: boolean;
 }): Promise<SandboxHandle> {
   let builder = msb.Sandbox.builder(options.name)
     .image(GUEST_IMAGE)
@@ -432,6 +438,12 @@ async function createFixtureSandbox(options: {
       })
       .env("PATH", GUEST_PATH)
       .env(PLAN_ENV_VAR, JSON.stringify(options.plan));
+
+    if (options.requestedResources) {
+      builder = builder
+        .env(RESOURCES_ENV_VAR, JSON.stringify(options.requestedResources))
+        .env(RESOURCES_SPECIFIED_ENV_VAR, options.resourcesSpecified ? "1" : "0");
+    }
   } else {
     builder = builder.labels({ "paseo-msb-fixture": "foreign" });
   }
@@ -1508,6 +1520,53 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         async () => ((await managedRegistrations(newId)).length === 0 ? true : null),
         { timeoutMs: 60_000, secrets: credentialValues() },
       );
+
+      await assertNoCanarySince(start);
+    },
+    CREATE_TIMEOUT_MS * 2,
+  );
+
+  it(
+    "completes a Delete tombstone and allocates a fresh generation",
+    async () => {
+      const start = observations.length;
+      const plan = createdPlan;
+      if (!plan) throw new Error("the release test did not prepare a provisioning plan");
+      await ensureStoredCredentials();
+
+      const name = newGeneratedChildName();
+      trackSandbox(name);
+
+      // A Delete that could not finish leaves the managed generation labelled
+      // `deleting`. Its recorded shape matches, so Create completes that exact
+      // cleanup and then allocates a replacement instead of reporting success
+      // for cleanup alone.
+      const tombstone = await createFixtureSandbox({
+        name,
+        managed: true,
+        plan,
+        phase: "deleting",
+        requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10_240 },
+        resourcesSpecified: true,
+      });
+      const oldId = tombstone.id;
+      trackSandbox(name, oldId);
+
+      const created = await rpc<VmCreateResult>(vmCreateRpc.name, {
+        name,
+        plan,
+        resources: { memoryMib: 4096, diskMib: 10_240 },
+      });
+      expect(created).toEqual({ name });
+
+      const ready = await waitForReadySandbox(name, CREATE_TIMEOUT_MS);
+      expect(ready.child.id).not.toBe(oldId);
+      trackSandbox(name, ready.child.id);
+
+      const handles = await sandboxesNamed(name);
+      expect(handles).toHaveLength(1);
+      expect(handles[0]?.id).toBe(ready.child.id);
+      expect(await managedRegistrations(oldId)).toHaveLength(0);
 
       await assertNoCanarySince(start);
     },

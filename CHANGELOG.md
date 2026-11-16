@@ -9,8 +9,9 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 - Failed pending Create attempts can be dismissed without a plugin reload.
 - The release suite covers concurrent Create/Repair, registration drift,
-  deletion-tombstone recovery, stale generations, foreign-name conflicts,
-  provision-job conflicts, and the raw-SDK stale-handle identity contract.
+  deletion-tombstone recovery, Create over a deleting tombstone, stale
+  generations, foreign-name conflicts, provision-job conflicts, and the raw-SDK
+  stale-handle identity contract.
 
 ### Changed
 
