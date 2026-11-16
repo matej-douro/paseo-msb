@@ -142,7 +142,7 @@ Acceptance:
       uppercase, `/`, whitespace, leading/trailing hyphens, and names over 63
       characters.
 - [x] `vm.create` accepts optional `name` and a complete optional `resources`
-      pair; defaults are 4096 MiB RAM and 10240 MiB disk with CPU fixed at 2.
+      selection; defaults are 2 CPUs, 4096 MiB RAM, and 10240 MiB disk.
 - [x] `vm.resize` requires `name`, `id`, and at least one of `memoryMib` or
       `diskMib`; `restart` is optional.
 - [x] Resource bounds match DESIGN §7.2. Observed `memoryMib`/`diskMib` may be
@@ -203,8 +203,8 @@ Acceptance:
 
 - [x] New create plans include `PASEO_MSB_REQUEST`,
       `PASEO_MSB_RESOURCES`, `PASEO_MSB_RESOURCES_SPECIFIED`, the requested root
-      disk, 2 CPUs, requested memory, `maxMemory` at the allowed maximum, and a
-      2-second metrics interval.
+      disk, the requested CPU count, requested memory, `maxMemory` at the
+      allowed maximum, and a 2-second metrics interval.
 - [x] The real runtime sets `.image(...).rootDisk(...).cpus(...)
       .memory(...).maxMemory(...).metricsSampleIntervalMs(...)` in SDK order.
 - [x] `SandboxHandleLike` exposes the raw `modify()` promise, metrics, and the
@@ -409,20 +409,21 @@ request-ID aware so two attempts may share a name safely.
 
 Acceptance:
 
-- [ ] The name field shows the generated-name placeholder; invalid local input
+- [x] The name field shows the generated-name placeholder; invalid local input
       blocks submit with a clear message.
-- [ ] RAM and disk default to 4096 MiB and 10240 MiB; CPU is read-only at 2.
-- [ ] RAM/disk validation matches the shared bounds and steps.
-- [ ] Create sends `name` only when the user entered one, plus `resources`.
-- [ ] Synchronous validation/credential errors stay in the modal. An
+- [x] CPU, RAM, and disk default to 2, 4096 MiB, and 10240 MiB; all three are
+      editable within the shared bounds.
+- [x] CPU/RAM/disk validation matches the shared bounds and steps.
+- [x] Create sends `name` only when the user entered one, plus `resources`.
+- [x] Synchronous validation/credential errors stay in the modal. An
       asynchronous `name_conflict` appears on the new pending child and can be
       dismissed; the modal does not claim to have detected it.
-- [ ] Retry create preserves the original name, resources, and whether
+- [x] Retry create preserves the original name, resources, and whether
       resources were explicitly supplied.
-- [ ] Pending rows use request ID in their key and selection; detail requests
+- [x] Pending rows use request ID in their key and selection; detail requests
       include `requestId` for pending children.
-- [ ] Compact and wide layouts remain usable.
-- [ ] Pure validation/formatting/selection helpers are unit tested.
+- [x] Compact and wide layouts remain usable.
+- [x] Pure validation/formatting/selection helpers are unit tested.
 
 Files: `client/CreateChild.tsx`, `client/ChildList.tsx`, `client/screen.tsx`,
 `client/state.ts`, `client/hooks/useVmDetail.ts`,
