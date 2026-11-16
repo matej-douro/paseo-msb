@@ -254,9 +254,11 @@ export function registrationText(
   registration: Registration | null,
   availability: Availability,
 ): string {
-  if (registration) return `Registration ${registration.status}`;
+  if (registration) {
+    return registration.status.charAt(0).toUpperCase() + registration.status.slice(1);
+  }
   // Unavailable registrations are unknown, not confidently absent.
-  return availability.status === "available" ? "Not registered" : "Registration unknown";
+  return availability.status === "available" ? "Not registered" : "Unknown";
 }
 
 export function childPhase(child: VmChild): Phase {

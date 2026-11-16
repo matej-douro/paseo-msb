@@ -289,14 +289,14 @@ describe("child presentation", () => {
         SANDBOX.kind === "sandbox" ? SANDBOX.registration : null,
         { status: "available" },
       ),
-    ).toBe("Registration online");
+    ).toBe("Online");
     expect(registrationText(null, { status: "available" })).toBe("Not registered");
     expect(
       registrationText(null, {
         status: "unavailable",
         error: safeError("registrations_unavailable"),
       }),
-    ).toBe("Registration unknown");
+    ).toBe("Unknown");
   });
 
   it("separates setup health from VM status", () => {
