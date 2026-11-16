@@ -4,7 +4,7 @@ import {
   isProvisionSuccess,
   parseProvisionStatus,
   provisionMaterializeSpec,
-  provisionStatusPath,
+  provisionStatusReadSpec,
   type CanonicalPlan,
   type ProvisionScript,
   type ProvisionStatus,
@@ -194,8 +194,7 @@ async function readProvisionStatus(
     context,
     connected,
     {
-      command: "cat",
-      args: [provisionStatusPath()],
+      ...provisionStatusReadSpec(),
       user: GUEST_USER,
       env: { HOME: GUEST_HOME, PATH: GUEST_PATH },
       stdinNull: true,

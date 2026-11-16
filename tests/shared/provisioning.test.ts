@@ -29,6 +29,8 @@ import {
   plannedSteps,
   providerAvailability,
   provisionMaterializeSpec,
+  provisionStatusPath,
+  provisionStatusReadSpec,
   requiredCredentialsForPlan,
   resolveProvisionPlan,
   type CanonicalPlan,
@@ -414,6 +416,13 @@ describe("provision script", () => {
     expect(spec.args[1]).toContain("<<'PASEO_MSB_PROVISION_SCRIPT'");
     expect(spec.args[1]).toContain(provision.script.trim());
     expect(provision.script).not.toContain("PASEO_MSB_PROVISION_SCRIPT");
+  });
+
+  it("reads the status file without a bare cat so the expected miss stays out of logs", () => {
+    const spec = provisionStatusReadSpec();
+
+    expect(spec.command).toBe("sh");
+    expect(spec.args).toEqual(["-c", 'test -f "$1" && cat "$1"', "sh", provisionStatusPath()]);
   });
 
   it("rejects duplicate step ids instead of silently collapsing them", () => {

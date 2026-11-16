@@ -353,7 +353,7 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
   const connectHandle: SandboxConnectHandleLike = {
     async exec(spec) {
       if (options.execError) throw options.execError;
-      if (spec.command === "cat" && spec.args.some((arg) => arg.endsWith("status.json"))) {
+      if (spec.args.some((arg) => arg.endsWith("status.json"))) {
         return provisionStatus
           ? { code: 0, stdout: JSON.stringify(provisionStatus) }
           : { code: 1, stdout: "" };

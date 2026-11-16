@@ -89,6 +89,16 @@ export function provisionStatusPath(): string {
   return `${PROVISIONING_STATE_DIR}/status.json`;
 }
 
+/**
+ * Returns an ExecSpec that reads the status file quietly. A fresh sandbox has no
+ * status yet, and microsandbox captures every exec's stderr into the sandbox log
+ * users see, so a bare `cat` would add "No such file or directory" to creation
+ * logs. A file that exists but cannot be read still reports its own error.
+ */
+export function provisionStatusReadSpec(): ProvisionExecSpec {
+  return { command: "sh", args: ["-c", 'test -f "$1" && cat "$1"', "sh", provisionStatusPath()] };
+}
+
 export function provisionArgv(hash: string): readonly string[] {
   return ["/bin/sh", provisionScriptPath(hash), hash];
 }
