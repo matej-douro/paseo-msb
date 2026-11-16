@@ -497,7 +497,65 @@ Files: `client/ChildDetail.tsx`, `client/hooks/useVmMetrics.ts`,
 `client/metrics.ts`, `client/state.ts`, `client/ui.tsx`,
 `client/__tests__/metrics.test.ts`
 
-### 4.3 Add the resize flow and resource display
+Task 4.3 replaces the persistent numeric rows above with the rolling chart and
+its tooltip.
+
+### 4.3 Add a live stacked resource-usage chart
+
+Replace the persistent numeric metrics rows from task 4.2 with a bounded,
+client-side rolling chart and a nearby root-disk usage bar. Exact values move
+into a hover/focus/tap tooltip on the chart and remain available through its
+accessibility label; there is no persistent numeric grid. The chart visualizes
+only samples that `vm.metrics` already returns: no new RPC, no server history,
+and no durable state. DESIGN §1.7 and §2.8 allow this bounded live view while
+continuing to exclude durable history, a general metrics screen, and alerting.
+
+Acceptance:
+
+- [ ] The chart replaces the numeric metrics row grid. Hovering, focusing, or
+      tapping the chart selects the nearest sample and shows its timestamp plus
+      every reported series value in a tooltip.
+- [ ] Exact readings are never hover-only: the chart exposes the selected
+      sample through an accessibility label/value, workable by keyboard and
+      screen reader, and unreported values are omitted or shown as `—`, never
+      zero.
+- [ ] The chart keeps at most the latest 60 samples (about three minutes at the
+      3-second cadence) in client memory and evicts older points. It resets on
+      selection or generation change and disappears when metrics are
+      unavailable or the detail is not showing a sandbox.
+- [ ] CPU is one line from `cpuPercent` and is never stacked with a byte-valued
+      series. Memory used/available, disk read/write, network RX/TX, and
+      reported root-disk used/free are stacked only within their own unit
+      families.
+- [ ] Unreported values are gaps, not zeros; null upper-layer values do not
+      fabricate a root-disk series.
+- [ ] A root-disk usage bar near the chart shows the latest sample's
+      `upperUsedBytes / (upperUsedBytes + upperFreeBytes)`, with a text value
+      and a `progressbar` accessibility role. It is hidden when either field is
+      null or the total is non-positive, and it never renders a missing disk as
+      zero.
+- [ ] The first sample renders a point without a line; duplicates add no point;
+      stale, future-dated, non-increasing, uptime-regressing, or
+      counter-regressing samples start a new segment instead of connecting
+      across the discontinuity.
+- [ ] Fixed unavailable messages remain for stopped, disabled, unavailable, and
+      no-sandbox states. Pending, registration-only, and non-running children
+      show no chart.
+- [ ] History buffering, tooltip point selection, chart geometry, and the
+      root-disk usage ratio are extracted into pure helpers and unit tested for
+      window eviction, selection/generation reset, gaps, duplicates,
+      discontinuities, nearest sample lookup, and null/non-positive disk totals.
+- [ ] Rendering uses existing React Native primitives or a justified dependency;
+      no server API, durable state, or metrics backfill is introduced.
+- [ ] Compact and wide layouts remain readable, and the tooltip and chart
+      accessibility text remain usable without a pointer.
+- [ ] `npm run typecheck`, `npm run lint`, and `npm test` pass.
+
+Files: `client/metrics.ts`, `client/hooks/useVmMetrics.ts`,
+`client/ChildDetail.tsx`, `client/ui.tsx`, `client/__tests__/metrics.test.ts`,
+`DESIGN.md`
+
+### 4.4 Add the resize flow and resource display
 
 Show observed and requested resources in the detail, with an **Edit resources**
 action, and show known/requested RAM/disk in list rows. The dialog submits
@@ -529,7 +587,7 @@ Acceptance:
 Files: `client/ChildDetail.tsx`, `client/ChildList.tsx`, `client/screen.tsx`,
 `client/state.ts`, `client/ui.tsx`, `client/__tests__/resize.test.ts`
 
-### 4.4 Present registration-only children as transient cleanup states
+### 4.5 Present registration-only children as transient cleanup states
 
 Keep registration-only rows visible while verification or cleanup is
 inconclusive, but never claim that a VM is missing merely because the joined
