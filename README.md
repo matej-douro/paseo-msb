@@ -52,15 +52,16 @@ action with an error instead of presenting stale credential availability.
 
 ## Create
 
-The confirmation shows the fixed image and resources plus **Providers** and
-**Integrations** sections. Secrets gate availability; the selection decides which
+The confirmation shows the fixed image and editable CPU/RAM/root-disk fields plus
+**Providers** and **Integrations** sections. Secrets gate availability; the selection decides which
 credentials enter the sandbox. Claude takes one auth option (Anthropic API key or
 Claude subscription); Pi takes one or more LLM options (Anthropic, OpenAI,
 Gemini, NeuralWatt). GitHub CLI is independent and unchecked by default.
 
 The generated name (`paseo-<requestId>`) is the identity; the current generation
 is its exact microsandbox `handle.id`. `vm.create` returns immediately, then one
-idempotent reconciler per name creates the detached `2 CPU` / `4096 MiB` sandbox
+idempotent reconciler per name creates the detached sandbox with the requested CPUs
+and RAM (defaults `2 CPU` / `4096 MiB`) and the requested root disk,
 with a loopback-only port, `PASEO_MSB_PLAN`, and only the selected header-only
 secrets; runs the content-addressed provisioning script as one detached job;
 registers the exact generation, waits for routed online, and confirms selected
@@ -129,8 +130,9 @@ The child daemon listens only on parent loopback and runs without
 Credential substitution is header-only and limited to the fixed hosts above;
 TLS interception and guest CA setup are microsandbox responsibilities.
 
-The shape is fixed: one image, `2 CPU`, `4096 MiB`. There is no custom naming or
-sizing, image selection, start/stop/restart, metrics, volumes, snapshots,
+The image is fixed; CPU, RAM, and root disk are chosen at Create within the
+documented bounds (2 CPUs, 4096 MiB RAM, and 10240 MiB root disk by default).
+There is no CPU resize, image selection, start/stop/restart, volumes, snapshots,
 unlabelled-sandbox adoption, operation history, or plugin-specific shell. After
 `ready`, the plugin does not monitor tool health, repair drift, or re-provision;
 stopped VMs are not started automatically.
