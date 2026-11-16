@@ -92,7 +92,7 @@ export interface PendingCreateStore {
 
 function resourcesFor(request: ResourceRequest | undefined): VmResources {
   return {
-    cpus: CPUS,
+    cpus: request?.cpus ?? CPUS,
     memoryMib: request?.memoryMib ?? MEMORY_MIB,
     diskMib: request?.diskMib ?? ROOT_DISK_MIB,
   };

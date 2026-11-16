@@ -780,7 +780,7 @@ describe("sandbox create plan", () => {
     );
     if (resolution.status !== "ok") throw new Error("expected resolved secrets");
 
-    const resources = { cpus: 2 as const, memoryMib: 8192, diskMib: 20480 };
+    const resources = { cpus: 4, memoryMib: 8192, diskMib: 20480 };
     const createdPlan = buildSandboxCreatePlan({
       name: NAME,
       parentId: PARENT_ID,
@@ -794,7 +794,7 @@ describe("sandbox create plan", () => {
 
     expect(createdPlan.name).toBe(NAME);
     expect(createdPlan.image).toBe(GUEST_IMAGE);
-    expect(createdPlan.cpus).toBe(2);
+    expect(createdPlan.cpus).toBe(4);
     expect(createdPlan.memoryMib).toBe(8192);
     expect(createdPlan.maxMemoryMib).toBe(MAX_MEMORY_MIB);
     expect(createdPlan.rootDiskMib).toBe(20480);
@@ -853,7 +853,7 @@ describe("sandbox create plan", () => {
       plan: INPUT.plan,
       secrets: [],
       requestId: REQUEST_ID,
-      resources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
       resourcesSpecified: true,
     });
     const builder = new RecordingBuilder();
@@ -863,7 +863,7 @@ describe("sandbox create plan", () => {
     expect(builder.calls).toEqual([
       ["image", GUEST_IMAGE],
       ["rootDisk", 20480],
-      ["cpus", 2],
+      ["cpus", 4],
       ["memory", 8192],
       ["maxMemory", MAX_MEMORY_MIB],
       ["metricsSampleIntervalMs", METRICS_SAMPLE_INTERVAL_MS],

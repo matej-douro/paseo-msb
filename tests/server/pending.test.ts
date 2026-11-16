@@ -55,6 +55,23 @@ describe("createRequestFor", () => {
     );
   });
 
+  it("keeps an explicit CPU count", () => {
+    expect(
+      createRequestFor(
+        {
+          ...INPUT,
+          resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
+        },
+        PLAN,
+      ),
+    ).toEqual(
+      request({
+        resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
+        resourcesSpecified: true,
+      }),
+    );
+  });
+
   it("canonicalizes the plan order", () => {
     const ordered = createRequestFor(
       {

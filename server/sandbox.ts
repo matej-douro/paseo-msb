@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   CPUS,
+  CPUS_MAX,
+  CPUS_MIN,
   CREDENTIAL_NAMES,
   ERROR_DETAIL_LABEL,
   ERROR_LABEL,
@@ -261,7 +263,7 @@ export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCr
   return {
     name: request.name,
     image: GUEST_IMAGE,
-    cpus: CPUS,
+    cpus: resources.cpus,
     memoryMib: resources.memoryMib,
     maxMemoryMib: MAX_MEMORY_MIB,
     rootDiskMib: resources.diskMib,
@@ -661,8 +663,11 @@ function decodeObservedResources(
   config: Readonly<Record<string, unknown>> | null,
 ): VmObservedResources {
   const resources = asRecord(firstValue(config, ["resources"]));
-  const reportedCpus = readBoundedInteger(firstValue(resources, ["cpus"]), 1, 1_024);
-  if (reportedCpus !== null && reportedCpus !== CPUS) {
+  const rawCpus = firstValue(resources, ["cpus"]);
+  const reportedCpus = readBoundedInteger(rawCpus, CPUS_MIN, CPUS_MAX);
+  // A present but out-of-range CPU count is malformed, not unreported. An
+  // absent value keeps the legacy fixed shape, which was always the default.
+  if (rawCpus !== undefined && reportedCpus === null) {
     throw new SandboxDecodeError("invalid_config");
   }
 
@@ -671,7 +676,7 @@ function decodeObservedResources(
   const rootDisk = asRecord(firstValue(oci, ["rootDisk", "root_disk"]));
 
   return {
-    cpus: CPUS,
+    cpus: reportedCpus ?? CPUS,
     memoryMib: readBoundedInteger(
       firstValue(resources, ["memoryMib", "memory_mib"]),
       MEMORY_MIB_MIN,

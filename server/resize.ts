@@ -1,4 +1,4 @@
-import { CPUS, MAX_MEMORY_MIB, RESOURCES_ENV_VAR } from "../shared/constants";
+import { MAX_MEMORY_MIB, RESOURCES_ENV_VAR } from "../shared/constants";
 import type {
   ResizeOutcome,
   VmResizeInput,
@@ -202,7 +202,9 @@ function result(
 ): VmResizeResult {
   const pending =
     requested !== null &&
-    (requested.memoryMib !== observed.memoryMib || requested.diskMib !== observed.diskMib)
+    (requested.cpus !== observed.cpus ||
+      requested.memoryMib !== observed.memoryMib ||
+      requested.diskMib !== observed.diskMib)
       ? requested
       : null;
 
@@ -210,7 +212,7 @@ function result(
     name: input.name,
     id: input.id,
     result: outcome,
-    resources: { cpus: CPUS, memoryMib: observed.memoryMib, diskMib: observed.diskMib },
+    resources: { cpus: observed.cpus, memoryMib: observed.memoryMib, diskMib: observed.diskMib },
     requestedResources: pending,
   };
 }
@@ -309,7 +311,7 @@ function desiredResources(
   const memoryMib = memoryTarget ?? observed.memoryMib;
   const diskMib = diskTarget ?? observed.diskMib;
   if (memoryMib === null || diskMib === null) return null;
-  return { cpus: CPUS, memoryMib, diskMib };
+  return { cpus: observed.cpus, memoryMib, diskMib };
 }
 
 function decodeSandbox(

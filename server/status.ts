@@ -153,7 +153,8 @@ function sandboxChild(sandbox: LoadedSandbox, registrations: RegistrationsView):
 function pendingRestartFor(sandbox: DecodedSandbox): VmResources | null {
   const requested = sandbox.requestedResources;
   if (!requested) return null;
-  return sandbox.resources.memoryMib === requested.memoryMib &&
+  return sandbox.resources.cpus === requested.cpus &&
+    sandbox.resources.memoryMib === requested.memoryMib &&
     sandbox.resources.diskMib === requested.diskMib
     ? null
     : requested;

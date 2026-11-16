@@ -91,7 +91,7 @@ describe("decodeManagedSandbox", () => {
           { name: REQUEST_ENV_VAR, value: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f" },
           {
             name: RESOURCES_ENV_VAR,
-            value: JSON.stringify({ cpus: 2, memoryMib: 8192, diskMib: 20480 }),
+            value: JSON.stringify({ cpus: 4, memoryMib: 8192, diskMib: 20480 }),
           },
           { name: RESOURCES_SPECIFIED_ENV_VAR, value: "1" },
         ],
@@ -103,7 +103,7 @@ describe("decodeManagedSandbox", () => {
     expect(decoded!.plan).toBeNull();
     expect(decoded!.requestId).toBe("2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f");
     expect(decoded!.requestedResources).toEqual({
-      cpus: 2,
+      cpus: 4,
       memoryMib: 8192,
       diskMib: 20480,
     });
@@ -147,14 +147,27 @@ describe("decodeManagedSandbox", () => {
     expect(decoded!.resources).toEqual({ cpus: 2, memoryMib: null, diskMib: null });
   });
 
-  it("rejects a config that reports a different CPU count", () => {
+  it("reports the observed CPU count when it is not the default", () => {
     const handle = fakeSandbox({
       id: "sbx_1",
       name: "paseo-1",
       rawConfig: { resources: { cpus: 4 } },
     });
 
-    expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+    expect(decoded!.resources).toEqual({ cpus: 4, memoryMib: null, diskMib: null });
+  });
+
+  it("rejects a config that reports an out-of-range CPU count", () => {
+    for (const cpus of [0, 17, 2.5]) {
+      const handle = fakeSandbox({
+        id: "sbx_1",
+        name: "paseo-1",
+        rawConfig: { resources: { cpus } },
+      });
+
+      expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
+    }
   });
 
   it("rejects malformed request, resources, and specified-flag values", () => {

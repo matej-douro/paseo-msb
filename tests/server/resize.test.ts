@@ -155,6 +155,30 @@ describe("resizeVm", () => {
     );
   });
 
+  it("preserves a non-default CPU count through a RAM resize", async () => {
+    const { handle, context } = setup(
+      v11Options({
+        requestedResources: { cpus: 4, memoryMib: 4096, diskMib: 10240 },
+        configExtras: {
+          resources: { cpus: 4, memoryMib: 4096, maxMemoryMib: MAX_MEMORY_MIB },
+        },
+      }),
+    );
+
+    const result = await resizeVm(
+      context,
+      { name: NAME, id: ID, memoryMib: 8192 },
+      token(),
+    );
+
+    expect(result.result).toBe("applied");
+    expect(result.resources).toEqual({ cpus: 4, memoryMib: 8192, diskMib: 10240 });
+    expect(result.requestedResources).toBeNull();
+    expect(envValue(handle, RESOURCES_ENV_VAR)).toBe(
+      JSON.stringify({ cpus: 4, memoryMib: 8192, diskMib: 10240 }),
+    );
+  });
+
   it("grows the root disk without a restart", async () => {
     const { calls, context } = setup(v11Options());
 
