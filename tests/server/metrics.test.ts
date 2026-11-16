@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CPUS_MAX } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
 import {
   createMetricsCoalescer,
@@ -184,7 +185,7 @@ describe("readVmMetrics", () => {
     ["NaN", { cpuPercent: Number.NaN }],
     ["infinity", { cpuPercent: Number.POSITIVE_INFINITY }],
     ["negative", { diskWriteBytes: -1 }],
-    ["over-bound CPU", { cpuPercent: 201 }],
+    ["over-bound CPU", { cpuPercent: 100 * CPUS_MAX + 1 }],
     ["invalid timestamp", { timestamp: new Date("not-a-date") }],
   ])("rejects %s as unavailable", async (_label, patch) => {
     const { deps } = setup({ metrics: sample(patch) });

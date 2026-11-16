@@ -1,7 +1,8 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import {
-  CPUS,
+  CPUS_MAX,
+  CPUS_MIN,
   CREDENTIAL_NAMES,
   ERROR_LABEL,
   MANAGED_LABEL,
@@ -42,6 +43,8 @@ export const VmNameSchema = z
     message: "name must be a lowercase slug of 1-63 characters",
   });
 
+const CpusSchema = z.number().int().min(CPUS_MIN).max(CPUS_MAX);
+
 const MemoryMibSchema = z
   .number()
   .int()
@@ -60,18 +63,19 @@ const RootDiskMibSchema = z
     message: `diskMib must be a multiple of ${ROOT_DISK_MIB_STEP} above ${ROOT_DISK_MIB_MIN}`,
   });
 
-/** The optional complete resource pair accepted by Create. */
+/** The optional resource selection accepted by Create. CPU defaults to 2. */
 export const ResourceRequestSchema = z
   .object({
+    cpus: CpusSchema.optional(),
     memoryMib: MemoryMibSchema,
     diskMib: RootDiskMibSchema,
   })
   .strict();
 
-/** Desired resources: both values are always known. */
+/** Desired resources: every value is always known. */
 export const VmResourcesSchema = z
   .object({
-    cpus: z.literal(CPUS),
+    cpus: CpusSchema,
     memoryMib: MemoryMibSchema,
     diskMib: RootDiskMibSchema,
   })
@@ -84,7 +88,7 @@ export const VmResourcesSchema = z
  */
 export const VmObservedResourcesSchema = z
   .object({
-    cpus: z.literal(CPUS),
+    cpus: CpusSchema,
     memoryMib: z.number().int().min(MEMORY_MIB_MIN).max(MEMORY_MIB_MAX).nullable(),
     diskMib: z.number().int().min(ROOT_DISK_MIB_MIN).max(ROOT_DISK_MIB_MAX).nullable(),
   })
@@ -106,7 +110,7 @@ const ByteCountSchema = z.number().finite().nonnegative();
 export const MetricsSampleSchema = z
   .object({
     timestamp: z.iso.datetime(),
-    cpuPercent: z.number().finite().nonnegative().max(100 * CPUS),
+    cpuPercent: z.number().finite().nonnegative().max(100 * CPUS_MAX),
     memoryBytes: ByteCountSchema,
     memoryLimitBytes: ByteCountSchema,
     memoryAvailableBytes: ByteCountSchema.nullable(),

@@ -17,8 +17,11 @@ export const GUEST_IMAGE = "ghcr.io/getpaseo/paseo:0.15.4";
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_VERSION = "1.1.0";
 
-/** Fixed CPU count and default child shape. */
+/** Default CPU count and default child shape. */
 export const CPUS = 2;
+export const CPUS_MIN = 1;
+export const CPUS_MAX = 16;
+export const CPUS_STEP = 1;
 export const MEMORY_MIB = 4096;
 export const ROOT_DISK_MIB = 10_240;
 export const GUEST_PORT = 6767;

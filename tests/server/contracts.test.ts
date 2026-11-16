@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CPUS_MAX,
   METRICS_SAMPLE_INTERVAL_MS,
   METRICS_POLL_INTERVAL_MS,
   MAX_SAMPLE_FUTURE_SKEW_MS,
@@ -250,7 +251,7 @@ describe("sandbox names", () => {
 });
 
 describe("create resources", () => {
-  it("accepts an omitted name and resources or a complete explicit pair", () => {
+  it("accepts an omitted name and resources or an explicit selection", () => {
     expect(VmCreateInputSchema.safeParse({ requestId, plan }).success).toBe(true);
     expect(VmCreateInputSchema.safeParse({ requestId, plan, name: "my-vm" }).success).toBe(true);
     expect(
@@ -284,16 +285,26 @@ describe("create resources", () => {
     );
   });
 
-  it("rejects a CPU selection and unknown resource fields", () => {
+  it("accepts a bounded CPU selection and rejects unknown resource fields", () => {
     expect(
       VmCreateInputSchema.safeParse({
         requestId,
         plan,
         resources: { cpus: 4, memoryMib: 4096, diskMib: 10240 },
       }).success,
-    ).toBe(false);
+    ).toBe(true);
+    for (const cpus of [1, 2, 16]) {
+      expect(
+        ResourceRequestSchema.safeParse({ cpus, memoryMib: 4096, diskMib: 10240 }).success,
+      ).toBe(true);
+    }
+    for (const cpus of [0, 17, 2.5]) {
+      expect(
+        ResourceRequestSchema.safeParse({ cpus, memoryMib: 4096, diskMib: 10240 }).success,
+      ).toBe(false);
+    }
     expect(
-      ResourceRequestSchema.safeParse({ memoryMib: 4096, diskMib: 10240, cpus: 2 }).success,
+      ResourceRequestSchema.safeParse({ memoryMib: 4096, diskMib: 10240, extra: true }).success,
     ).toBe(false);
   });
 
@@ -464,7 +475,9 @@ describe("metrics availability", () => {
     expect(
       MetricsSampleSchema.safeParse({ ...sample, timestamp: "yesterday" }).success,
     ).toBe(false);
-    expect(MetricsSampleSchema.safeParse({ ...sample, cpuPercent: 201 }).success).toBe(false);
+    expect(
+      MetricsSampleSchema.safeParse({ ...sample, cpuPercent: 100 * CPUS_MAX + 1 }).success,
+    ).toBe(false);
     expect(MetricsSampleSchema.safeParse({ ...sample, memoryBytes: -1 }).success).toBe(false);
     expect(MetricsSampleSchema.safeParse({ ...sample, exitCode: 1 }).success).toBe(false);
   });
