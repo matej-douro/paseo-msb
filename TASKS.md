@@ -409,25 +409,25 @@ not from the registration-only rows exposed to the client.
 
 Acceptance:
 
-- [ ] First RPC initialization starts exactly one cleanup schedule; repeated
+- [x] First RPC initialization starts exactly one cleanup schedule; repeated
       RPCs do not create duplicates, and plugin cleanup stops the schedule.
-- [ ] Closing the UI does not stop cleanup. `vm.list` may trigger the same
+- [x] Closing the UI does not stop cleanup. `vm.list` may trigger the same
       pruner but never waits for it. No claim is made that cleanup runs before
       first plugin activation or while its subprocess is stopped.
-- [ ] Each sweep considers every `source.id = plugin:paseo-msb` registration,
+- [x] Each sweep considers every `source.id = plugin:paseo-msb` registration,
       including an older registration hidden behind a same-name live sandbox.
       An exact producer-and-generation match is attached, not pruned.
-- [ ] Registration-only DTOs are never used as the cleanup work queue.
-- [ ] The pruner reuses the per-name lifecycle lanes, skips unsettled native
+- [x] Registration-only DTOs are never used as the cleanup work queue.
+- [x] The pruner reuses the per-name lifecycle lanes, skips unsettled native
       mutations, re-reads the parent before removal, and retains the existing
       exact-generation proof. Parent `offline` alone never proves deletion.
-- [ ] At most one sweep runs at a time. Unverifiable names and removal failures
+- [x] At most one sweep runs at a time. Unverifiable names and removal failures
       remain actionable and retry after the existing short cooldown; confirmed
       removal makes the registration-only row disappear.
-- [ ] Restart reconstructs candidates from the parent and microsandbox. No
+- [x] Restart reconstructs candidates from the parent and microsandbox. No
       child database, registration mirror, durable cleanup queue, cleanup
       journal, or new parent/microsandbox API is introduced.
-- [ ] Unit tests cover schedule deduplication and shutdown, hidden same-name
+- [x] Unit tests cover schedule deduplication and shutdown, hidden same-name
       registrations, mutation-pending skips, fresh revalidation, unavailable
       inventory, removal failure and retry, cooldown, and restart reconstruction.
 
