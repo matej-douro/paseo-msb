@@ -62,7 +62,9 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
 
   const reservation = context.pending.reserve(createRequestFor(input, parsed.plan));
   if (reservation.status === "conflict") {
-    throw new Error(safeError("invalid_request").message);
+    throw new Error(
+      `${safeError("invalid_request").message} A previous attempt under this name must be retried or dismissed before creating a different shape.`,
+    );
   }
   if (reservation.status === "joined") {
     return { name: reservation.entry.name, started: Promise.resolve() };

@@ -183,6 +183,22 @@ describe("createVm", () => {
     expect(creator.createCount).toBe(1);
   });
 
+  it("explains a stale failed attempt that blocks a different shape", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator({ createGate: gate.promise });
+    const context = createContext(creator);
+
+    const first = startCreate(context, INPUT);
+    context.pending.fail(NAME, "create_failed");
+
+    expect(() => startCreate(context, { ...INPUT, plan: OTHER_PLAN })).toThrow(
+      "must be retried or dismissed",
+    );
+
+    gate.resolve();
+    await first.started;
+  });
+
   it("returns a chosen name immediately and keeps the requested resources pending", async () => {
     const gate = deferred<void>();
     const creator = new FakeSandboxCreator({ createGate: gate.promise });

@@ -32,6 +32,9 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 - A Create that meets a Delete tombstone completes that cleanup and allocates a
   fresh generation instead of reporting success for cleanup alone.
+- A Create blocked by an existing failed attempt for the same name now names
+  that recovery path (retry or dismiss) instead of only saying the request is
+  invalid.
 - A failed pending Create stays visible beside a same-name sandbox, so its error
   can be retried or dismissed. A post-allocation failure is reported once, on
   the sandbox row.
