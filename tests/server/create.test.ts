@@ -192,7 +192,7 @@ describe("createVm", () => {
     context.pending.fail(NAME, "create_failed");
 
     expect(() => startCreate(context, { ...INPUT, plan: OTHER_PLAN })).toThrow(
-      "must be retried or dismissed",
+      "retry or dismiss",
     );
 
     gate.resolve();

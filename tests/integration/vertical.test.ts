@@ -1541,6 +1541,9 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       // `deleting`. Its recorded shape matches, so Create completes that exact
       // cleanup and then allocates a replacement instead of reporting success
       // for cleanup alone.
+      // The full suite has already let one-time plugin recovery settle, so this
+      // Create is what drives the tombstone cleanup. A second tombstone is
+      // covered by the unit suite instead of this release path.
       const tombstone = await createFixtureSandbox({
         name,
         managed: true,
