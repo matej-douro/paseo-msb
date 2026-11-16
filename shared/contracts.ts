@@ -172,8 +172,6 @@ const PendingChildSchema = z
   .object({
     kind: z.literal("pending"),
     name: VmNameSchema,
-    /** Original identify for an idempotent retry. */
-    requestId: z.string().uuid(),
     /** Original provider/integration selection; retries must preserve it. */
     plan: ProvisionPlanSchema,
     phase: PhaseSchema,
@@ -254,18 +252,17 @@ export const VmListOutputSchema = z
   })
   .strict();
 
+/**
+ * A pending row has no generation id, so omitting `id` selects it. Supplying
+ * `id` selects the exact sandbox or registration-only row.
+ */
 export const VmDetailInputSchema = z
   .object({
     name: VmNameSchema,
     /** Optional generation id to disambiguate rows that share a name. */
     id: z.string().min(1).optional(),
-    /** Optional request token to select one same-name pending attempt. */
-    requestId: z.string().uuid().optional(),
   })
-  .strict()
-  .refine((value) => !(value.id && value.requestId), {
-    message: "id and requestId are mutually exclusive",
-  });
+  .strict();
 
 export const VmDetailOutputSchema = z
   .object({
@@ -283,9 +280,8 @@ export const VmDetailOutputSchema = z
 
 export const VmCreateInputSchema = z
   .object({
-    requestId: z.string().uuid(),
-    /** Optional name; omitted keeps the generated `paseo-<requestId>` identity. */
-    name: VmNameSchema.optional(),
+    /** Created atomically per name; a repeated name joins or restarts it. */
+    name: VmNameSchema,
     plan: ProvisionPlanSchema,
     /** Omitted means the default 4096 MiB RAM and 10240 MiB root disk. */
     resources: ResourceRequestSchema.optional(),
@@ -300,7 +296,7 @@ export const VmCreateOutputSchema = z
 
 export const VmDismissInputSchema = z
   .object({
-    requestId: z.string().uuid(),
+    name: VmNameSchema,
   })
   .strict();
 

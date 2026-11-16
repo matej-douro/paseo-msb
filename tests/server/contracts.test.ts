@@ -14,6 +14,7 @@ import {
   VmCreateInputSchema,
   VmDeleteInputSchema,
   VmDetailInputSchema,
+  VmDismissInputSchema,
   VmListOutputSchema,
   VmMetricsOutputSchema,
   VmNameSchema,
@@ -35,7 +36,7 @@ import {
 } from "../../shared/contracts";
 import { SAFE_ERROR_CODES, SAFE_ERROR_MESSAGES } from "../../shared/errors";
 
-const requestId = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
+const name = "my-vm";
 
 const plan = {
   providers: [{ provider: "pi" as const, llms: ["neuralwatt" as const] }],
@@ -103,7 +104,7 @@ describe("RPC contracts", () => {
 
   it("accepts a strict create request with a provider plan", () => {
     const parsed = VmCreateInputSchema.safeParse({
-      requestId,
+      name,
       plan: {
         providers: [
           { provider: "claude", llms: ["anthropic-api-key"] },
@@ -115,16 +116,21 @@ describe("RPC contracts", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("rejects empty, unknown, duplicate, and extra create fields", () => {
+  it("rejects empty, unknown, duplicate, missing-name, and extra create fields", () => {
     expect(
       VmCreateInputSchema.safeParse({
-        requestId,
+        name,
         plan: { providers: [], integrations: [] },
       }).success,
     ).toBe(false);
     expect(
       VmCreateInputSchema.safeParse({
-        requestId,
+        plan: { providers: [{ provider: "pi", llms: ["neuralwatt"] }], integrations: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      VmCreateInputSchema.safeParse({
+        name,
         plan: {
           providers: [{ provider: "unknown", llms: ["neuralwatt"] }],
           integrations: [],
@@ -133,7 +139,7 @@ describe("RPC contracts", () => {
     ).toBe(false);
     expect(
       VmCreateInputSchema.safeParse({
-        requestId,
+        name,
         plan: {
           providers: [{ provider: "pi", llms: ["neuralwatt", "neuralwatt"] }],
           integrations: [],
@@ -142,13 +148,28 @@ describe("RPC contracts", () => {
     ).toBe(false);
     expect(
       VmCreateInputSchema.safeParse({
-        requestId,
+        name,
         plan: {
           providers: [{ provider: "pi", llms: ["neuralwatt"] }],
           integrations: [],
         },
         value: "must-not-be-accepted",
       }).success,
+    ).toBe(false);
+    expect(
+      VmCreateInputSchema.safeParse({
+        name,
+        plan,
+        requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("dismisses by name only", () => {
+    expect(VmDismissInputSchema.safeParse({ name: "paseo-1" }).success).toBe(true);
+    expect(
+      VmDismissInputSchema.safeParse({ requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f" })
+        .success,
     ).toBe(false);
   });
 
@@ -176,15 +197,13 @@ describe("RPC contracts", () => {
     );
   });
 
-  it("selects one same-name pending attempt by requestId and never by both tokens", () => {
-    expect(VmDetailInputSchema.safeParse({ name: "paseo-1", requestId }).success).toBe(true);
+  it("selects a pending attempt by name and a row by generation", () => {
+    expect(VmDetailInputSchema.safeParse({ name: "paseo-1" }).success).toBe(true);
     expect(VmDetailInputSchema.safeParse({ name: "paseo-1", id: "sandbox_1" }).success).toBe(true);
     expect(
-      VmDetailInputSchema.safeParse({ name: "paseo-1", id: "sandbox_1", requestId }).success,
+      VmDetailInputSchema.safeParse({ name: "paseo-1", requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f" })
+        .success,
     ).toBe(false);
-    expect(VmDetailInputSchema.safeParse({ name: "paseo-1", requestId: "not-a-uuid" }).success).toBe(
-      false,
-    );
     expect(VmDetailInputSchema.safeParse({ name: "paseo-1", metrics: true }).success).toBe(false);
   });
 
@@ -251,14 +270,13 @@ describe("sandbox names", () => {
 });
 
 describe("create resources", () => {
-  it("accepts an omitted name and resources or an explicit selection", () => {
-    expect(VmCreateInputSchema.safeParse({ requestId, plan }).success).toBe(true);
-    expect(VmCreateInputSchema.safeParse({ requestId, plan, name: "my-vm" }).success).toBe(true);
+  it("requires a name and accepts omitted or explicit resources", () => {
+    expect(VmCreateInputSchema.safeParse({ name, plan }).success).toBe(true);
+    expect(VmCreateInputSchema.safeParse({ plan }).success).toBe(false);
     expect(
       VmCreateInputSchema.safeParse({
-        requestId,
+        name,
         plan,
-        name: "my-vm",
         resources: { memoryMib: 8192, diskMib: 20480 },
       }).success,
     ).toBe(true);
@@ -288,7 +306,7 @@ describe("create resources", () => {
   it("accepts a bounded CPU selection and rejects unknown resource fields", () => {
     expect(
       VmCreateInputSchema.safeParse({
-        requestId,
+        name,
         plan,
         resources: { cpus: 4, memoryMib: 4096, diskMib: 10240 },
       }).success,
@@ -309,7 +327,7 @@ describe("create resources", () => {
   });
 
   it("rejects an invalid create name", () => {
-    expect(VmCreateInputSchema.safeParse({ requestId, plan, name: "Mixed" }).success).toBe(false);
+    expect(VmCreateInputSchema.safeParse({ name: "Mixed", plan }).success).toBe(false);
   });
 });
 
@@ -391,7 +409,6 @@ describe("child resource placement", () => {
       VmChildSchema.safeParse({
         kind: "pending",
         name: "paseo-1",
-        requestId,
         plan,
         phase: "creating",
         error: null,

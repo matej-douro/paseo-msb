@@ -18,7 +18,7 @@ export interface ChildListProps {
   loading: boolean;
   selectedName: string | null;
   selectedId: string | null;
-  selectedRequestId: string | null;
+  selectedPending: boolean;
   theme: PluginTheme;
   compact: boolean;
   onSelect(child: VmChild): void;
@@ -31,7 +31,7 @@ export function ChildList({
   loading,
   selectedName,
   selectedId,
-  selectedRequestId,
+  selectedPending,
   theme,
   compact,
   onSelect,
@@ -78,12 +78,12 @@ export function ChildList({
 
       {data?.children.map((child) => (
         <ChildRow
-          // Pending attempts have no id, so the request ID keeps two rows that
-          // briefly share a name distinct.
-          key={`${child.kind}:${child.name}:${child.kind === "pending" ? child.requestId : child.id}`}
+          // A pending row has no id, so its kind keeps it distinct from a
+          // registration-only row that briefly shares the name.
+          key={`${child.kind}:${child.name}:${child.kind === "pending" ? "" : child.id}`}
           child={child}
           registrations={data.registrations}
-          selected={isChildSelected(child, selectedName, selectedId, selectedRequestId)}
+          selected={isChildSelected(child, selectedName, selectedId, selectedPending)}
           theme={theme}
           onSelect={() => onSelect(child)}
         />

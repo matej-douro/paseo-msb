@@ -9,20 +9,17 @@ import {
   type PendingCreateRequest,
 } from "../../server/pending";
 
-const REQUEST_ID = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
-const OTHER_REQUEST_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
-const NAME = `paseo-${REQUEST_ID}`;
+const NAME = "builder-1";
 
 const PLAN: CanonicalPlan = {
   providers: [{ provider: "pi", llms: ["neuralwatt"] }],
   integrations: [],
 };
 
-const INPUT: VmCreateInput = { requestId: REQUEST_ID, plan: PLAN };
+const INPUT: VmCreateInput = { name: NAME, plan: PLAN };
 
 function request(patch: Partial<PendingCreateRequest> = {}): PendingCreateRequest {
   return {
-    requestId: REQUEST_ID,
     name: NAME,
     plan: canonicalizePlan(PLAN),
     resources: { cpus: CPUS, memoryMib: MEMORY_MIB, diskMib: ROOT_DISK_MIB },
@@ -32,23 +29,21 @@ function request(patch: Partial<PendingCreateRequest> = {}): PendingCreateReques
 }
 
 describe("createRequestFor", () => {
-  it("derives the generated name and default resources", () => {
+  it("keeps the name and default resources", () => {
     expect(createRequestFor(INPUT, PLAN)).toEqual(request());
   });
 
-  it("keeps an explicit name, resources, and the specified flag", () => {
+  it("keeps explicit resources and the specified flag", () => {
     expect(
       createRequestFor(
         {
           ...INPUT,
-          name: "my-vm",
           resources: { memoryMib: 8192, diskMib: 20480 },
         },
         PLAN,
       ),
     ).toEqual(
       request({
-        name: "my-vm",
         resources: { cpus: CPUS, memoryMib: 8192, diskMib: 20480 },
         resourcesSpecified: true,
       }),
@@ -110,7 +105,6 @@ describe("pending create store", () => {
     if (reservation.status !== "reserved") throw new Error("expected a reservation");
 
     expect(reservation.entry).toMatchObject({
-      requestId: REQUEST_ID,
       name: NAME,
       plan: canonicalizePlan(PLAN),
       resources: { cpus: CPUS, memoryMib: MEMORY_MIB, diskMib: ROOT_DISK_MIB },
@@ -118,7 +112,7 @@ describe("pending create store", () => {
       phase: "creating",
       errorCode: null,
     });
-    expect(store.find(REQUEST_ID)).toBe(reservation.entry);
+    expect(store.find(NAME)).toBe(reservation.entry);
   });
 
   it("joins an identical running attempt", () => {
@@ -132,51 +126,10 @@ describe("pending create store", () => {
     expect(store.list()).toHaveLength(1);
   });
 
-  it("rejects a different request after a failure instead of restarting it", () => {
-    const store = createPendingCreateStore();
-    const first = store.reserve(request());
-    if (first.status !== "reserved") throw new Error("expected a reservation");
-
-    store.fail(REQUEST_ID, "create_failed", "image pulled slowly", first.entry);
-    expect(store.find(REQUEST_ID)).toMatchObject({ phase: "failed", errorCode: "create_failed" });
-
-    const retry = store.reserve(
-      request({
-        name: "my-vm",
-        resources: { cpus: CPUS, memoryMib: 8192, diskMib: 20480 },
-        resourcesSpecified: true,
-      }),
-    );
-
-    expect(retry.status).toBe("conflict");
-    expect(store.find(REQUEST_ID)).toMatchObject({ phase: "failed" });
-  });
-
-  it("restarts a failed attempt when the request still matches", () => {
-    const store = createPendingCreateStore();
-    const first = store.reserve(request());
-    if (first.status !== "reserved") throw new Error("expected a reservation");
-
-    store.fail(REQUEST_ID, "create_failed", "image pulled slowly", first.entry);
-    const retry = store.reserve(request());
-
-    expect(retry.status).toBe("reserved");
-    if (retry.status !== "reserved") throw new Error("expected a reservation");
-    expect(retry.entry).toMatchObject({
-      phase: "creating",
-      errorCode: null,
-      errorDetail: null,
-      name: NAME,
-      resourcesSpecified: false,
-    });
-    expect(store.find(REQUEST_ID)).toBe(retry.entry);
-  });
-
-  it("rejects a different name, plan, resources, or specified flag for the same request", () => {
+  it("rejects a different shape for the same name", () => {
     const store = createPendingCreateStore();
     store.reserve(request());
 
-    expect(store.reserve(request({ name: "other-vm" })).status).toBe("conflict");
     expect(
       store.reserve(
         request({
@@ -200,36 +153,55 @@ describe("pending create store", () => {
     expect(store.list()).toHaveLength(1);
   });
 
-  it("keeps same-name attempts from different requests distinct", () => {
+  it("restarts a failed attempt when the request still matches", () => {
     const store = createPendingCreateStore();
-    const first = store.reserve(request({ name: "shared-vm" }));
-    const second = store.reserve(request({ requestId: OTHER_REQUEST_ID, name: "shared-vm" }));
+    const first = store.reserve(request());
+    if (first.status !== "reserved") throw new Error("expected a reservation");
 
-    expect(first.status).toBe("reserved");
-    expect(second.status).toBe("reserved");
-    expect(
-      store.list().map((entry) => ({ requestId: entry.requestId, name: entry.name })),
-    ).toEqual([
-      { requestId: REQUEST_ID, name: "shared-vm" },
-      { requestId: OTHER_REQUEST_ID, name: "shared-vm" },
-    ]);
-    expect(store.find(REQUEST_ID)?.name).toBe("shared-vm");
-    expect(store.find(OTHER_REQUEST_ID)?.name).toBe("shared-vm");
+    store.fail(NAME, "create_failed", "image pulled slowly", first.entry);
+    const retry = store.reserve(request());
+
+    expect(retry.status).toBe("reserved");
+    if (retry.status !== "reserved") throw new Error("expected a reservation");
+    expect(retry.entry).toMatchObject({
+      phase: "creating",
+      errorCode: null,
+      errorDetail: null,
+      name: NAME,
+      resourcesSpecified: false,
+    });
+    expect(store.find(NAME)).toBe(retry.entry);
+  });
+
+  it("rejects a different shape after a failure instead of restarting it", () => {
+    const store = createPendingCreateStore();
+    const first = store.reserve(request());
+    if (first.status !== "reserved") throw new Error("expected a reservation");
+
+    store.fail(NAME, "create_failed", "image pulled slowly", first.entry);
+    expect(store.find(NAME)).toMatchObject({ phase: "failed", errorCode: "create_failed" });
+
+    const retry = store.reserve(
+      request({ resources: { cpus: CPUS, memoryMib: 8192, diskMib: 20480 }, resourcesSpecified: true }),
+    );
+
+    expect(retry.status).toBe("conflict");
+    expect(store.find(NAME)).toMatchObject({ phase: "failed" });
   });
 
   it("settles only the attempt it was given", () => {
     const store = createPendingCreateStore();
     const first = store.reserve(request());
     if (first.status !== "reserved") throw new Error("expected a reservation");
-    store.fail(REQUEST_ID, "create_failed", null, first.entry);
+    store.fail(NAME, "create_failed", null, first.entry);
     const second = store.reserve(request());
     if (second.status !== "reserved") throw new Error("expected a reservation");
 
-    store.settle(REQUEST_ID, first.entry);
-    expect(store.find(REQUEST_ID)).toBe(second.entry);
+    store.settle(NAME, first.entry);
+    expect(store.find(NAME)).toBe(second.entry);
 
-    store.settle(REQUEST_ID, second.entry);
-    expect(store.find(REQUEST_ID)).toBeNull();
+    store.settle(NAME, second.entry);
+    expect(store.find(NAME)).toBeNull();
   });
 });
 
@@ -239,32 +211,18 @@ describe("dismissPendingCreate", () => {
     const reservation = store.reserve(request());
     if (reservation.status !== "reserved") throw new Error("expected a reservation");
 
-    expect(() => dismissPendingCreate(store, REQUEST_ID)).toThrow("The request is invalid.");
+    expect(() => dismissPendingCreate(store, NAME)).toThrow("The request is invalid.");
 
-    store.fail(REQUEST_ID, "missing_credentials", null, reservation.entry);
-    expect(dismissPendingCreate(store, REQUEST_ID)).toEqual({
+    store.fail(NAME, "missing_credentials", null, reservation.entry);
+    expect(dismissPendingCreate(store, NAME)).toEqual({
       name: NAME,
       dismissed: true,
     });
-    expect(store.find(REQUEST_ID)).toBeNull();
-  });
-
-  it("dismisses one same-name attempt without touching the other", () => {
-    const store = createPendingCreateStore();
-    const first = store.reserve(request({ name: "shared-vm" }));
-    store.reserve(request({ requestId: OTHER_REQUEST_ID, name: "shared-vm" }));
-    if (first.status !== "reserved") throw new Error("expected a reservation");
-
-    store.fail(REQUEST_ID, "name_conflict", null, first.entry);
-    expect(dismissPendingCreate(store, REQUEST_ID)).toEqual({
-      name: "shared-vm",
-      dismissed: true,
-    });
-    expect(store.find(OTHER_REQUEST_ID)?.name).toBe("shared-vm");
+    expect(store.find(NAME)).toBeNull();
   });
 
   it("does not dismiss an unknown or already-settled attempt", () => {
     const store = createPendingCreateStore();
-    expect(() => dismissPendingCreate(store, REQUEST_ID)).toThrow("The child was not found.");
+    expect(() => dismissPendingCreate(store, NAME)).toThrow("The child was not found.");
   });
 });

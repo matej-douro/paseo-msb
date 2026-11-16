@@ -1,6 +1,8 @@
 import {
+  CPUS,
   ERROR_LABEL,
   MANAGED_LABEL,
+  MEMORY_MIB,
   PARENT_LABEL,
   PHASE_LABEL,
   PI_PREFIX,
@@ -9,9 +11,9 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
-  REQUEST_ENV_VAR,
   RESOURCES_ENV_VAR,
   RESOURCES_SPECIFIED_ENV_VAR,
+  ROOT_DISK_MIB,
   type CredentialName,
   type Phase,
 } from "../../shared/constants";
@@ -162,8 +164,7 @@ export interface FakeSandboxOptions {
   getJobError?: Error;
   /** Persisted provisioning plan for decode and provisioning tests. */
   plan?: CanonicalPlan;
-  /** Managed request marker and desired resources written to the environment. */
-  requestId?: string;
+  /** Desired resources written to the environment. */
   requestedResources?: { cpus: number; memoryMib: number; diskMib: number };
   resourcesSpecified?: boolean;
   /** Pre-existing provision status, for resume tests. */
@@ -289,9 +290,6 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
       { name: "PATH", value: "/home/paseo/.local/bin:/usr/local/bin:/usr/bin:/bin" },
       ...(options.plan
         ? [{ name: PLAN_ENV_VAR, value: JSON.stringify(options.plan) }]
-        : []),
-      ...(options.requestId !== undefined
-        ? [{ name: REQUEST_ENV_VAR, value: options.requestId }]
         : []),
       ...(options.requestedResources !== undefined
         ? [{ name: RESOURCES_ENV_VAR, value: JSON.stringify(options.requestedResources) }]
@@ -763,6 +761,12 @@ export class FakeSandboxCreator implements SandboxHost {
       phase: "creating",
       hostPort: request.hostPort,
       plan: request.plan,
+      requestedResources: request.resources ?? {
+        cpus: CPUS,
+        memoryMib: MEMORY_MIB,
+        diskMib: ROOT_DISK_MIB,
+      },
+      resourcesSpecified: request.resourcesSpecified ?? false,
       labelUpdates: this.labelUpdates,
       modifyGate: this.options.modifyGate,
       execError: this.options.execError,

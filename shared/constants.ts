@@ -75,12 +75,10 @@ export const ERROR_DETAIL_LABEL = "paseo-msb-error-detail";
 export const PLAN_ENV_VAR = "PASEO_MSB_PLAN";
 
 /**
- * V1.1 sandbox environment variables. They carry the request identity and the
- * desired resources, which let a repeated Create distinguish its own generation
- * from a different attempt that briefly shares the same name. Configuration
- * only: these values never authorize a mutation.
+ * V1.1 sandbox environment variables. They record the desired resources so a
+ * repeated Create or Repair can compare the existing shape with the request.
+ * Configuration only: these values never authorize a mutation.
  */
-export const REQUEST_ENV_VAR = "PASEO_MSB_REQUEST";
 export const RESOURCES_ENV_VAR = "PASEO_MSB_RESOURCES";
 export const RESOURCES_SPECIFIED_ENV_VAR = "PASEO_MSB_RESOURCES_SPECIFIED";
 
@@ -156,14 +154,14 @@ export const REGISTRATION_SOURCE = PLUGIN_ID;
 export const REGISTRATION_PRODUCER_ID = `plugin:${PLUGIN_ID}`;
 
 /**
- * Child sandbox names are `paseo-<requestId>`, per DESIGN.md. This is
- * deliberately shorter than the plugin ID; ownership is proven by the managed
- * and parent labels, and the current generation is the exact handle id.
+ * A generated child name is `paseo-<token>`, per DESIGN.md. This is deliberately
+ * shorter than the plugin ID; ownership is proven by the managed and parent
+ * labels, and the current generation is the exact handle id.
  */
 export const MANAGED_NAME_PREFIX = "paseo-";
 
-export function sandboxName(requestId: string): string {
-  return `${MANAGED_NAME_PREFIX}${requestId}`;
+export function generatedChildName(token: string): string {
+  return `${MANAGED_NAME_PREFIX}${token}`;
 }
 
 /** Read-side size bounds. */

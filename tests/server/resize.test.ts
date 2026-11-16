@@ -16,7 +16,6 @@ import {
 
 const NAME = "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
 const ID = "sandbox_1";
-const REQUEST_ID = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
 
 function token(): LaneToken {
   const controller = new AbortController();
@@ -34,7 +33,6 @@ const CAP_CONFIG = () => ({
 
 function v11Options(extra: Partial<FakeSandboxOptions> = {}): Partial<FakeSandboxOptions> {
   return {
-    requestId: REQUEST_ID,
     requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
     resourcesSpecified: true,
     configExtras: CAP_CONFIG(),

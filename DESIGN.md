@@ -46,7 +46,7 @@ The wide layout keeps the list and selected detail side by side. The compact lay
 
 Each row shows the child's name, setup health, VM status, and—when the V1.1 resource presentation is added—known RAM and root-disk size. A pending row shows its requested resources instead. Raw phase, runtime, registration state, and stable ID belong in the detail view; the row retains a short, safe error message when something is wrong.
 
-If two pending attempts briefly have the same name, the current implementation uses their request IDs to distinguish the rows and open the correct detail. This is a consequence of the reservation mechanism, not a user flow the design needs to preserve; section 2.3 explains the simpler alternative.
+The name is the create identity: at most one pending attempt is active per name, and a live sandbox with that name replaces an active pending row. A failed attempt stays visible beside a same-name sandbox or leftover registration-only child, so its failure can be retried or dismissed.
 
 Loading, genuinely empty, partially unavailable, and failed inventory are distinct states. An unavailable inventory API must never look like an empty list or proof that a child is gone.
 
@@ -98,13 +98,13 @@ Create is a single confirmation flow with the following choices. This mockup mir
 
 #### Name
 
-The name is optional. If omitted, the plugin generates `paseo-<requestId>` and uses it as the field placeholder. A custom name must:
+The name is optional in the form. If omitted, the plugin generates `paseo-<uuid>` for that attempt and shows it as the field placeholder; the generated name is submitted explicitly. A custom name must:
 
 - be 1–63 characters;
 - contain only lowercase ASCII letters, digits, and internal hyphens; and
 - start and end with a letter or digit.
 
-Whitespace, `/`, and path or URL punctuation are rejected. Names cannot be changed after creation. Strict name allocation prevents two live children from claiming the same name; a conflicting request fails rather than adopting or overwriting the existing child.
+Whitespace, `/`, and path or URL punctuation are rejected. Names cannot be changed after creation. The name is the create identity: strict name allocation prevents two live children from claiming the same name, and a repeat with the same name joins only when its plan and resource shape match; otherwise the request fails rather than adopting or overwriting the existing child.
 
 #### Resources
 
@@ -129,9 +129,9 @@ Only credentials required by the selected options enter the child. The plan cont
 
 #### Submit and retry
 
-Accepting Create closes the modal and immediately adds a pending child; setup continues in the background. Synchronous validation and credential errors stay in the modal. An asynchronous `name_conflict` appears on the new pending child, which the user can dismiss.
+Accepting Create closes the modal and immediately adds a pending child; setup continues in the background. Synchronous validation and credential errors stay in the modal. An asynchronous setup failure (for example `name_conflict`, `invalid_request`, or `delete_failed`) appears on the new pending child, which the user can retry or dismiss.
 
-A failed pending create can be retried with its original request ID, name, resources, and plan. Retrying an existing sandbox joins its reconciliation instead of replaying setup or allocating another VM. **Dismiss** only removes an unwanted failed pending presentation; it never destroys a VM or registration.
+A failed pending create can be retried with its original name, resources, and plan. Retrying an existing sandbox joins its reconciliation instead of replaying setup or allocating another VM. **Dismiss** only removes an unwanted failed pending presentation; it never destroys a VM or registration.
 
 ### 1.4 Follow setup and recovery
 
@@ -308,56 +308,47 @@ There is no atomic transaction spanning microsandbox and the parent daemon. Corr
 
 ### 2.2 State and observation
 
-There is **no Paseo settings document**. The only durable plugin-owned state is the credential store. There is no durable child inventory, registration mirror, cleanup queue, or cleanup journal. Volatile state is limited to disposable work state: pending creates, in-flight lifecycle lanes and native mutations, short-lived caches and metrics reads, a bounded per-selection metrics chart buffer, and cleanup scheduling/cooldowns. None of it is authoritative, and a restart rebuilds cleanup work from the parent and microsandbox. A pending create retains its request ID, chosen name, canonical provider/integration plan, requested resources, and whether resources were explicitly supplied—never credential values.
+There is **no Paseo settings document**. The only durable plugin-owned state is the credential store. There is no durable child inventory, registration mirror, cleanup queue, or cleanup journal. Volatile state is limited to disposable work state: pending creates, in-flight lifecycle lanes and native mutations, short-lived caches and metrics reads, a bounded per-selection metrics chart buffer, and cleanup scheduling/cooldowns. None of it is authoritative, and a restart rebuilds cleanup work from the parent and microsandbox. A pending create retains its name, canonical provider/integration plan, requested resources, and whether resources were explicitly supplied—never credential values.
 
 The client polls `vm.list` and `vm.detail` only while the screen is mounted. While a running sandbox's detail is visible, it also polls `vm.metrics` every 3 seconds; list and detail retain their normal cadence. Polling observes host-side work but does not drive it. Detached VMs and provisioning jobs continue without the UI, and the registration pruner has its own lightweight schedule while the plugin server is active.
 
-`vm.list` merges pending creates, managed sandboxes, and registrations, including registration-only children. A sandbox replaces the pending attempt it owns by request marker, or the legacy pending attempt whose generated name matches. Losing same-name attempts remain visible until dismissed. API failures produce explicit errors or partial results, never an authoritative empty inventory.
+`vm.list` merges pending creates, managed sandboxes, and registrations, including registration-only children. An active pending attempt is replaced when a sandbox with its name exists; a failed attempt remains visible beside a same-name sandbox or registration-only child so its error stays actionable. API failures produce explicit errors or partial results, never an authoritative empty inventory.
 
 Public DTOs are allowlisted. Raw microsandbox config, environment, and secret values never enter them. Resource values are bounded integers or `null` for unreported legacy fields; metrics are bounded numeric samples.
 
 ### 2.3 Identity, metadata, and registration
 
-The design distinguishes four identities:
+The design distinguishes three identities:
 
 | Identity | Role |
 | --- | --- |
-| `requestId` | A client-generated UUID identifying a Create attempt and allowing safe retry. |
-| Sandbox name | The logical identifier used by the UI, lookup, ownership, and Paseo registration. |
+| Sandbox name | The create identity and logical identifier used by the UI, lookup, ownership, pending reservation, and Paseo registration. |
 | `handle.id` | The microsandbox generation token used to protect every mutation and Delete from same-name replacement. |
 | `(source.id, source.key)` | The authenticated parent-registration identity, with `source.key` equal to the current generation ID. |
 
-#### Request attempts and names
+#### Names and Create attempts
 
-An omitted name becomes `paseo-<requestId>`; a supplied name is used exactly after validation. There is no rename operation: renaming would require replacing the sandbox and is outside V1.1.
+The form generates `paseo-<uuid>` when the name is left blank and submits it explicitly; a supplied name is used exactly after validation. `vm.create` requires the name. There is no rename operation: renaming would require replacing the sandbox and is outside V1.1.
 
-Pending attempts are keyed by request ID. Rows and detail selection use that token when same-name attempts briefly coexist; `vm.detail` accepts an optional `requestId` to disambiguate them. A live sandbox supersedes the pending attempt with the same request marker, or, for a markerless legacy VM, the pending attempt whose generated name equals the sandbox name.
+Pending attempts are keyed by name, so at most one is active per name. A repeated Create must match the original canonical provider/integration plan, resources, and resources-specified flag: an identical request joins the running attempt, a failed attempt restarts, and a different shape receives synchronous `invalid_request`. A live sandbox supersedes an active pending row; a failed attempt stays visible beside it.
 
-**Why same-name pending rows exist today.** `CreateChild` generates a fresh UUID for each modal session, and `createPendingCreateStore()` in `server/pending.ts` reserves entries only by that UUID. It does not reserve a name across different pending requests. Two requests can therefore reserve the same custom name before either has allocated a VM. The per-name lifecycle lane serializes their actual work; once one request owns a live generation, the other receives `name_conflict`. If the first fails before allocation, the later request can still proceed. Request IDs keep selection, Retry, Dismiss, and failure output attached to the correct row.
+The reconciler looks the sandbox up by name. A Create that finds an existing managed sandbox under its name joins it only when the recorded shape matches: the persisted plan (or, for a legacy child, the credential names it was created with) plus the desired resources and the resources-specified flag. A mismatch returns `invalid_request` and never rewrites the child; a failure after allocation can appear on both the sandbox and the pending attempt, with Repair and Retry acting on the same generation. A sandbox owned by another plugin or parent returns `name_conflict` and is never adopted or relabelled.
 
-Idempotent retry does not require this duplication: repeating the same UUID already joins or restarts the same entry. A simpler contract under consideration is to reserve each pending name across different request IDs. An identical request ID would still join or retry, while a different request ID for that name would receive synchronous `name_conflict`; a failed row would be retried or dismissed before a new attempt could use its name. That would remove same-name row disambiguation from the UI without weakening request idempotency.
-
-Reusing a live request ID joins the same reconciliation. The repeated request must use the original name, canonical provider/integration plan, resources, and resources-specified flag. Before allocating, Create scans managed inventory for `PASEO_MSB_REQUEST`:
-
-- If the request owns a generation under a different name or with a different plan or resource selection, return `invalid_request`; never allocate a second VM.
-- A different live request under the requested name returns `name_conflict` and is never adopted or relabelled.
-- A markerless legacy generation can join only when its name equals `paseo-<requestId>` and resources were omitted. V1 Create had no resource choice, so an explicit resource selection is rejected for that generation.
-- Once the generation no longer exists, reusing the request ID is a new attempt. A leftover registration-only child is not adopted and remains actionable.
+A markerless V1 sandbox has no resource variables. It can be joined under its name when the requested plan's credentials match the generation and the request omitted resources; an explicit resource selection is rejected. Once the generation no longer exists, a leftover registration-only child is not adopted: a Create under that name proceeds, and cleanup removes the stale registration.
 
 Strict name-create prevents duplicate allocation. The name identifies the current managed generation, while `handle.id` identifies that generation exactly. Every guest operation, resize, and destroy uses the loaded handle and verifies its generation; an unverified fresh name lookup is not a valid reconnect.
 
 #### Sandbox configuration and labels
 
-New managed sandboxes persist the request, canonical plan, and desired resources in guest environment variables:
+New managed sandboxes persist the canonical plan and desired resources in guest environment variables:
 
 ```text
-PASEO_MSB_REQUEST=<requestId>
 PASEO_MSB_PLAN=<canonical plan JSON>
 PASEO_MSB_RESOURCES=<canonical { cpus, memoryMib, diskMib } JSON>
 PASEO_MSB_RESOURCES_SPECIFIED=0|1
 ```
 
-These values are configuration and recovery hints, not ownership proof. `PASEO_MSB_RESOURCES_SPECIFIED` records the original Create shape and is not changed by resize. V1 sandboxes may have no request or resource variables; the generated-name rule keeps them recoverable without adopting them into a different request.
+These values are configuration and recovery hints, not ownership proof. `PASEO_MSB_RESOURCES_SPECIFIED` records the original Create shape and is not changed by resize. V1 sandboxes may have no resource variables; they remain recoverable under their name without being adopted into a different attempt.
 
 New managed sandboxes have only these labels:
 
@@ -397,28 +388,28 @@ The pinned `microsandbox@0.7.14` `modify()` does not bind a captured generation.
 - registers every native `modify()` promise in a per-name mutation registry—including phase, error, environment, resource, and `deleting` tombstone labels—and holds the lifecycle lane until it settles or a short settlement bound expires;
 - makes Delete and same-name allocation consult that registry and return `mutation_pending` instead of destroying or allocating while a mutation remains registered;
 - registers the Delete tombstone itself and waits for its settlement before destruction; if it cannot settle within the bound, Delete does not destroy;
-- treats phase, error, request, and resource values as best-effort configuration hints, never authorization for destruction; and
+- treats phase, error, and resource values as best-effort configuration hints, never authorization for destruction; and
 - destroys only through `destroy()` on the exact handle after refresh/compare, which the SDK rejects for a replaced generation.
 
 A residual race remains: an external actor can replace the generation between refresh/compare and a mutation write. The plugin serializes its own Delete and same-name allocation behind the mutation registry, but an external replacement can still inherit that write and be acted on by later recovery. Closing this window requires an SDK conditional-mutation primitive; the design must not describe it as closed without one.
 
 ### 2.5 Create, reconciliation, and readiness
 
-`vm.create({ requestId, name?, plan, resources? })` validates the request, records a pending attempt with the derived name and canonical resource shape, starts host-side work, and returns `{ name }` immediately.
+`vm.create({ name, plan, resources? })` validates the request, records a pending attempt under that name with the canonical resource shape, starts host-side work, and returns `{ name }` immediately.
 
 `resources` is either omitted for defaults or contains `cpus`, `memoryMib`, and `diskMib`; `cpus` may be omitted and defaults to 2, while explicit RAM and disk are required when a resources object is supplied. The plan contains provider and LLM identifiers plus integrations, never values. Background Create, startup recovery, and manual Repair all invoke the same idempotent reconciler. Plugin cleanup aborts further side effects promptly, and runners revalidate their generation and tombstone after uncertain awaits.
 
 The reconciler observes actual resources and advances only unambiguous steps:
 
-1. **Resolve the attempt.** Reject an unsettled native mutation with `mutation_pending`. Scan managed inventory for the request marker and apply the request-reuse and name-conflict rules in section 2.3. The manifest declares the parent floor, the package pins the SDK, and the release suite verifies the supported parent/SDK/runtime combination. Only when initial creation is needed, resolve required credential values from the store and then the parent environment. Recovery of an existing sandbox needs its persisted plan, never old credential values.
-2. **Allocate if absent.** Strictly create the pinned image, detached, with requested CPU and RAM, `maxMemory` set to the allowed maximum for later live hotplug where supported, the requested managed root disk, a 2-second metrics interval, managed labels and request/plan/resource variables, only selected header-only secrets, and a loopback-only published port for guest 6767. The verified image requires explicit `/usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint`. Host port `0` is unsupported, so the plugin probes and retries internally. If Create fails but the named managed sandbox appeared, continue through that exact handle.
+1. **Resolve the attempt.** Reject an unsettled native mutation with `mutation_pending`. Look the sandbox up by name and apply the shape and name-conflict rules in section 2.3. A Create whose shape checks pass over the name's Delete tombstone completes that exact cleanup first, then allocates a fresh generation; if another tombstone appears behind the first, the attempt fails with `delete_failed` instead of chasing cleanup. The manifest declares the parent floor, the package pins the SDK, and the release suite verifies the supported parent/SDK/runtime combination. Only when initial creation is needed, resolve required credential values from the store and then the parent environment. Recovery of an existing sandbox needs its persisted plan, never old credential values.
+2. **Allocate if absent.** Strictly create the pinned image, detached, with requested CPU and RAM, `maxMemory` set to the allowed maximum for later live hotplug where supported, the requested managed root disk, a 2-second metrics interval, managed labels and plan/resource variables, only selected header-only secrets, and a loopback-only published port for guest 6767. The verified image requires explicit `/usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint`. Host port `0` is unsupported, so the plugin probes and retries internally. If Create fails but the named managed sandbox appeared, continue through that exact handle.
 3. **Provision once.** Materialize content-addressed `/home/paseo/.paseo-msb/provision-<planHash>.sh` and run it as one detached job. The status file is the success proof. Each step probes first so retries skip completed work. Await one active matching job; never start another because inventory or inspection failed, and preserve uncertain `JobError.jobId` values when available.
 4. **Advance after proof.** After a successful status, move to `registering`.
 5. **Register and verify.** Ensure the exact producer/source-key registration with idempotent `hosts.add` or deliberate `hosts.update`, wait for routed online state, call `providers.refresh({ providers: selected })`, and confirm every selected provider in a provider snapshot before moving to `ready`.
 
 The child daemon binds only to parent loopback and runs without `PASEO_PASSWORD`; the authenticated parent is the security boundary.
 
-Provisioning failures are fatal and preserve the sandbox, jobs, and registration for inspection and retry. Running jobs, timeouts, inspection failures, registration failures or timeouts, and provider unavailability retain the actionable phase and a safe error. Retry Create or Repair re-runs the idempotent script. Retrying an empty pre-create failure uses the same request ID, name, and resources; after a sandbox exists, repeated Create joins reconciliation rather than replaying side effects.
+Provisioning failures are fatal and preserve the sandbox, jobs, and registration for inspection and retry. Running jobs, timeouts, inspection failures, registration failures or timeouts, and provider unavailability retain the actionable phase and a safe error. Retry Create or Repair re-runs the idempotent script. Retrying an empty pre-create failure reuses the same name and resources; after a sandbox exists, repeated Create joins reconciliation rather than replaying side effects.
 
 Detached VMs normally remain running across plugin and parent-daemon restarts. V1.1 has no general start operation for stopped VMs and no separate lifecycle controls. The only plugin-initiated restart is the explicit resize confirmation.
 
@@ -549,16 +540,16 @@ A different live ID proves only that the old generation is stale. Lookup, decode
 
 If no sandbox exists, Delete skips tombstoning and destruction. It removes a registration only when its authenticated producer, `source.key = id`, and `metadata.name = name` all match; otherwise it leaves the registration untouched. No matching sandbox or registration is already-missing success.
 
-Failure after destruction leaves a visible, actionable registration-only child. Reload during deletion resumes cleanup, never setup. While registration-only cleanup remains, same-request Create joins that cleanup instead of creating a replacement. An old Delete ID cannot destroy a newer same-name generation.
+Failure after destruction leaves a visible, actionable registration-only child. Reload during deletion resumes cleanup, never setup. A Create under the same name whose shape matches completes that exact cleanup, then allocates a fresh generation; a second tombstone makes the attempt fail rather than racing cleanup. An old Delete ID cannot destroy a newer same-name generation.
 
 ### 2.10 RPC surface
 
 | RPC | Purpose |
 | --- | --- |
 | `vm.list` | Merge pending, sandbox, and registration-only children; report available/stored credential names; expose each child's name, plan, resources, progress, and safe errors. |
-| `vm.detail` | Return one child's plan, current and requested resources, registration state, and bounded sandbox/provision-job logs when a sandbox exists. Accept optional `requestId` for same-name pending attempts. |
-| `vm.create` | Start or join one idempotent background Create from an optional name, resources, and provider/integration plan; return the derived name. |
-| `vm.dismiss` | Remove a failed pending Create that has not become the user's desired attempt, without destroying a sandbox or registration. |
+| `vm.detail` | Return one child's plan, current and requested resources, registration state, and bounded sandbox/provision-job logs when a sandbox exists. Omit `id` to select a pending attempt by name; pass `id` to select the exact sandbox or registration-only generation. |
+| `vm.create` | Start or join one idempotent background Create from a required name, resources, and provider/integration plan; a repeated name joins or restarts the attempt. |
+| `vm.dismiss` | Remove a failed pending Create by name that has not become the user's desired attempt, without destroying a sandbox or registration. |
 | `vm.metrics` | Return one exact generation's live metrics snapshot or fixed unavailable reason, without reading inventory, jobs, or logs. |
 | `vm.resize` | Change RAM and/or grow the root disk of the exact generation, optionally restarting a running VM after explicit confirmation. |
 | `vm.delete` | Destroy the exact generation and remove its registration. |
@@ -571,8 +562,8 @@ Failure after destruction leaves a visible, actionable registration-only child. 
 
 The release test must drive all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and after a deletion tombstone, Repair, Dismiss, and Delete. It must also cover:
 
-- generated and custom names, duplicate-name rejection, two same-name pending attempts, different-request collision, and legacy generated-name recovery without adoption;
-- repeated request IDs after readiness, including rejection of a different name, selection, resources, or resources-specified flag instead of creating a second VM, plus markerless legacy rejection of explicit resources;
+- generated and custom names, duplicate-name rejection, repeat-create joining and shape rejection, and legacy name-based recovery without adoption;
+- repeated Creates after readiness, including rejection of a different plan, resources, or resources-specified flag instead of creating a second VM, plus legacy rejection of explicit resources;
 - registration label and metadata presenting the chosen name in the parent host directory;
 - background stale-registration convergence without UI polling, including older registrations hidden behind same-name live VMs, retry after removal failure, `VM state unknown` rather than `Missing` when proof is unavailable, and candidate reconstruction after plugin restart;
 - create-time RAM and root-disk values and resource decoding for new and legacy V1 sandboxes, including nullable legacy fields;

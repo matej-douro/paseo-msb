@@ -132,7 +132,6 @@ describe("readVmDetail", () => {
       integrations: [],
     };
     const pending = {
-      requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       name: "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       plan,
       resources: { cpus: 2 as const, memoryMib: 4096, diskMib: 10240 },
@@ -150,7 +149,6 @@ describe("readVmDetail", () => {
     expect(detail.child).toEqual({
       kind: "pending",
       name: pending.name,
-      requestId: pending.requestId,
       plan,
       phase: "creating",
       error: null,
@@ -227,7 +225,6 @@ describe("readVmDetail", () => {
       metadata: { source: "paseo-msb", name },
     });
     const failedPending = {
-      requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
       name,
       plan: {
         providers: [{ provider: "pi" as const, llms: ["anthropic-api-key" as const] }],
@@ -256,12 +253,33 @@ describe("readVmDetail", () => {
     expect(byId.child).toMatchObject({ kind: "registration", id: "sandbox_1" });
   });
 
-  it("selects a same-name pending attempt by requestId", async () => {
+  it("selects the failed pending row by name and the sandbox by id", async () => {
+    const handle = fakeSandbox({ id: "sandbox_1", name: "shared-vm" });
+    const failed = {
+      name: "shared-vm",
+      plan: { providers: [{ provider: "pi" as const, llms: ["anthropic-api-key" as const] }], integrations: [] },
+      resources: { cpus: 2 as const, memoryMib: 4096, diskMib: 10240 },
+      resourcesSpecified: false,
+      phase: "failed" as const,
+      createdAt: 1,
+      errorCode: "invalid_request" as const,
+      errorDetail: null,
+    };
+    const ctx = context(fakeRuntime([handle]), [failed]);
+
+    const byName = await readVmDetail(ctx, { name: "shared-vm" });
+    expect(byName.child).toMatchObject({ kind: "pending", phase: "failed" });
+
+    const byId = await readVmDetail(ctx, { name: "shared-vm", id: "sandbox_1" });
+    expect(byId.child).toMatchObject({ kind: "sandbox", id: "sandbox_1" });
+  });
+
+  it("returns no child for an unknown generation", async () => {
     const plan: CanonicalPlan = {
       providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
       integrations: [],
     };
-    const base = {
+    const pending = {
       name: "shared-vm",
       plan,
       resources: { cpus: 2 as const, memoryMib: 4096, diskMib: 10240 },
@@ -271,30 +289,19 @@ describe("readVmDetail", () => {
       errorCode: null,
       errorDetail: null,
     };
-    const first = { ...base, requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f" };
-    const second = {
-      ...base,
-      requestId: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
-      createdAt: 2,
-    };
-    const ctx = context(fakeRuntime([]), [first, second]);
+    const ctx = context(fakeRuntime([]), [pending]);
 
-    const selected = await readVmDetail(ctx, { name: "shared-vm", requestId: second.requestId });
-    expect(selected.child).toMatchObject({ kind: "pending", requestId: second.requestId });
+    const byName = await readVmDetail(ctx, { name: "shared-vm" });
+    expect(byName.child).toMatchObject({ kind: "pending", name: "shared-vm" });
 
-    const missing = await readVmDetail(ctx, {
-      name: "shared-vm",
-      requestId: "11111111-1111-4111-8111-111111111111",
-    });
+    const missing = await readVmDetail(ctx, { name: "shared-vm", id: "sandbox_missing" });
     expect(missing.child).toBeNull();
   });
 
-  it("projects resources but not the request marker", async () => {
-    const requestId = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
+  it("projects resources without exposing the raw environment", async () => {
     const handle = fakeSandbox({
       id: "sandbox_1",
       name: "paseo-1",
-      requestId,
       requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
       resourcesSpecified: true,
     });
@@ -306,7 +313,6 @@ describe("readVmDetail", () => {
       resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
       requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
     });
-    expect(JSON.stringify(detail.child)).not.toContain(requestId);
     expect(JSON.stringify(detail.child)).not.toContain(SECRET_VALUE);
     expect(VmDetailOutputSchema.parse(detail)).toEqual(detail);
   });

@@ -24,7 +24,7 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_SOURCE,
-  sandboxName,
+  generatedChildName,
   type CredentialName,
   type Phase,
 } from "../../shared/constants";
@@ -392,7 +392,7 @@ async function assertNoCanarySince(start: number): Promise<void> {
   expectNoStoredValue("plugin logs", pluginLogs);
 }
 
-/** A different valid plan for the same request ID must be rejected. */
+/** A different valid plan under the same name must be rejected. */
 function alternativePlan(plan: CanonicalPlan): CanonicalPlan {
   return plan.providers.some((provider) => provider.provider === "pi")
     ? canonicalizePlan({
@@ -698,14 +698,13 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         throw new Error("the release test did not prepare any credential");
       }
 
-      const requestId = randomUUID();
-      const name = sandboxName(requestId);
+      const name = generatedChildName(randomUUID());
       createdName = name;
 
       // vm.create must return before host work. The sandbox does not exist yet.
       const createStartedAt = Date.now();
       const created = await rpc<VmCreateResult>(vmCreateRpc.name, {
-        requestId,
+        name,
         plan,
       });
       const createElapsedMs = Date.now() - createStartedAt;
@@ -1118,11 +1117,10 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         });
         storedByTest.add(credential.name);
       }
-      const staleRequestId = randomUUID();
-      const staleName = sandboxName(staleRequestId);
+      const staleName = generatedChildName(randomUUID());
       trackSandbox(staleName);
       await rpc<VmCreateResult>(vmCreateRpc.name, {
-        requestId: staleRequestId,
+        name: staleName,
         plan,
       });
 
@@ -1255,21 +1253,20 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       }
       await ensureStoredCredentials();
 
-      const requestId = randomUUID();
-      const name = sandboxName(requestId);
+      const name = generatedChildName(randomUUID());
       trackSandbox(name);
 
       // Two identical Creates must join one attempt. A different plan for the
-      // same request ID is rejected before any host-side work.
+      // same name is rejected before any host-side work.
       const [first, second] = await Promise.all([
-        rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan }),
-        rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan }),
+        rpc<VmCreateResult>(vmCreateRpc.name, { name, plan }),
+        rpc<VmCreateResult>(vmCreateRpc.name, { name, plan }),
       ]);
       expect(first).toEqual({ name });
       expect(second).toEqual({ name });
       await expect(
         rpc<VmCreateResult>(vmCreateRpc.name, {
-          requestId,
+          name,
           plan: alternativePlan(plan),
         }),
       ).rejects.toThrow(safeError("invalid_request").message);
@@ -1394,11 +1391,10 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       }
       await ensureStoredCredentials();
 
-      const requestId = randomUUID();
-      const name = sandboxName(requestId);
+      const name = generatedChildName(randomUUID());
       trackSandbox(name);
 
-      await rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan });
+      await rpc<VmCreateResult>(vmCreateRpc.name, { name, plan });
       const firstHandle = await waitFor(
         "the first generation to appear",
         async () => {
@@ -1432,9 +1428,9 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const afterDelete = await rpc<VmListResult>(vmListRpc.name, {});
       expect(afterDelete.children.find((entry) => entry.name === name)).toBeUndefined();
 
-      // Reusing a request whose Delete left no sandbox or registration creates
-      // a new generation rather than joining the old attempt.
-      await rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan });
+      // Reusing the name after its Delete left no sandbox or registration
+      // creates a new generation rather than joining the old attempt.
+      await rpc<VmCreateResult>(vmCreateRpc.name, { name, plan });
       const replacement = await waitFor(
         "the replacement generation to appear",
         async () => {
@@ -1526,14 +1522,13 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       if (!plan) throw new Error("the release test did not prepare a provisioning plan");
       await ensureStoredCredentials();
 
-      const requestId = randomUUID();
-      const name = sandboxName(requestId);
+      const name = generatedChildName(randomUUID());
       trackSandbox(name);
       const foreign = await createFixtureSandbox({ name, managed: false });
 
       try {
         const foreignId = foreign.id;
-        await rpc<VmCreateResult>(vmCreateRpc.name, { requestId, plan });
+        await rpc<VmCreateResult>(vmCreateRpc.name, { name, plan });
 
         const failed = await waitFor(
           "the pending Create to fail with name_conflict",
@@ -1574,7 +1569,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
 
       // Dismiss clears only the volatile failed row, without touching the
       // foreign sandbox or requiring a plugin reload.
-      await rpc(vmDismissRpc.name, { requestId });
+      await rpc(vmDismissRpc.name, { name });
       const cleared = await rpc<VmListResult>(vmListRpc.name, {});
       expect(cleared.children.find((entry) => entry.name === name)).toBeUndefined();
 
@@ -1590,8 +1585,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const plan = createdPlan;
       if (!plan) throw new Error("the release test did not prepare a provisioning plan");
 
-      const requestId = randomUUID();
-      const name = sandboxName(requestId);
+      const name = generatedChildName(randomUUID());
       trackSandbox(name);
       const fixture = await createFixtureSandbox({
         name,

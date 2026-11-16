@@ -14,6 +14,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Changed
 
+- Create identity is now the child name: the form submits the generated
+  `paseo-<uuid>` name, only one attempt exists per name, and a same-name Create
+  joins only when its plan and resource shape match. Request IDs and the guest
+  `PASEO_MSB_REQUEST` marker were removed.
 - Create and Retry check credential-store availability before acting; store
   failures surface as action errors and toasts rather than stale availability.
 - Selection remains stable when a pending child becomes a sandbox, duplicate
@@ -26,6 +30,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Fixed
 
+- A Create that meets a Delete tombstone completes that cleanup and allocates a
+  fresh generation instead of reporting success for cleanup alone.
+- A failed pending Create stays visible beside a same-name sandbox, so its error
+  can be retried or dismissed.
 - A VM destroyed outside the plugin (for example with `msb`) no longer leaves
   its host registration behind: `vm.list` starts a conservative sweep that
   removes a registration only after an exact lookup proves its generation is

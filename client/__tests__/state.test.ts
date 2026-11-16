@@ -17,7 +17,6 @@ import {
   CPU_FIELD_BOUNDS,
   createFormIssue,
   createNameIssue,
-  createNamePlaceholder,
   createRequestInput,
   credentialSourceLabel,
   deleteConfirmationText,
@@ -56,7 +55,6 @@ const PLAN: CanonicalPlan = {
 const PENDING: Extract<VmChild, { kind: "pending" }> = {
   kind: "pending",
   name: "paseo-pending",
-  requestId: "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f",
   plan: PLAN,
   phase: "creating",
   error: null,
@@ -113,7 +111,6 @@ describe("plan presentation", () => {
 
   it("rebuilds the original create input for a retry", () => {
     expect(retryCreateInput(PENDING)).toEqual({
-      requestId: PENDING.requestId,
       name: PENDING.name,
       plan: PLAN,
     });
@@ -126,7 +123,6 @@ describe("plan presentation", () => {
         resourcesSpecified: true,
       }),
     ).toEqual({
-      requestId: PENDING.requestId,
       name: "my-vm",
       plan: PLAN,
       resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
@@ -140,14 +136,10 @@ describe("plan presentation", () => {
 });
 
 describe("create form", () => {
-  it("shows the generated name as the placeholder", () => {
-    expect(createNamePlaceholder(PENDING.requestId)).toBe(`paseo-${PENDING.requestId}`);
-  });
-
   it("accepts generated names and slugs but rejects unsafe input", () => {
     expect(createNameIssue("")).toBeNull();
     expect(createNameIssue("   ")).toBeNull();
-    expect(createNameIssue(`paseo-${PENDING.requestId}`)).toBeNull();
+    expect(createNameIssue("paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f")).toBeNull();
     expect(createNameIssue("my-vm-2")).toBeNull();
     expect(createNameIssue("a")).toBeNull();
     expect(createNameIssue("a".repeat(63))).toBeNull();
@@ -196,23 +188,22 @@ describe("create form", () => {
     expect(createFormIssue("", { memoryMib: "4096", diskMib: "1000" })).not.toBeNull();
   });
 
-  it("omits an empty name and always sends the explicit resources", () => {
-    expect(createRequestInput(PENDING.requestId, "", PLAN, {
+  it("sends the generated name for an empty field and the typed name otherwise", () => {
+    expect(createRequestInput("paseo-generated", "", PLAN, {
       cpus: 2,
       memoryMib: 4096,
       diskMib: 10240,
     })).toEqual({
-      requestId: PENDING.requestId,
+      name: "paseo-generated",
       plan: PLAN,
       resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
     });
 
-    expect(createRequestInput(PENDING.requestId, "  my-vm ", PLAN, {
+    expect(createRequestInput("paseo-generated", "  my-vm ", PLAN, {
       cpus: 4,
       memoryMib: 8192,
       diskMib: 20480,
     })).toEqual({
-      requestId: PENDING.requestId,
       name: "my-vm",
       plan: PLAN,
       resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
@@ -244,37 +235,33 @@ describe("create form", () => {
 });
 
 describe("selection", () => {
-  const sharedPending = (requestId: string): Extract<VmChild, { kind: "pending" }> => ({
-    ...PENDING,
-    name: "shared",
-    requestId,
-  });
-  const first = sharedPending("11111111-1111-4111-8111-111111111111");
-  const second = sharedPending("22222222-2222-4222-8222-222222222222");
+  const pending = { ...PENDING, name: "shared" };
   const settled = { ...SANDBOX, name: "shared" };
-  const children = [first, second, settled];
+  const staleRegistration = { ...REGISTRATION, name: "shared", id: "sandbox_old" };
+  const children = [pending, settled, staleRegistration];
 
-  it("selects a row by request ID or generation", () => {
-    expect(selectionFor(PENDING)).toEqual({ name: PENDING.name, requestId: PENDING.requestId });
+  it("selects a pending attempt by name and another row by generation", () => {
+    expect(selectionFor(PENDING)).toEqual({ name: PENDING.name, pending: true });
     expect(selectionFor(SANDBOX)).toEqual({ name: SANDBOX.name, id: SANDBOX.id });
 
-    expect(selectChildFor(children, { name: "shared", requestId: first.requestId })).toBe(first);
-    expect(selectChildFor(children, { name: "shared", requestId: second.requestId })).toBe(second);
+    expect(selectChildFor(children, { name: "shared", pending: true })).toBe(pending);
+    expect(selectChildFor([settled], { name: "shared", pending: true })).toBe(settled);
+    expect(selectChildFor(children, { name: "shared" })).toBe(pending);
     expect(selectChildFor(children, { name: "shared", id: settled.id })).toBe(settled);
+    expect(selectChildFor(children, { name: "shared", id: staleRegistration.id })).toBe(
+      staleRegistration,
+    );
     expect(selectChildFor(children, { name: "missing" })).toBeNull();
   });
 
   it("follows a settled attempt to its same-name sandbox", () => {
-    expect(
-      selectChildFor(children, {
-        name: "shared",
-        requestId: "33333333-3333-4333-8333-333333333333",
-      }),
-    ).toBe(settled);
-    expect(isChildSelected(first, "shared", null, first.requestId)).toBe(true);
-    expect(isChildSelected(second, "shared", null, first.requestId)).toBe(false);
-    expect(isChildSelected(settled, "shared", null, first.requestId)).toBe(true);
-    expect(isChildSelected(first, "shared", settled.id, first.requestId)).toBe(false);
+    expect(selectChildFor([settled], { name: "shared" })).toBe(settled);
+    expect(isChildSelected(pending, "shared", null, true)).toBe(true);
+    expect(isChildSelected(settled, "shared", null, true)).toBe(false);
+    expect(isChildSelected(settled, "shared", settled.id)).toBe(true);
+    expect(isChildSelected(staleRegistration, "shared", settled.id)).toBe(false);
+    expect(isChildSelected(pending, "shared", settled.id)).toBe(false);
+    expect(isChildSelected(pending, "shared", null)).toBe(false);
   });
 });
 
@@ -390,12 +377,13 @@ describe("child presentation", () => {
     ).toBe(safeError("registration_failed").message);
   });
 
-  it("keeps a name-only selection through pending to sandbox", () => {
-    expect(isChildSelected(PENDING, PENDING.name, null)).toBe(true);
-    expect(isChildSelected(SANDBOX, SANDBOX.name, null)).toBe(true);
+  it("keeps a selected row through pending to sandbox", () => {
+    expect(isChildSelected(PENDING, PENDING.name, null, true)).toBe(true);
+    expect(isChildSelected(SANDBOX, PENDING.name, SANDBOX.id, true)).toBe(false);
     expect(isChildSelected(SANDBOX, SANDBOX.name, SANDBOX.id)).toBe(true);
     expect(isChildSelected(SANDBOX, SANDBOX.name, "sandbox_other")).toBe(false);
     expect(isChildSelected(PENDING, PENDING.name, SANDBOX.id)).toBe(false);
+    expect(isChildSelected(SANDBOX, SANDBOX.name, null)).toBe(false);
     expect(isChildSelected(REGISTRATION, REGISTRATION.name, null)).toBe(false);
     expect(isChildSelected(REGISTRATION, REGISTRATION.name, REGISTRATION.id)).toBe(true);
     expect(isChildSelected(SANDBOX, "paseo-pending", null)).toBe(false);

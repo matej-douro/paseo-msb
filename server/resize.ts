@@ -109,7 +109,9 @@ export async function resizeVm(
     return result(input, "unchanged", observed, requested);
   }
 
-  const desired = decoded.requestId ? desiredResources(observed, memoryTarget, diskTarget) : null;
+  const desired = decoded.requestedResources !== null
+    ? desiredResources(observed, memoryTarget, diskTarget)
+    : null;
 
   // Legacy or unknown memory caps cannot grow live. Preflight before modify()
   // and never include maxMemory in a no_restart call.

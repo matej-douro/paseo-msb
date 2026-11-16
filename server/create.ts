@@ -32,9 +32,8 @@ export interface CreateAttempt {
 }
 
 /**
- * `vm.create`: reserves the request synchronously, returns the derived name
- * before any external work, and starts one per-name reconciliation. Store
- * reads, credential resolution, and sandbox lookup all happen inside the lane.
+ * `vm.create`: returns the name before any external work and leaves one
+ * per-name reconciliation running in the background.
  */
 export async function createVm(
   context: CreateContext,
@@ -47,9 +46,9 @@ export async function createVm(
 
 /**
  * Reserves the request without awaiting anything. A repeated request with the
- * same name, plan, resources, and resources-specified flag joins the running
- * attempt; a failed attempt restarts under the same request ID; any other
- * reuse of the request ID is rejected here and only here.
+ * same plan, resources, and resources-specified flag joins the running attempt;
+ * a failed attempt restarts under the same name; any other reuse of the name
+ * is rejected here and only here.
  */
 export function startCreate(context: CreateContext, input: VmCreateInput): CreateAttempt {
   if (context.lanes.closed) {
@@ -80,17 +79,17 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
         redactionValues = await createInLane(context, entry, token, (values) => {
           redactionValues = values;
         });
-        context.pending.settle(entry.requestId, entry);
+        context.pending.settle(entry.name, entry);
       } catch (error) {
         if (error instanceof LifecycleAbortedError) {
           // A cancelled attempt (Delete or plugin cleanup) leaves no row that a
           // later Create could blindly join.
-          context.pending.settle(entry.requestId, entry);
+          context.pending.settle(entry.name, entry);
           throw error;
         }
         const failure = error instanceof SetupFailure ? error : null;
         context.pending.fail(
-          entry.requestId,
+          entry.name,
           failure?.code ?? "create_failed",
           failure?.detail ?? failureDetail(error, redactionValues),
           entry,
@@ -101,7 +100,7 @@ export function startCreate(context: CreateContext, input: VmCreateInput): Creat
       // The lane rejected before its task ran, so the task's own settlement
       // never happened. Keep the reserved entry from staying pending forever;
       // `entry` guards a newer attempt and a started task is never overwritten.
-      if (!taskStarted) context.pending.settle(entry.requestId, entry);
+      if (!taskStarted) context.pending.settle(entry.name, entry);
     });
 
   return { name: entry.name, started };
@@ -156,7 +155,6 @@ async function createInLane(
       name: entry.name,
       allowCreate: true,
       plan: entry.plan,
-      requestId: entry.requestId,
       resources: entry.resources,
       resourcesSpecified: entry.resourcesSpecified,
       redactionValues,

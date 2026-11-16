@@ -34,13 +34,12 @@ import {
   type ProviderId,
 } from "../shared/provisioning";
 import { INTEGRATION_ICONS, LLM_ICONS, PROVIDER_ICONS } from "./provider-icons";
-import { newRequestId } from "./request-id";
+import { newGeneratedChildName } from "./generated-name";
 import {
   CPU_FIELD_BOUNDS,
   DISK_FIELD_BOUNDS,
   MEMORY_FIELD_BOUNDS,
   createNameIssue,
-  createNamePlaceholder,
   createRequestInput,
   credentialSourceLabel,
   errorMessage,
@@ -83,7 +82,7 @@ export function CreateChild({
   const [cpus, setCpus] = useState(String(CPUS));
   const [memoryMib, setMemoryMib] = useState(MEMORY_MIB);
   const [diskMib, setDiskMib] = useState(ROOT_DISK_MIB);
-  const [requestId, setRequestId] = useState<string>(() => newRequestId());
+  const [generatedName, setGeneratedName] = useState<string>(() => newGeneratedChildName());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -105,7 +104,7 @@ export function CreateChild({
     setCpus(String(CPUS));
     setMemoryMib(MEMORY_MIB);
     setDiskMib(ROOT_DISK_MIB);
-    setRequestId(newRequestId());
+    setGeneratedName(newGeneratedChildName());
     setPending(false);
     setError(null);
   }, [open]);
@@ -160,13 +159,13 @@ export function CreateChild({
     try {
       await onCreate(
         createRequestInput(
-          requestId,
+          generatedName,
           name,
           { providers, integrations },
           { cpus: Number(cpus), memoryMib, diskMib },
         ),
       );
-      setRequestId(newRequestId());
+      setGeneratedName(newGeneratedChildName());
       setName("");
       setCpus(String(CPUS));
       setMemoryMib(MEMORY_MIB);
@@ -193,7 +192,7 @@ export function CreateChild({
           <TextField
             label="Name"
             value={name}
-            placeholder={createNamePlaceholder(requestId)}
+            placeholder={generatedName}
             hint="Optional. Leave blank to use the generated name. Lowercase letters, digits, and internal hyphens, 1-63 characters."
             error={nameError}
             theme={theme}

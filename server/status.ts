@@ -8,7 +8,6 @@ import {
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
   REGISTRATION_STATUSES,
-  sandboxName,
   type CredentialName,
   type RegistrationStatus,
 } from "../shared/constants";
@@ -124,7 +123,6 @@ function pendingChild(pending: PendingCreate): VmChild {
   return {
     kind: "pending",
     name: pending.name,
-    requestId: pending.requestId,
     plan: pending.plan,
     phase: pending.phase,
     error: pending.errorCode ? safeError(pending.errorCode) : null,
@@ -212,11 +210,11 @@ function registrationsAvailability(registrations: RegistrationsView): Availabili
 }
 
 function pendingSuperseded(entry: PendingCreate, sandboxes: readonly DecodedSandbox[]): boolean {
-  return sandboxes.some((sandbox) =>
-    sandbox.requestId !== null
-      ? sandbox.requestId === entry.requestId
-      : sandbox.name === entry.name && entry.name === sandboxName(entry.requestId),
-  );
+  // A failed attempt stays visible even when a sandbox holds its name: that row
+  // carries the only report of a pre-create or shape rejection, and Retry or
+  // Dismiss needs a target.
+  if (entry.phase === "failed") return false;
+  return sandboxes.some((sandbox) => sandbox.name === entry.name);
 }
 
 /**
@@ -240,9 +238,9 @@ export function buildVmList(input: VmListInput): VmListResult {
     }
   }
 
-  // A live sandbox replaces the pending attempt it owns: by request marker for
-  // V1.1 sandboxes, or by generated name for a markerless legacy sandbox. A
-  // different request under the same name keeps its own row visible.
+  // An active sandbox replaces its pending attempt: the name is the create
+  // identity, so at most one attempt advances it. Failed attempts stay visible
+  // until retried or dismissed.
   const pending = input.pending.filter((entry) => !pendingSuperseded(entry, decoded));
   const children: VmChild[] = pending.map(pendingChild);
 

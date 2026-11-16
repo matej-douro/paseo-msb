@@ -144,7 +144,7 @@ export function ChildDetail({
     setRetryError(null);
 
     try {
-      await onDismiss({ requestId: child.requestId });
+      await onDismiss({ name: child.name });
       toast.show("Create attempt dismissed.", { variant: "success" });
       onDismissed();
     } catch (dismissFailure) {

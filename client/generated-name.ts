@@ -1,8 +1,15 @@
+import { generatedChildName } from "../shared/constants";
+
 /**
- * One request ID per logical create attempt. The server treats a repeated ID as
- * the same create, so the modal reuses it across transient RPC failures.
+ * One generated child name per create attempt. The name is the create identity,
+ * so the modal reuses it across transient RPC failures and only replaces it
+ * after a successful submit.
  */
-export function newRequestId(): string {
+export function newGeneratedChildName(): string {
+  return generatedChildName(randomUuid());
+}
+
+function randomUuid(): string {
   const cryptoApi = (
     globalThis as {
       crypto?: {

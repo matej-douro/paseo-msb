@@ -1,10 +1,4 @@
-import {
-  CPUS,
-  MEMORY_MIB,
-  ROOT_DISK_MIB,
-  sandboxName,
-  type Phase,
-} from "../shared/constants";
+import { CPUS, MEMORY_MIB, ROOT_DISK_MIB, type Phase } from "../shared/constants";
 import type {
   ResourceRequest,
   VmCreateInput,
@@ -16,12 +10,11 @@ import { canonicalizePlan, plansEqual } from "../shared/provisioning";
 import { safeError, type SafeErrorCode } from "../shared/errors";
 
 /**
- * The canonical identity and desired shape of one Create request. A repeated
- * request must match every field; the name is derived from the request ID when
- * the client omitted it.
+ * The canonical identity and desired shape of one Create request. The name is
+ * the identity: a repeated request must match every other field, and a
+ * different shape under the same name is a conflict.
  */
 export interface PendingCreateRequest {
-  readonly requestId: string;
   readonly name: string;
   readonly plan: CanonicalPlan;
   readonly resources: VmResources;
@@ -33,10 +26,10 @@ export interface PendingCreateRequest {
  * plugin-owned volatile state and lives in the plugin subprocess, so pending
  * creates stay visible across UI navigation.
  *
- * A pending entry never carries credential values: only the request ID, the
- * chosen name, the canonical provider/integration plan, the desired resources,
- * whether those resources were explicitly supplied, a phase, a safe error code,
- * and bounded redacted detail.
+ * A pending entry never carries credential values: only the chosen name, the
+ * canonical provider/integration plan, the desired resources, whether those
+ * resources were explicitly supplied, a phase, a safe error code, and bounded
+ * redacted detail.
  */
 export interface PendingCreate extends PendingCreateRequest {
   readonly phase: Phase;
@@ -48,8 +41,7 @@ export interface PendingCreate extends PendingCreateRequest {
 /** Applies defaults and the fixed CPU count to an accepted Create input. */
 export function createRequestFor(input: VmCreateInput, plan: CanonicalPlan): PendingCreateRequest {
   return {
-    requestId: input.requestId,
-    name: input.name ?? sandboxName(input.requestId),
+    name: input.name,
     plan: canonicalizePlan(plan),
     resources: resourcesFor(input.resources),
     resourcesSpecified: input.resources !== undefined,
@@ -58,9 +50,9 @@ export function createRequestFor(input: VmCreateInput, plan: CanonicalPlan): Pen
 
 /**
  * Synchronous reservation result. `reserved` means this caller owns the only
- * attempt for the request and must settle it; `joined` means an identical
- * attempt is already running; `conflict` means the request reuses the same ID
- * with a different name, plan, resources, or resources-specified flag.
+ * attempt for the name and must settle it; `joined` means an identical attempt
+ * is already running; `conflict` means the name was reused with a different
+ * plan, resources, or resources-specified flag.
  */
 export type PendingReservation =
   | { readonly status: "reserved"; readonly entry: PendingCreate }
@@ -69,15 +61,15 @@ export type PendingReservation =
 
 export interface PendingCreateStore {
   list(): readonly PendingCreate[];
-  find(requestId: string): PendingCreate | null;
+  find(name: string): PendingCreate | null;
   /**
-   * Reserves the request without any external await. A failed entry is
-   * restarted under the same request ID; a running entry is joined.
+   * Reserves the name without any external await. A failed entry is restarted
+   * under the same name; a running entry is joined.
    */
   reserve(request: PendingCreateRequest): PendingReservation;
   /** Settles a running attempt as failed. Never resurrects or replaces a newer entry. */
   fail(
-    requestId: string,
+    name: string,
     code: SafeErrorCode,
     detail?: string | null,
     entry?: PendingCreate,
@@ -85,9 +77,9 @@ export interface PendingCreateStore {
   /**
    * Settles a running attempt as successful or cancelled. Passing the reserved
    * entry prevents an old attempt's late settlement from removing a newer
-   * attempt that reused the same request ID.
+   * attempt that reused the same name.
    */
-  settle(requestId: string, entry?: PendingCreate): void;
+  settle(name: string, entry?: PendingCreate): void;
 }
 
 function resourcesFor(request: ResourceRequest | undefined): VmResources {
@@ -109,7 +101,6 @@ function resourcesEqual(left: VmResources, right: VmResources): boolean {
 /** Every field of a repeated request must match the original attempt. */
 function requestsEqual(left: PendingCreateRequest, right: PendingCreateRequest): boolean {
   return (
-    left.name === right.name &&
     left.resourcesSpecified === right.resourcesSpecified &&
     resourcesEqual(left.resources, right.resources) &&
     plansEqual(left.plan, right.plan)
@@ -118,7 +109,6 @@ function requestsEqual(left: PendingCreateRequest, right: PendingCreateRequest):
 
 function initialEntry(request: PendingCreateRequest): PendingCreate {
   return {
-    requestId: request.requestId,
     name: request.name,
     plan: request.plan,
     resources: request.resources,
@@ -132,13 +122,13 @@ function initialEntry(request: PendingCreateRequest): PendingCreate {
 
 export function dismissPendingCreate(
   store: PendingCreateStore,
-  requestId: string,
+  name: string,
 ): VmDismissResult {
-  const entry = store.find(requestId);
+  const entry = store.find(name);
   if (!entry) throw new Error(safeError("not_found").message);
   if (entry.phase !== "failed") throw new Error(safeError("invalid_request").message);
 
-  store.settle(requestId, entry);
+  store.settle(name, entry);
   return { name: entry.name, dismissed: true };
 }
 
@@ -152,12 +142,12 @@ export function createPendingCreateStore(): PendingCreateStore {
       );
     },
 
-    find(requestId) {
-      return entries.get(requestId) ?? null;
+    find(name) {
+      return entries.get(name) ?? null;
     },
 
     reserve(request) {
-      const existing = entries.get(request.requestId);
+      const existing = entries.get(request.name);
 
       if (existing) {
         if (!requestsEqual(existing, request)) return { status: "conflict" };
@@ -170,23 +160,23 @@ export function createPendingCreateStore(): PendingCreateStore {
       };
     },
 
-    fail(requestId, code, detail = null, entry) {
-      const existing = entries.get(requestId);
+    fail(name, code, detail = null, entry) {
+      const existing = entries.get(name);
       if (!existing) return;
       if (entry && existing !== entry) return;
       insert({ ...existing, phase: "failed", errorCode: code, errorDetail: detail });
     },
 
-    settle(requestId, entry) {
-      const existing = entries.get(requestId);
+    settle(name, entry) {
+      const existing = entries.get(name);
       if (!existing) return;
       if (entry && existing !== entry) return;
-      entries.delete(requestId);
+      entries.delete(name);
     },
   };
 
   function insert(entry: PendingCreate): PendingCreate {
-    entries.set(entry.requestId, entry);
+    entries.set(entry.name, entry);
     return entry;
   }
 }

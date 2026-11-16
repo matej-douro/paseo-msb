@@ -22,7 +22,6 @@ import {
   PHASES,
   PLAN_ENV_VAR,
   PLUGIN_VERSION,
-  REQUEST_ENV_VAR,
   RESOURCES_ENV_VAR,
   RESOURCES_SPECIFIED_ENV_VAR,
   ROOT_DISK_MIB,
@@ -191,8 +190,6 @@ export interface SandboxCreateRequest {
   readonly hostPort: number;
   readonly plan: CanonicalPlan;
   readonly secrets: readonly ResolvedSecret[];
-  /** The managed request identity, written into the guest environment. */
-  readonly requestId?: string;
   /** Requested resources; omitted means the default child shape. */
   readonly resources?: VmResources;
   /** Whether the original Create supplied an explicit resource selection. */
@@ -275,7 +272,6 @@ export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCr
     env: {
       PATH: GUEST_PATH,
       [PLAN_ENV_VAR]: JSON.stringify(request.plan),
-      ...(request.requestId ? { [REQUEST_ENV_VAR]: request.requestId } : {}),
       [RESOURCES_ENV_VAR]: JSON.stringify(resources),
       [RESOURCES_SPECIFIED_ENV_VAR]: request.resourcesSpecified ? "1" : "0",
     },
@@ -349,8 +345,6 @@ export interface DecodedSandbox {
   readonly resources: VmObservedResources;
   /** Desired resources from the managed environment; null for legacy VMs. */
   readonly requestedResources: VmResources | null;
-  /** Internal request marker. Never projected into a public DTO. */
-  readonly requestId: string | null;
   /** Internal resources-specified flag. Never projected into a public DTO. */
   readonly resourcesSpecified: boolean | null;
 }
@@ -425,7 +419,7 @@ function normalizeRuntimeStatus(value: string): RuntimeStatus {
 
 type LabelProjection = Omit<
   DecodedSandbox,
-  "plan" | "resources" | "requestedResources" | "requestId" | "resourcesSpecified"
+  "plan" | "resources" | "requestedResources" | "resourcesSpecified"
 >;
 
 function decodeLabels(
@@ -635,7 +629,6 @@ function readPlanFromEnv(env: unknown): CanonicalPlan | null {
   return plan.plan;
 }
 
-const UUID_SCHEMA = z.string().uuid();
 
 /** First defined value under any of the SDK's camelCase or snake_case keys. */
 function firstValue(
@@ -690,27 +683,20 @@ function decodeObservedResources(
   };
 }
 
-/** Desired resources and the internal request marker from the environment. */
+/** Desired resources and the internal resources-specified flag from the environment. */
 function readResourcesEnv(env: unknown): {
-  readonly requestId: string | null;
   readonly requestedResources: VmResources | null;
   readonly resourcesSpecified: boolean | null;
 } {
   const record = readEnvRecord(env);
-  const requestId = record[REQUEST_ENV_VAR];
   const rawResources = record[RESOURCES_ENV_VAR];
   const rawSpecified = record[RESOURCES_SPECIFIED_ENV_VAR];
 
-  if (requestId === undefined) {
-    // A markerless legacy child has no resource variables. Stray variables mean
-    // a partially written configuration, not a V1 sandbox.
-    if (rawResources !== undefined || rawSpecified !== undefined) {
-      throw new SandboxDecodeError("invalid_config");
-    }
-    return { requestId: null, requestedResources: null, resourcesSpecified: null };
+  if (rawResources === undefined && rawSpecified === undefined) {
+    // A V1 child has neither variable, so it has no recorded resource selection.
+    return { requestedResources: null, resourcesSpecified: null };
   }
 
-  if (!UUID_SCHEMA.safeParse(requestId).success) throw new SandboxDecodeError("invalid_config");
   if (rawResources === undefined || rawSpecified === undefined) {
     throw new SandboxDecodeError("invalid_config");
   }
@@ -728,7 +714,6 @@ function readResourcesEnv(env: unknown): {
   if (!resources.success) throw new SandboxDecodeError("invalid_config");
 
   return {
-    requestId,
     requestedResources: resources.data,
     resourcesSpecified: rawSpecified === "1",
   };

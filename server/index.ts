@@ -119,7 +119,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
     return createVm(reconcileContext(paseo), input);
   });
 
-  server.handle(vmDismissRpc, (input) => dismissPendingCreate(pending, input.requestId));
+  server.handle(vmDismissRpc, (input) => dismissPendingCreate(pending, input.name));
 
   server.handle(vmDeleteRpc, (input, { paseo }) => {
     const context = reconcileContext(paseo);

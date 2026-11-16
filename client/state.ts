@@ -11,7 +11,6 @@ import {
   ROOT_DISK_MIB_MAX,
   ROOT_DISK_MIB_MIN,
   ROOT_DISK_MIB_STEP,
-  sandboxName,
   type CredentialName,
   type Phase,
   type RuntimeStatus,
@@ -49,14 +48,9 @@ export function credentialSourceLabel(
   return stored.includes(name) ? "Stored" : "Environment";
 }
 
-/** The placeholder shown when the user does not pick an explicit name. */
-export function createNamePlaceholder(requestId: string): string {
-  return sandboxName(requestId);
-}
-
 /**
  * Local name validation mirrors the shared `vm.create` schema so a bad name is
- * rejected before submit. An empty field is valid: it keeps the generated name.
+ * rejected before submit. The generated name is sent when the field is blank.
  */
 export function createNameIssue(raw: string): string | null {
   const name = raw.trim();
@@ -166,20 +160,19 @@ export function createFormIssue(
 }
 
 /**
- * Builds the `vm.create` input from validated form fields. An empty name is
- * omitted so the server keeps the generated `paseo-<requestId>` identity;
- * resources are always sent explicitly from the editable defaults.
+ * Builds the `vm.create` input from validated form fields. An empty name falls
+ * back to the generated name; resources are always sent explicitly from the
+ * editable defaults.
  */
 export function createRequestInput(
-  requestId: string,
+  generatedName: string,
   name: string,
   plan: CanonicalPlan,
   resources: CreateResourceValues,
 ): VmCreateInput {
   const chosen = name.trim();
   return {
-    requestId,
-    ...(chosen.length > 0 ? { name: chosen } : {}),
+    name: chosen.length > 0 ? chosen : generatedName,
     plan,
     resources: {
       cpus: resources.cpus,
@@ -189,24 +182,26 @@ export function createRequestInput(
   };
 }
 
-/** A selected row: named, generation-exact by id, or request-exact while pending. */
+/** A selected row: named, or name plus the exact generation id. */
 export interface ChildSelection {
   readonly name: string;
   readonly id?: string;
-  readonly requestId?: string;
+  /** True when the name's pending attempt is selected; pending rows have no id. */
+  readonly pending?: true;
 }
 
-/** Rows that share a name stay distinct by request ID (pending) or id. */
+/** A pending row has no generation id, so the flag distinguishes it from a row. */
 export function selectionFor(child: VmChild): ChildSelection {
   return child.kind === "pending"
-    ? { name: child.name, requestId: child.requestId }
+    ? { name: child.name, pending: true }
     : { name: child.name, id: child.id };
 }
 
 /**
- * Resolves a selection against the current list. A pending attempt wins while
- * it exists; after it settles the same name resolves to its sandbox, so the
- * detail pane follows the attempt instead of going blank.
+ * Resolves a selection against the current list. A pending selection follows the
+ * attempt; once it settles, the same name resolves to its sandbox so the detail
+ * pane follows the attempt instead of going blank. A name-only selection follows
+ * the pending attempt first, then any row with that name.
  */
 export function selectChildFor(
   children: readonly VmChild[],
@@ -215,18 +210,15 @@ export function selectChildFor(
   const named = children.filter((child) => child.name === selection.name);
   if (named.length === 0) return null;
 
-  if (selection.requestId) {
-    const pending = named.find(
-      (child) => child.kind === "pending" && child.requestId === selection.requestId,
-    );
-    if (pending) return pending;
+  if (selection.pending) {
+    return named.find((child) => child.kind === "pending") ?? named[0] ?? null;
   }
 
   if (selection.id) {
     return named.find((child) => child.kind !== "pending" && child.id === selection.id) ?? null;
   }
 
-  return named.find((child) => child.kind !== "pending") ?? named[0] ?? null;
+  return named.find((child) => child.kind === "pending") ?? named[0] ?? null;
 }
 
 export function phaseText(phase: Phase): string {
@@ -274,13 +266,12 @@ export function childPlan(child: VmChild): CanonicalPlan | null {
 
 /**
  * Rebuilds the original Create input for a failed pending attempt. The name,
- * plan, and request ID are always preserved; resources are re-sent only when
- * the original request supplied them, so an omitted selection retries as the
- * default shape instead of becoming an explicit one.
+ * plan, and resources shape are always preserved; resources are re-sent only
+ * when the original request supplied them, so an omitted selection retries as
+ * the default shape instead of becoming an explicit one.
  */
 export function retryCreateInput(child: Extract<VmChild, { kind: "pending" }>): VmCreateInput {
   return {
-    requestId: child.requestId,
     name: child.name,
     plan: child.plan,
     ...(child.resourcesSpecified
@@ -491,18 +482,12 @@ export function isChildSelected(
   child: VmChild,
   selectedName: string | null,
   selectedId: string | null,
-  selectedRequestId: string | null = null,
+  selectedPending = false,
 ): boolean {
   if (selectedName === null || child.name !== selectedName) return false;
+  if (selectedPending) return child.kind === "pending";
   if (selectedId !== null) return child.kind !== "pending" && child.id === selectedId;
-  if (selectedRequestId !== null) {
-    if (child.kind === "pending") return child.requestId === selectedRequestId;
-    // The selected attempt settled into this row, so follow it by name.
-    return true;
-  }
-  // Pending rows have no id; prefer an attempt over a leftover registration
-  // when several rows share the selected name.
-  return child.kind !== "registration";
+  return false;
 }
 
 export function isEmptyInventory(data: VmListResult): boolean {

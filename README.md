@@ -58,9 +58,10 @@ credentials enter the sandbox. Claude takes one auth option (Anthropic API key o
 Claude subscription); Pi takes one or more LLM options (Anthropic, OpenAI,
 Gemini, NeuralWatt). GitHub CLI is independent and unchecked by default.
 
-The generated name (`paseo-<requestId>`) is the identity; the current generation
-is its exact microsandbox `handle.id`. `vm.create` returns immediately, then one
-idempotent reconciler per name creates the detached sandbox with the requested CPUs
+The name is the create identity; the form generates `paseo-<uuid>` when it is left
+blank, and the current generation is the exact microsandbox `handle.id`.
+`vm.create` returns immediately, then one idempotent reconciler per name creates
+the detached sandbox with the requested CPUs
 and RAM (defaults `2 CPU` / `4096 MiB`) and the requested root disk,
 with a loopback-only port, `PASEO_MSB_PLAN`, and only the selected header-only
 secrets; runs the content-addressed provisioning script as one detached job;
@@ -68,10 +69,11 @@ registers the exact generation, waits for routed online, and confirms selected
 providers; then marks it `ready`.
 
 Phase (`creating`, `installing`, `registering`, `ready`, `deleting`) is a hint,
-not proof of a side effect. A repeated Create joins the same reconciliation and
-must use the original plan. Provisioning failures are fatal; Retry or Repair
-re-runs the idempotent steps and skips completed ones. A failed attempt that has
-not produced a sandbox can also be dismissed from its detail.
+not proof of a side effect. A repeated Create under the same name joins the same
+reconciliation and must use the original plan and resource shape. Provisioning
+failures are fatal; Retry or Repair re-runs the idempotent steps and skips
+completed ones. A failed attempt that has not produced a sandbox can also be
+dismissed from its detail.
 
 ## Use
 

@@ -11,7 +11,6 @@ import {
   PHASE_LABEL,
   PLAN_ENV_VAR,
   PLUGIN_VERSION,
-  REQUEST_ENV_VAR,
   RESOURCES_ENV_VAR,
   RESOURCES_SPECIFIED_ENV_VAR,
   ROOT_DISK_MIB,
@@ -38,11 +37,10 @@ import {
 } from "./fake-runtime";
 
 const REQUEST_ID = "2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
-const OTHER_REQUEST_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 const NAME = `paseo-${REQUEST_ID}`;
 
 const INPUT: VmCreateInput = {
-  requestId: REQUEST_ID,
+  name: NAME,
   plan: { providers: [{ provider: "pi", llms: ["anthropic-api-key"] }], integrations: [] },
 };
 
@@ -106,7 +104,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
 
     expect(attempt.name).toBe(NAME);
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       name: NAME,
       plan: INPUT.plan,
       resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
@@ -118,7 +116,7 @@ describe("createVm", () => {
     gate.resolve();
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find(NAME)).toBeNull();
     expect(creator.createCount).toBe(1);
     expect(creator.requests[0]).toMatchObject({
       name: NAME,
@@ -168,7 +166,7 @@ describe("createVm", () => {
     gate.resolve();
   });
 
-  it("starts one attempt for a repeated request ID", async () => {
+  it("starts one attempt for a repeated name", async () => {
     const gate = deferred<void>();
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const context = createContext(creator);
@@ -197,7 +195,7 @@ describe("createVm", () => {
     });
 
     expect(attempt.name).toBe("my-vm");
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find("my-vm")).toMatchObject({
       name: "my-vm",
       resources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
       resourcesSpecified: true,
@@ -210,16 +208,16 @@ describe("createVm", () => {
     expect(await creator.find("my-vm")).not.toBeNull();
   });
 
-  it("rejects a repeated request with a different name, resources, or specified flag", async () => {
+  it("rejects a different plan, resources, or specified flag for the same name", async () => {
     const gate = deferred<void>();
     const creator = new FakeSandboxCreator({ createGate: gate.promise });
     const context = createContext(creator);
 
     const first = startCreate(context, INPUT);
 
-    expect(() => startCreate(context, { ...INPUT, name: "other-vm" })).toThrow(
-      safeError("invalid_request").message,
-    );
+    expect(() =>
+      startCreate(context, { ...INPUT, plan: OTHER_PLAN }),
+    ).toThrow(safeError("invalid_request").message);
     expect(() =>
       startCreate(context, {
         ...INPUT,
@@ -246,20 +244,19 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
       errorCode: "mutation_pending",
     });
     expect(creator.createCount).toBe(0);
   });
 
-  it("joins the generation its request marker owns after readiness", async () => {
+  it("joins an existing sandbox with the same name and shape after readiness", async () => {
     const sandbox = fakeSandbox({
       id: "sandbox_existing",
       name: "my-vm",
       phase: "ready",
       plan: INPUT.plan,
-      requestId: REQUEST_ID,
       requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
       resourcesSpecified: true,
     });
@@ -274,17 +271,16 @@ describe("createVm", () => {
     await attempt.started;
 
     expect(creator.createCount).toBe(0);
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find("my-vm")).toBeNull();
   });
 
-  it("rejects a repeated request that now uses a different name", async () => {
+  it("rejects a create whose shape differs from the existing sandbox", async () => {
     const sandbox = fakeSandbox({
       id: "sandbox_owned",
       name: "my-vm",
       phase: "ready",
       plan: INPUT.plan,
-      requestId: REQUEST_ID,
-      requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+      requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
       resourcesSpecified: true,
     });
     const creator = new FakeSandboxCreator({ existing: sandbox });
@@ -292,26 +288,24 @@ describe("createVm", () => {
 
     const attempt = await startCreate(context, {
       ...INPUT,
-      name: "other-vm",
-      resources: { memoryMib: 8192, diskMib: 20480 },
+      name: "my-vm",
     });
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find("my-vm")).toMatchObject({
       phase: "failed",
       errorCode: "invalid_request",
     });
-    expect(context.pending.find(REQUEST_ID)?.errorDetail).toContain("sandbox_owned");
+    expect(context.pending.find("my-vm")?.errorDetail).toContain("sandbox_owned");
     expect(creator.createCount).toBe(0);
   });
 
-  it("rejects a repeated request with a different plan or resources-specified flag", async () => {
+  it("rejects a create whose recorded plan or resources differ", async () => {
     const sandbox = fakeSandbox({
       id: "sandbox_owned",
       name: "my-vm",
       phase: "ready",
       plan: INPUT.plan,
-      requestId: REQUEST_ID,
       requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
       resourcesSpecified: true,
     });
@@ -325,16 +319,7 @@ describe("createVm", () => {
       resources: { memoryMib: 4096, diskMib: 10240 },
     });
     await planAttempt.started;
-    expect(differentPlan.pending.find(REQUEST_ID)).toMatchObject({
-      phase: "failed",
-      errorCode: "invalid_request",
-    });
-
-    // The same values are a different request once the original was explicit.
-    const omitted = createContext(creator, { runtime: fakeRuntime([sandbox]) });
-    const omittedAttempt = await startCreate(omitted, { ...INPUT, name: "my-vm" });
-    await omittedAttempt.started;
-    expect(omitted.pending.find(REQUEST_ID)).toMatchObject({
+    expect(differentPlan.pending.find("my-vm")).toMatchObject({
       phase: "failed",
       errorCode: "invalid_request",
     });
@@ -347,7 +332,7 @@ describe("createVm", () => {
       resources: { memoryMib: 8192, diskMib: 10240 },
     });
     await resourceAttempt.started;
-    expect(differentResources.pending.find(REQUEST_ID)).toMatchObject({
+    expect(differentResources.pending.find("my-vm")).toMatchObject({
       phase: "failed",
       errorCode: "invalid_request",
     });
@@ -355,13 +340,12 @@ describe("createVm", () => {
     expect(creator.createCount).toBe(0);
   });
 
-  it("rejects a different request under an owned name without touching the sandbox", async () => {
+  it("joins a same-name sandbox from an earlier attempt instead of creating another", async () => {
     const sandbox = fakeSandbox({
       id: "sandbox_owned",
       name: "shared-vm",
       phase: "ready",
       plan: INPUT.plan,
-      requestId: OTHER_REQUEST_ID,
       requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
       resourcesSpecified: true,
     });
@@ -375,16 +359,86 @@ describe("createVm", () => {
     });
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find("shared-vm")).toBeNull();
+    expect(creator.createCount).toBe(0);
+    expect(await creator.find("shared-vm")).toBe(sandbox);
+  });
+
+  it("completes a Delete tombstone and then allocates a fresh generation", async () => {
+    const tombstone = fakeSandbox({ id: "sandbox_old", name: NAME, phase: "deleting" });
+    const creator = new FakeSandboxCreator({ existing: tombstone });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(creator.destroyed).toEqual(["sandbox_old"]);
+    expect(creator.createCount).toBe(1);
+    expect(context.pending.find(NAME)).toBeNull();
+    expect((await creator.find(NAME))?.id).toBe("sandbox_1");
+  });
+
+  it("allocates after cleanup when a shaped tombstone matches the request", async () => {
+    const tombstone = fakeSandbox({
+      id: "sandbox_old",
+      name: NAME,
+      phase: "deleting",
+      requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+      resourcesSpecified: true,
+    });
+    const creator = new FakeSandboxCreator({ existing: tombstone });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, {
+      ...INPUT,
+      resources: { memoryMib: 4096, diskMib: 10240 },
+    });
+    await attempt.started;
+
+    expect(creator.destroyed).toEqual(["sandbox_old"]);
+    expect(creator.createCount).toBe(1);
+    expect(context.pending.find(NAME)).toBeNull();
+    expect((await creator.find(NAME))?.id).toBe("sandbox_1");
+  });
+
+  it("fails rather than chasing a second tombstone", async () => {
+    const first = fakeSandbox({ id: "sandbox_old", name: NAME, phase: "deleting" });
+    const second = fakeSandbox({ id: "sandbox_second", name: NAME, phase: "deleting" });
+    const creator = new FakeSandboxCreator({ findSequence: [first, second] });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, INPUT);
+    await attempt.started;
+
+    expect(creator.destroyed).toEqual(["sandbox_old", "sandbox_second"]);
+    expect(creator.createCount).toBe(0);
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "delete_failed",
+    });
+  });
+
+  it("rejects a sandbox that belongs to another parent", async () => {
+    const sandbox = fakeSandbox({
+      id: "sandbox_foreign",
+      name: "shared-vm",
+      phase: "ready",
+      parentId: "srv_other",
+    });
+    const creator = new FakeSandboxCreator({ existing: sandbox });
+    const context = createContext(creator);
+
+    const attempt = await startCreate(context, { ...INPUT, name: "shared-vm" });
+    await attempt.started;
+
+    expect(context.pending.find("shared-vm")).toMatchObject({
       phase: "failed",
       errorCode: "name_conflict",
     });
     expect(creator.createCount).toBe(0);
-    expect(creator.labelUpdates).toEqual([]);
-    expect(await creator.find("shared-vm")).toBe(sandbox);
   });
 
-  it("rejects an explicit resource selection against a markerless legacy sandbox", async () => {
+  it("rejects an explicit resource selection against a legacy sandbox", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_legacy", name: NAME, phase: "ready" });
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
@@ -395,14 +449,14 @@ describe("createVm", () => {
     });
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
       errorCode: "invalid_request",
     });
     expect(creator.createCount).toBe(0);
   });
 
-  it("joins a markerless legacy sandbox only under its generated name", async () => {
+  it("joins a legacy sandbox under the same name when resources are omitted", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_legacy", name: NAME, phase: "ready" });
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
@@ -410,11 +464,11 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find(NAME)).toBeNull();
     expect(creator.createCount).toBe(0);
   });
 
-  it("treats a markerless sandbox under a chosen name as a conflict", async () => {
+  it("joins a legacy sandbox under a chosen name when resources are omitted", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_legacy", name: "my-vm", phase: "ready" });
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
@@ -422,10 +476,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, { ...INPUT, name: "my-vm" });
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
-      phase: "failed",
-      errorCode: "name_conflict",
-    });
+    expect(context.pending.find("my-vm")).toBeNull();
     expect(creator.createCount).toBe(0);
   });
 
@@ -454,7 +505,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find(NAME)).toBeNull();
     expect(creator.createCount).toBe(0);
   });
 
@@ -471,7 +522,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
       errorCode: "invalid_request",
     });
@@ -489,7 +540,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find(NAME)).toBeNull();
     expect(creator.createCount).toBe(0);
   });
 
@@ -523,13 +574,13 @@ describe("createVm", () => {
     const attempt = startCreate(context, { ...INPUT, plan: OTHER_PLAN });
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
       errorCode: "invalid_request",
     });
   });
 
-  it("reports a pre-create failure and retries it under the same request ID", async () => {
+  it("reports a pre-create failure and retries it under the same name", async () => {
     const creator = new FakeSandboxCreator({
       createFailures: [new Error("image pull failed")],
     });
@@ -538,7 +589,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       name: NAME,
       phase: "failed",
       errorCode: "create_failed",
@@ -547,7 +598,7 @@ describe("createVm", () => {
     const retry = await startCreate(context, INPUT);
     await retry.started;
 
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find(NAME)).toBeNull();
     expect(creator.createCount).toBe(2);
   });
 
@@ -593,12 +644,12 @@ describe("createVm", () => {
     const context = createContext(creator);
 
     const attempt = startCreate(context, {
-      requestId: REQUEST_ID,
+      name: NAME,
       plan: GEMINI_PLAN,
     });
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
       errorCode: "missing_credentials",
     });
@@ -633,7 +684,7 @@ describe("createVm", () => {
     const attempt = startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
       errorCode: "secrets_unavailable",
     });
@@ -667,7 +718,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toMatchObject({
+    expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
       errorCode: "port_unavailable",
     });
@@ -682,7 +733,7 @@ describe("createVm", () => {
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    const pending = context.pending.find(REQUEST_ID);
+    const pending = context.pending.find(NAME);
     expect(pending).toMatchObject({ phase: "failed" });
     expect(pending!.errorDetail).toContain("socket closed");
     expect(pending!.errorDetail!.length).toBeLessThanOrEqual(1_000);
@@ -716,7 +767,7 @@ describe("createVm", () => {
     await context.lanes.settle(100);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find(NAME)).toBeNull();
     expect(context.lanes.closed).toBe(true);
 
     gate.resolve();
@@ -733,14 +784,14 @@ describe("createVm", () => {
       await gate.promise;
     });
     const attempt = startCreate(context, INPUT);
-    expect(context.pending.find(REQUEST_ID)).not.toBeNull();
+    expect(context.pending.find(NAME)).not.toBeNull();
 
     lanes.close();
     gate.resolve();
     await blocker.catch(() => undefined);
     await attempt.started;
 
-    expect(context.pending.find(REQUEST_ID)).toBeNull();
+    expect(context.pending.find(NAME)).toBeNull();
   });
 
   it("keeps a pending create visible through the list projection", async () => {
@@ -787,7 +838,6 @@ describe("sandbox create plan", () => {
       hostPort: 43_000,
       plan: INPUT.plan,
       secrets: resolution.secrets,
-      requestId: REQUEST_ID,
       resources,
       resourcesSpecified: true,
     });
@@ -806,7 +856,6 @@ describe("sandbox create plan", () => {
     expect(createdPlan.env).toEqual({
       PATH: GUEST_PATH,
       [PLAN_ENV_VAR]: JSON.stringify(INPUT.plan),
-      [REQUEST_ENV_VAR]: REQUEST_ID,
       [RESOURCES_ENV_VAR]: JSON.stringify(resources),
       [RESOURCES_SPECIFIED_ENV_VAR]: "1",
     });
@@ -832,7 +881,6 @@ describe("sandbox create plan", () => {
       hostPort: 43_000,
       plan: INPUT.plan,
       secrets: [],
-      requestId: REQUEST_ID,
     });
 
     expect(createdPlan.cpus).toBe(2);
@@ -852,7 +900,6 @@ describe("sandbox create plan", () => {
       hostPort: 43_000,
       plan: INPUT.plan,
       secrets: [],
-      requestId: REQUEST_ID,
       resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
       resourcesSpecified: true,
     });
@@ -873,7 +920,6 @@ describe("sandbox create plan", () => {
       ["labels", createdPlan.labels],
       ["env", "PATH", GUEST_PATH],
       ["env", PLAN_ENV_VAR, JSON.stringify(INPUT.plan)],
-      ["env", REQUEST_ENV_VAR, REQUEST_ID],
       ["env", RESOURCES_ENV_VAR, createdPlan.env[RESOURCES_ENV_VAR]],
       ["env", RESOURCES_SPECIFIED_ENV_VAR, "1"],
     ]);
