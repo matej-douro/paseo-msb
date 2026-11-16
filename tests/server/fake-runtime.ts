@@ -716,6 +716,7 @@ export class FakeSandboxCreator implements SandboxHost {
   createCount = 0;
   probeCount = 0;
   connectCount = 0;
+  findCount = 0;
 
   private readonly failures: Error[];
   private readonly sandboxes = new Map<string, SandboxHandleLike>();
@@ -728,6 +729,7 @@ export class FakeSandboxCreator implements SandboxHost {
   }
 
   async find(name: string): Promise<SandboxHandleLike | null> {
+    this.findCount += 1;
     if (this.options.findError) throw this.options.findError;
     const scripted = this.findSequence;
     if (scripted && scripted.length > 0) {

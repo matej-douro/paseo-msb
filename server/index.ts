@@ -20,6 +20,7 @@ import { createLifecycleLanes, LifecycleAbortedError } from "./lanes";
 import { createMetricsCoalescer, createParentIdCache, readVmMetrics } from "./metrics";
 import { createMutationRegistry } from "./mutations";
 import { createPendingCreateStore, dismissPendingCreate } from "./pending";
+import { createRegistrationPruner } from "./prune";
 import { reconcileVm } from "./reconcile";
 import { recoverManagedSandboxes } from "./recovery";
 import { readVmDetail, readVmList, type ReadContext } from "./rpc";
@@ -45,6 +46,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
   const mutations = createMutationRegistry();
   const parents = createParentIdCache();
   const metrics = createMetricsCoalescer();
+  const pruner = createRegistrationPruner(lanes);
   let recovery: Promise<void> | null = null;
   let recoveryDone = false;
 
@@ -94,7 +96,18 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
 
   server.handle(vmListRpc, async (_input, { paseo }) => {
     ensureRecovery(paseo);
-    return readVmList(await readContext(paseo));
+    const result = await readVmList(await readContext(paseo));
+
+    // Registration-only rows are the read projection's own proof that a child
+    // has a registration but no live sandbox under that name. The sweep is
+    // fire-and-forget so polling never waits for runtime lookups, and it
+    // re-checks the exact generation before removing anything.
+    pruner.schedule(
+      reconcileContext(paseo),
+      result.children.flatMap((child) => (child.kind === "registration" ? [child.name] : [])),
+    );
+
+    return result;
   });
 
   server.handle(vmDetailRpc, async (input, { paseo }) => {

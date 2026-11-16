@@ -14,7 +14,7 @@ import {
 } from "../shared/provisioning";
 
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
-import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
+import { bounded, LifecycleAbortedError, type LaneToken, type LifecycleLanes } from "./lanes";
 import { runMutation, type MutationRegistry } from "./mutations";
 import { ensureProvisioned } from "./provision";
 import {
@@ -493,6 +493,51 @@ function registrationOnlyForName(
 }
 
 /**
+ * One bounded, conservative sweep for names the read projection reported as
+ * registration-only. Each name runs in its lifecycle lane, re-reads the parent
+ * directory, and removes only a registration whose exact generation lookup
+ * proves it gone or replaced. A pending mutation, lookup failure, or duplicate
+ * row leaves the child for Repair instead of guessing.
+ */
+export async function pruneRegistrationOnlyNames(
+  context: ReconcileContext,
+  names: readonly string[],
+  lanes: LifecycleLanes,
+): Promise<readonly string[]> {
+  const removed: string[] = [];
+
+  for (const name of [...new Set(names)].sort()) {
+    try {
+      const didRemove = await lanes.run(name, (token) =>
+        pruneRegistrationOnlyName(context, name, token),
+      );
+      if (didRemove) removed.push(name);
+    } catch (error) {
+      // Lanes close permanently on plugin teardown: stop the whole sweep.
+      if (error instanceof LifecycleAbortedError) break;
+      // Ambiguous or unavailable state stays actionable in Repair.
+    }
+  }
+
+  return removed;
+}
+
+async function pruneRegistrationOnlyName(
+  context: ReconcileContext,
+  name: string,
+  token: LaneToken,
+): Promise<boolean> {
+  token.throwIfAborted();
+  if (context.mutations.pending(name)) return false;
+
+  const directory = await readDirectory(context, [], token);
+  const registrations = registrationOnlyForName(name, directory.hosts);
+  if (registrations.length === 0) return false;
+
+  return removeStaleRegistrations(context, name, registrations, [], token);
+}
+
+/**
  * Removes registrations whose generation is proven gone. Absence observed
  * earlier is not proof: the runtime is re-read at removal time, and a live row
  * for the same generation is kept.
@@ -503,17 +548,22 @@ async function removeStaleRegistrations(
   registrations: readonly HostRegistrationLike[],
   redaction: readonly string[],
   token: LaneToken,
-): Promise<void> {
+): Promise<boolean> {
   const byKey = new Map<string, HostRegistrationLike[]>();
   for (const registration of registrations) {
     const key = registration.source?.key ?? "";
     byKey.set(key, [...(byKey.get(key) ?? []), registration]);
   }
 
+  let removed = false;
   for (const group of byKey.values()) {
     if (group.length > 1) throw new SetupFailure("registration_conflict");
-    await removeIfGenerationGone(context, name, group[0], redaction, token);
+    if (await removeIfGenerationGone(context, name, group[0], redaction, token)) {
+      removed = true;
+    }
   }
+
+  return removed;
 }
 
 /**
