@@ -41,7 +41,7 @@ Acceptance:
       directory row.
 - [x] A screenshot or written note records what Paseo's host picker displays.
 - [x] Result is captured in `docs/spikes/v11-host-name.md`.
-- [x] If the picker ignores registration names, DESIGN §3 is amended before
+- [x] If the picker ignores registration names, DESIGN §2.3 is amended before
       task 2.5. (Not required: the picker renders the registration label.)
 - [x] Sandbox and registration are removed in `finally`.
 
@@ -145,7 +145,7 @@ Acceptance:
       selection; defaults are 2 CPUs, 4096 MiB RAM, and 10240 MiB disk.
 - [x] `vm.resize` requires `name`, `id`, and at least one of `memoryMib` or
       `diskMib`; `restart` is optional.
-- [x] Resource bounds match DESIGN §7.2. Observed `memoryMib`/`diskMib` may be
+- [x] Resource bounds match DESIGN §2.7. Observed `memoryMib`/`diskMib` may be
       null for legacy VMs; pending resources are non-null. Create accepts any
       valid disk, while resize rejects a shrink, a null disk baseline, and a
       memory target with a null baseline.
@@ -339,7 +339,7 @@ Acceptance:
       observed null baseline is `invalid_request`. A memory target with an
       observed null baseline is `invalid_request`.
 - [x] `no_restart` produces `applied`, `converging`, or `restart_required`
-      according to the verified SDK outcome and the DESIGN §7.2 precedence
+      according to the verified SDK outcome and the DESIGN §2.7 precedence
       table.
 - [x] `applied` is returned only when observed config confirms the target;
       unreported or still-different values cannot be reported as applied.
@@ -381,7 +381,7 @@ Acceptance:
       `id_mismatch` RPC error; foreign/malformed labels are `unavailable`.
 - [x] The parent ID comes from a cache refreshed by `vm.list`/`vm.detail`, with
       one bounded directory read when the cache is empty.
-- [x] A running sandbox returns a sample with the DESIGN §7.3 numeric fields and
+- [x] A running sandbox returns a sample with the DESIGN §2.8 numeric fields and
       the SDK timestamp.
 - [x] `metricsDisabled` maps to `disabled`; other read failures map to
       `unavailable`; a timeout does not stall or fail other reads.
@@ -398,6 +398,42 @@ Acceptance:
 Files: `server/metrics.ts`, `server/rpc.ts`, `server/sandbox.ts`,
 `server/index.ts`, `tests/server/metrics.test.ts`,
 `tests/server/fake-runtime.ts`
+
+### 3.4 Converge stale registrations in the background
+
+Extend the existing registration pruner; do not add another reconciliation
+pipeline or durable cleanup state. The first RPC initialization that starts
+recovery also starts one lightweight cleanup schedule. Every sweep derives
+candidates from authoritative parent registrations and microsandbox inventory,
+not from the registration-only rows exposed to the client.
+
+Acceptance:
+
+- [ ] First RPC initialization starts exactly one cleanup schedule; repeated
+      RPCs do not create duplicates, and plugin cleanup stops the schedule.
+- [ ] Closing the UI does not stop cleanup. `vm.list` may trigger the same
+      pruner but never waits for it. No claim is made that cleanup runs before
+      first plugin activation or while its subprocess is stopped.
+- [ ] Each sweep considers every `source.id = plugin:paseo-msb` registration,
+      including an older registration hidden behind a same-name live sandbox.
+      An exact producer-and-generation match is attached, not pruned.
+- [ ] Registration-only DTOs are never used as the cleanup work queue.
+- [ ] The pruner reuses the per-name lifecycle lanes, skips unsettled native
+      mutations, re-reads the parent before removal, and retains the existing
+      exact-generation proof. Parent `offline` alone never proves deletion.
+- [ ] At most one sweep runs at a time. Unverifiable names and removal failures
+      remain actionable and retry after the existing short cooldown; confirmed
+      removal makes the registration-only row disappear.
+- [ ] Restart reconstructs candidates from the parent and microsandbox. No
+      child database, registration mirror, durable cleanup queue, cleanup
+      journal, or new parent/microsandbox API is introduced.
+- [ ] Unit tests cover schedule deduplication and shutdown, hidden same-name
+      registrations, mutation-pending skips, fresh revalidation, unavailable
+      inventory, removal failure and retry, cooldown, and restart reconstruction.
+
+Files: `server/prune.ts`, `server/index.ts`, `server/reconciler.ts`,
+`server/recovery.ts`, `tests/server/prune.test.ts`,
+`tests/server/recovery.test.ts`, `tests/server/list.test.ts`
 
 ## 4. Client
 
@@ -431,9 +467,10 @@ Files: `client/CreateChild.tsx`, `client/ChildList.tsx`, `client/screen.tsx`,
 
 ### 4.2 Add the live metrics panel and poller
 
-Add a dedicated `useVmMetrics` poller and a detail panel. Poll only while a
-running sandbox's detail is visible, with single-flight scheduling and
-stale/duplicate handling.
+Add a dedicated `useVmMetrics` poller and a detail panel, following the
+structural mockup in DESIGN §1.6 rather than treating it as pixel-perfect.
+Poll only while a running sandbox's detail is visible, with single-flight
+scheduling and stale/duplicate handling.
 
 Acceptance:
 
@@ -466,7 +503,7 @@ Show observed and requested resources in the detail, with an **Edit resources**
 action, and show known/requested RAM/disk in list rows. The dialog submits
 `vm.resize`; when the result is `restart_required`, explain the disconnect and
 require a second explicit confirmation before calling again with
-`restart: true`.
+`restart: true`. Use the proposed confirmation structure in DESIGN §1.8.
 
 Acceptance:
 
@@ -491,6 +528,30 @@ Acceptance:
 
 Files: `client/ChildDetail.tsx`, `client/ChildList.tsx`, `client/screen.tsx`,
 `client/state.ts`, `client/ui.tsx`, `client/__tests__/resize.test.ts`
+
+### 4.4 Present registration-only children as transient cleanup states
+
+Keep registration-only rows visible while verification or cleanup is
+inconclusive, but never claim that a VM is missing merely because the joined
+projection has no matching sandbox. Confirmed-stale registrations disappear
+through the server cleanup in task 3.4.
+
+Acceptance:
+
+- [ ] Registration-only rows show `VM state unknown`, not `Missing`; absence
+      from the read projection is not presented as deletion proof.
+- [ ] Inventory-unavailable and partial-unavailable notices remain visible and
+      are not replaced by an empty-list or confirmed-missing claim.
+- [ ] Repair and Delete remain available for registration-only children, and
+      the detail explains that Repair revalidates while Delete removes only an
+      exactly matching registration.
+- [ ] Pending and sandbox presentations are unchanged, and no live metrics
+      panel appears for registration-only children.
+- [ ] Unit tests cover available, unavailable, and partial inventory plus the
+      registration-only pill and action copy.
+
+Files: `client/ChildList.tsx`, `client/ChildDetail.tsx`, `client/state.ts`,
+`client/__tests__/state.test.ts`
 
 ## 5. Verification and documentation
 
@@ -576,11 +637,39 @@ Acceptance:
 
 Files: `tests/integration/vertical.test.ts`, `docs/release-test.md`
 
-### 5.4 Update user documentation and changelog
+### 5.4 Verify background registration convergence
+
+Drive registration cleanup through the real runtime and parent daemon, with
+deterministic server barriers for uncertain proof and removal failures.
+
+Acceptance:
+
+- [ ] After first RPC activation, a confirmed-stale plugin registration is
+      removed by the background schedule without repeated `vm.list` polling.
+- [ ] An older registration hidden behind a same-name live replacement is
+      removed without changing the live generation or its registration.
+- [ ] A transient removal failure leaves an actionable registration-only row
+      and succeeds on a later retry; uncertain removal is accepted only after a
+      fresh parent read confirms absence.
+- [ ] Unavailable inventory, exact-lookup failure, decode failure, pagination
+      failure, and parent `offline` never produce registration deletion. The
+      client projection and copy say `VM state unknown`, not `Missing`.
+- [ ] Plugin restart reconstructs cleanup work without any durable queue or
+      journal, and plugin cleanup stops the schedule.
+- [ ] `docs/release-test.md` documents the activation boundary, background
+      cadence, hidden same-name case, failure retry, and restart recovery.
+- [ ] `npm run typecheck`, `npm run lint`, `npm test`, and
+      `npm run test:release` pass on the verified pins.
+
+Files: `tests/integration/vertical.test.ts`,
+`tests/integration/fixtures/harness.ts`, `tests/server/prune.test.ts`,
+`docs/release-test.md`
+
+### 5.5 Update user documentation and changelog
 
 Remove the V1 claims that names and sizes are fixed and metrics are absent.
-Describe names, create-time resources, resize semantics, live metrics, and the
-remaining limits.
+Describe names, create-time resources, resize semantics, live metrics,
+background registration convergence, and the remaining limits.
 
 Acceptance:
 
@@ -589,11 +678,15 @@ Acceptance:
 - [ ] README states that only a confirmed resize of a running VM may restart it
       and that there are still no general lifecycle controls, CPU resize,
       rename, disk shrink, or metrics history.
+- [ ] README explains that registration-only rows are transient cleanup states
+      and that unproven VM absence is shown as `VM state unknown`.
 - [ ] CHANGELOG has an Unreleased V1.1 entry covering names, resources, resize,
-      live metrics, and registration display migration.
+      live metrics, registration display migration, and background cleanup of
+      confirmed-stale registrations.
 - [ ] `docs/release-test.md` no longer links to the old
       `generation-exact-label-writes-pinned-sdk-limitation` heading; it points
-      to the current `Generation-exact mutations` section.
+      to the current `Generation-exact mutations and the pinned SDK limitation`
+      section.
 - [ ] No documentation claims that V1.1 can rename an existing child or shrink
       a disk.
 - [ ] Links to `DESIGN.md` and the release test remain valid.
