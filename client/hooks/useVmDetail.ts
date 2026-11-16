@@ -14,12 +14,17 @@ export interface VmDetailState {
 
 /**
  * Reconnects by sandbox name and polls while that name is selected. A null name
- * stops polling without affecting host work.
+ * stops polling without affecting host work. A pending attempt is selected by
+ * request ID so two same-name rows never open the wrong detail.
  *
  * Responses are latest-request-wins across selections and manual refreshes, so
  * one selection's in-flight detail can never clear or overwrite another's.
  */
-export function useVmDetail(name: string | null, id?: string): VmDetailState {
+export function useVmDetail(
+  name: string | null,
+  id?: string,
+  requestId?: string,
+): VmDetailState {
   const invoke = useRpc(vmDetailRpc);
   const invokeRef = useRef(invoke);
   invokeRef.current = invoke;
@@ -53,7 +58,8 @@ export function useVmDetail(name: string | null, id?: string): VmDetailState {
       const request = ++sequence.current;
 
       try {
-        const result = await invokeRef.current(id ? { name, id } : { name });
+        const input = requestId ? { name, requestId } : id ? { name, id } : { name };
+        const result = await invokeRef.current(input);
         if (mounted.current && request === sequence.current) {
           setData(result);
           setError(null);
@@ -78,7 +84,7 @@ export function useVmDetail(name: string | null, id?: string): VmDetailState {
       sequence.current += 1;
       clearInterval(timer);
     };
-  }, [name, id]);
+  }, [name, id, requestId]);
 
   const refresh = useCallback(async () => {
     if (mounted.current) await reload.current();

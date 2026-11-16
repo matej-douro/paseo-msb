@@ -14,14 +14,21 @@ import {
   childPhase,
   childPlan,
   createBlockedMessage,
+  CPU_FIELD_BOUNDS,
+  createFormIssue,
+  createNameIssue,
+  createNamePlaceholder,
+  createRequestInput,
   credentialSourceLabel,
   deleteConfirmationText,
+  DISK_FIELD_BOUNDS,
   inventoryNotice,
   isChildSelected,
   isEmptyInventory,
   logBundleSummary,
   logLineCountLabel,
   logTimestamp,
+  MEMORY_FIELD_BOUNDS,
   mergeLogBundles,
   phaseText,
   planSummary,
@@ -29,9 +36,15 @@ import {
   reconcileSuccessMessage,
   registrationText,
   registrationsNotice,
+  resourceFieldIssue,
+  resourceSliderOffset,
+  resourceSliderValue,
   retryCreateInput,
   runtimeText,
+  selectChildFor,
+  selectionFor,
   setupPill,
+  snapResourceValue,
   vmPill,
 } from "../state";
 
@@ -109,20 +122,159 @@ describe("plan presentation", () => {
       retryCreateInput({
         ...PENDING,
         name: "my-vm",
-        resources: { cpus: 2, memoryMib: 8192, diskMib: 20480 },
+        resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
         resourcesSpecified: true,
       }),
     ).toEqual({
       requestId: PENDING.requestId,
       name: "my-vm",
       plan: PLAN,
-      resources: { memoryMib: 8192, diskMib: 20480 },
+      resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
     });
   });
 
   it("labels where a credential value comes from", () => {
     expect(credentialSourceLabel("GH_TOKEN", [])).toBe("Environment");
     expect(credentialSourceLabel("GH_TOKEN", ["GH_TOKEN"])).toBe("Stored");
+  });
+});
+
+describe("create form", () => {
+  it("shows the generated name as the placeholder", () => {
+    expect(createNamePlaceholder(PENDING.requestId)).toBe(`paseo-${PENDING.requestId}`);
+  });
+
+  it("accepts generated names and slugs but rejects unsafe input", () => {
+    expect(createNameIssue("")).toBeNull();
+    expect(createNameIssue("   ")).toBeNull();
+    expect(createNameIssue(`paseo-${PENDING.requestId}`)).toBeNull();
+    expect(createNameIssue("my-vm-2")).toBeNull();
+    expect(createNameIssue("a")).toBeNull();
+    expect(createNameIssue("a".repeat(63))).toBeNull();
+
+    expect(createNameIssue("My-VM")).not.toBeNull();
+    expect(createNameIssue("my/vm")).not.toBeNull();
+    expect(createNameIssue("my vm")).not.toBeNull();
+    expect(createNameIssue("-my-vm")).not.toBeNull();
+    expect(createNameIssue("my-vm-")).not.toBeNull();
+    expect(createNameIssue("a".repeat(64))).not.toBeNull();
+  });
+
+  it("checks CPU, RAM, and disk against the shared bounds and steps", () => {
+    expect(resourceFieldIssue("2", CPU_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("1", CPU_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("16", CPU_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("0", CPU_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("17", CPU_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("2.5", CPU_FIELD_BOUNDS)).not.toBeNull();
+
+    expect(resourceFieldIssue("4096", MEMORY_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("1024", MEMORY_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("32768", MEMORY_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("1280", MEMORY_FIELD_BOUNDS)).toBeNull();
+
+    expect(resourceFieldIssue("", MEMORY_FIELD_BOUNDS)).toBe("Enter a value in MiB.");
+    expect(resourceFieldIssue("4.5", MEMORY_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("1023", MEMORY_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("33024", MEMORY_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("1100", MEMORY_FIELD_BOUNDS)).not.toBeNull();
+
+    expect(resourceFieldIssue("10240", DISK_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("1024", DISK_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("262144", DISK_FIELD_BOUNDS)).toBeNull();
+    expect(resourceFieldIssue("1500", DISK_FIELD_BOUNDS)).not.toBeNull();
+  });
+
+  it("reports the first local problem blocking submit", () => {
+    expect(createFormIssue("", { memoryMib: "4096", diskMib: "10240" })).toBeNull();
+    expect(createFormIssue("", { cpus: "2", memoryMib: "4096", diskMib: "10240" })).toBeNull();
+    expect(
+      createFormIssue("", { cpus: "17", memoryMib: "4096", diskMib: "10240" }),
+    ).not.toBeNull();
+    expect(createFormIssue("MY-VM", { memoryMib: "4096", diskMib: "10240" })).not.toBeNull();
+    expect(createFormIssue("", { memoryMib: "1000", diskMib: "10240" })).not.toBeNull();
+    expect(createFormIssue("", { memoryMib: "4096", diskMib: "1000" })).not.toBeNull();
+  });
+
+  it("omits an empty name and always sends the explicit resources", () => {
+    expect(createRequestInput(PENDING.requestId, "", PLAN, {
+      cpus: 2,
+      memoryMib: 4096,
+      diskMib: 10240,
+    })).toEqual({
+      requestId: PENDING.requestId,
+      plan: PLAN,
+      resources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
+    });
+
+    expect(createRequestInput(PENDING.requestId, "  my-vm ", PLAN, {
+      cpus: 4,
+      memoryMib: 8192,
+      diskMib: 20480,
+    })).toEqual({
+      requestId: PENDING.requestId,
+      name: "my-vm",
+      plan: PLAN,
+      resources: { cpus: 4, memoryMib: 8192, diskMib: 20480 },
+    });
+  });
+
+  it("snaps slider values onto the shared grid", () => {
+    expect(snapResourceValue(4000, MEMORY_FIELD_BOUNDS)).toBe(4096);
+    expect(snapResourceValue(1023, MEMORY_FIELD_BOUNDS)).toBe(1024);
+    expect(snapResourceValue(99_999, MEMORY_FIELD_BOUNDS)).toBe(32_768);
+    expect(snapResourceValue(4000, DISK_FIELD_BOUNDS)).toBe(4096);
+    expect(snapResourceValue(1600, DISK_FIELD_BOUNDS)).toBe(2048);
+  });
+
+  it("round-trips a slider offset and value", () => {
+    expect(resourceSliderOffset(4096, MEMORY_FIELD_BOUNDS)).toBeCloseTo(
+      (4096 - 1024) / (32768 - 1024),
+    );
+    expect(resourceSliderValue(0, DISK_FIELD_BOUNDS)).toBe(1024);
+    expect(resourceSliderValue(1, DISK_FIELD_BOUNDS)).toBe(262_144);
+    expect(resourceSliderValue(-1, MEMORY_FIELD_BOUNDS)).toBe(1024);
+    expect(resourceSliderValue(2, MEMORY_FIELD_BOUNDS)).toBe(32_768);
+
+    const value = 8192;
+    expect(
+      resourceSliderValue(resourceSliderOffset(value, MEMORY_FIELD_BOUNDS), MEMORY_FIELD_BOUNDS),
+    ).toBe(value);
+  });
+});
+
+describe("selection", () => {
+  const sharedPending = (requestId: string): Extract<VmChild, { kind: "pending" }> => ({
+    ...PENDING,
+    name: "shared",
+    requestId,
+  });
+  const first = sharedPending("11111111-1111-4111-8111-111111111111");
+  const second = sharedPending("22222222-2222-4222-8222-222222222222");
+  const settled = { ...SANDBOX, name: "shared" };
+  const children = [first, second, settled];
+
+  it("selects a row by request ID or generation", () => {
+    expect(selectionFor(PENDING)).toEqual({ name: PENDING.name, requestId: PENDING.requestId });
+    expect(selectionFor(SANDBOX)).toEqual({ name: SANDBOX.name, id: SANDBOX.id });
+
+    expect(selectChildFor(children, { name: "shared", requestId: first.requestId })).toBe(first);
+    expect(selectChildFor(children, { name: "shared", requestId: second.requestId })).toBe(second);
+    expect(selectChildFor(children, { name: "shared", id: settled.id })).toBe(settled);
+    expect(selectChildFor(children, { name: "missing" })).toBeNull();
+  });
+
+  it("follows a settled attempt to its same-name sandbox", () => {
+    expect(
+      selectChildFor(children, {
+        name: "shared",
+        requestId: "33333333-3333-4333-8333-333333333333",
+      }),
+    ).toBe(settled);
+    expect(isChildSelected(first, "shared", null, first.requestId)).toBe(true);
+    expect(isChildSelected(second, "shared", null, first.requestId)).toBe(false);
+    expect(isChildSelected(settled, "shared", null, first.requestId)).toBe(true);
+    expect(isChildSelected(first, "shared", settled.id, first.requestId)).toBe(false);
   });
 });
 

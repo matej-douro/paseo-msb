@@ -22,7 +22,7 @@ import { useSecrets } from "./hooks/useSecrets";
 import { useVmDetail } from "./hooks/useVmDetail";
 import { useVmList } from "./hooks/useVmList";
 import { ManageSecrets } from "./ManageSecrets";
-import { createBlockedMessage, errorMessage } from "./state";
+import { createBlockedMessage, errorMessage, selectChildFor, selectionFor, type ChildSelection } from "./state";
 import { IconButton } from "./ui";
 
 /**
@@ -32,11 +32,17 @@ import { IconButton } from "./ui";
 export function MainScreen({ theme, layout, params }: PluginScreenProps) {
   const compact = layout.compact;
   const list = useVmList();
-  const [selection, setSelection] = useState<{ name: string; id?: string } | null>(
+  const [selection, setSelection] = useState<ChildSelection | null>(
     params.name ? { name: params.name } : null,
   );
   const selectedName = selection?.name ?? null;
-  const detail = useVmDetail(selectedName, selection?.id);
+  const selectedChild =
+    selection && list.data ? selectChildFor(list.data.children, selection) : null;
+  // Only a pending attempt is selected by request ID; once it settles, the same
+  // name resolves to its sandbox and the detail read follows the name.
+  const detailRequestId =
+    selectedChild?.kind === "pending" ? selectedChild.requestId : undefined;
+  const detail = useVmDetail(selectedName, selection?.id, detailRequestId);
   const [createOpen, setCreateOpen] = useState(false);
   const [createChecking, setCreateChecking] = useState(false);
   const [secretsOpen, setSecretsOpen] = useState(false);
@@ -58,7 +64,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
 
   const createChild = async (input: VmCreateInput) => {
     const result = await create(input);
-    setSelection({ name: result.name });
+    setSelection({ name: result.name, requestId: input.requestId });
     await list.refresh();
     return result;
   };
@@ -179,14 +185,10 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       loading={list.loading}
       selectedName={selectedName}
       selectedId={selection?.id ?? null}
+      selectedRequestId={selection?.requestId ?? null}
       theme={theme}
       compact={compact}
-      onSelect={(child) =>
-        setSelection({
-          name: child.name,
-          ...(child.kind === "pending" ? {} : { id: child.id }),
-        })
-      }
+      onSelect={(child) => setSelection(selectionFor(child))}
       onRetry={() => void list.refresh()}
     />
   );
@@ -230,7 +232,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
 
   const detailPane = selection ? (
     <ChildDetail
-      key={selection.name}
+      key={`${selection.name}:${selection.requestId ?? selection.id ?? ""}`}
       name={selection.name}
       data={detail.data}
       loading={detail.loading}

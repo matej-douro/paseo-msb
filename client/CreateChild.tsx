@@ -3,13 +3,17 @@ import {
   Modal,
   SettingsCard,
   SettingsSection,
+  TextInput,
 } from "@getpaseo/plugin/client/ui";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
   CPUS,
   GUEST_IMAGE,
   MEMORY_MIB,
+  MEMORY_MIB_STEP,
+  ROOT_DISK_MIB,
+  ROOT_DISK_MIB_STEP,
   type CredentialName,
 } from "../shared/constants";
 import type { VmCreateInput } from "../shared/contracts";
@@ -31,8 +35,19 @@ import {
 } from "../shared/provisioning";
 import { INTEGRATION_ICONS, LLM_ICONS, PROVIDER_ICONS } from "./provider-icons";
 import { newRequestId } from "./request-id";
-import { credentialSourceLabel, errorMessage, planSummary } from "./state";
-import { ActionButton, type PluginTheme } from "./ui";
+import {
+  CPU_FIELD_BOUNDS,
+  DISK_FIELD_BOUNDS,
+  MEMORY_FIELD_BOUNDS,
+  createNameIssue,
+  createNamePlaceholder,
+  createRequestInput,
+  credentialSourceLabel,
+  errorMessage,
+  planSummary,
+  resourceFieldIssue,
+} from "./state";
+import { ActionButton, ResourceSlider, type PluginTheme } from "./ui";
 
 export interface CreateChildProps {
   open: boolean;
@@ -64,7 +79,11 @@ export function CreateChild({
 }: CreateChildProps) {
   const [providers, setProviders] = useState<ProviderSelection[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationId[]>([]);
-  const [requestId, setRequestId] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [cpus, setCpus] = useState(String(CPUS));
+  const [memoryMib, setMemoryMib] = useState(MEMORY_MIB);
+  const [diskMib, setDiskMib] = useState(ROOT_DISK_MIB);
+  const [requestId, setRequestId] = useState<string>(() => newRequestId());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,13 +101,19 @@ export function CreateChild({
     if (!open) return;
     setProviders([]);
     setIntegrations([]);
-    setRequestId(null);
+    setName("");
+    setCpus(String(CPUS));
+    setMemoryMib(MEMORY_MIB);
+    setDiskMib(ROOT_DISK_MIB);
+    setRequestId(newRequestId());
     setPending(false);
     setError(null);
   }, [open]);
 
-  const issue = planIssue(providers, integrations, providerStates, integrationStates);
-  const canSubmit = issue === null && !pending;
+  const nameError = createNameIssue(name);
+  const cpuError = resourceFieldIssue(cpus, CPU_FIELD_BOUNDS);
+  const planError = planIssue(providers, integrations, providerStates, integrationStates);
+  const canSubmit = nameError === null && cpuError === null && planError === null && !pending;
   const required = requiredCredentialsForPlan({ providers, integrations });
 
   const toggleProvider = (provider: ProviderId) => {
@@ -129,14 +154,23 @@ export function CreateChild({
   const submit = async () => {
     if (!canSubmit) return;
 
-    const id = requestId ?? newRequestId();
-    setRequestId(id);
     setPending(true);
     setError(null);
 
     try {
-      await onCreate({ requestId: id, plan: { providers, integrations } });
-      setRequestId(null);
+      await onCreate(
+        createRequestInput(
+          requestId,
+          name,
+          { providers, integrations },
+          { cpus: Number(cpus), memoryMib, diskMib },
+        ),
+      );
+      setRequestId(newRequestId());
+      setName("");
+      setCpus(String(CPUS));
+      setMemoryMib(MEMORY_MIB);
+      setDiskMib(ROOT_DISK_MIB);
       setProviders([]);
       setIntegrations([]);
       onOpenChange(false);
@@ -151,14 +185,63 @@ export function CreateChild({
     <Modal title="Create child" open={open} onOpenChange={onOpenChange}>
       <Modal.Content>
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-          One fixed microsandbox child. Select the providers and integrations it should have.
+          One microsandbox child. Name it, size it, then select the providers and integrations it
+          should have.
         </Text>
 
-        <View style={{ gap: 4 }}>
-          <FixedRow theme={theme} label="Image" value={GUEST_IMAGE} />
-          <FixedRow theme={theme} label="CPUs" value={String(CPUS)} />
-          <FixedRow theme={theme} label="Memory" value={`${MEMORY_MIB} MiB`} />
-          <FixedRow theme={theme} label="Port" value="loopback → guest 6767" />
+        <View style={{ gap: 10 }}>
+          <TextField
+            label="Name"
+            value={name}
+            placeholder={createNamePlaceholder(requestId)}
+            hint="Optional. Leave blank to use the generated name. Lowercase letters, digits, and internal hyphens, 1-63 characters."
+            error={nameError}
+            theme={theme}
+            editable={!pending}
+            onChangeText={setName}
+          />
+
+          <View style={{ flexDirection: compact ? "column" : "row", gap: 16 }}>
+            <View style={{ flex: compact ? undefined : 1, minWidth: 0 }}>
+              <ResourceSlider
+                label="RAM"
+                value={memoryMib}
+                bounds={MEMORY_FIELD_BOUNDS}
+                hint={`${MEMORY_MIB_STEP} MiB steps.`}
+                theme={theme}
+                disabled={pending}
+                onChange={setMemoryMib}
+              />
+            </View>
+            <View style={{ flex: compact ? undefined : 1, minWidth: 0 }}>
+              <ResourceSlider
+                label="Root disk"
+                value={diskMib}
+                bounds={DISK_FIELD_BOUNDS}
+                hint={`${ROOT_DISK_MIB_STEP} MiB steps. Growth only after create.`}
+                theme={theme}
+                disabled={pending}
+                onChange={setDiskMib}
+              />
+            </View>
+            <View style={{ width: compact ? undefined : 96, minWidth: 0 }}>
+              <TextField
+                label="CPUs"
+                value={cpus}
+                hint={`${CPU_FIELD_BOUNDS.min}-${CPU_FIELD_BOUNDS.max} ${CPU_FIELD_BOUNDS.unit}, in steps of ${CPU_FIELD_BOUNDS.step}.`}
+                error={cpuError}
+                theme={theme}
+                editable={!pending}
+                keyboardType="number-pad"
+                onChangeText={setCpus}
+              />
+            </View>
+          </View>
+
+          <View style={{ gap: 4 }}>
+            <FixedRow theme={theme} label="Image" value={GUEST_IMAGE} />
+            <FixedRow theme={theme} label="Port" value="loopback → guest 6767" />
+          </View>
         </View>
 
         <SettingsSection title="Providers" trailing={<CountLabel count={providers.length} theme={theme} />}>
@@ -234,8 +317,8 @@ export function CreateChild({
           </Text>
         </View>
 
-        {issue ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{issue}</Text>
+        {planError ? (
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{planError}</Text>
         ) : null}
 
         {error ? (
@@ -710,6 +793,69 @@ function FixedRow({
       </Text>
       <Text style={{ color: theme.colors.foreground, fontSize: 12, flexShrink: 1 }}>
         {value}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * One labelled create field. The hint is replaced by the validation message so
+ * the form never shows a rule and a failure at the same time.
+ */
+function TextField({
+  label,
+  value,
+  placeholder,
+  hint,
+  error,
+  theme,
+  editable,
+  keyboardType,
+  onChangeText,
+}: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  hint: string;
+  error: string | null;
+  theme: PluginTheme;
+  editable: boolean;
+  keyboardType?: ComponentProps<typeof TextInput>["keyboardType"];
+  onChangeText?(text: string): void;
+}) {
+  return (
+    <View style={{ gap: 4, opacity: editable ? 1 : 0.6 }}>
+      <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" }}>
+        {label}
+      </Text>
+      <View
+        style={{
+          backgroundColor: theme.colors.surface2,
+          borderColor: error ? theme.colors.statusDanger : theme.colors.border,
+          borderWidth: 1,
+          borderRadius: 6,
+          paddingHorizontal: 8,
+        }}
+      >
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor={theme.colors.foregroundMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={editable}
+          keyboardType={keyboardType}
+          style={{ color: theme.colors.foreground, fontSize: 12, paddingVertical: 6 }}
+        />
+      </View>
+      <Text
+        style={{
+          color: error ? theme.colors.statusDanger : theme.colors.foregroundMuted,
+          fontSize: 11,
+        }}
+      >
+        {error ?? hint}
       </Text>
     </View>
   );

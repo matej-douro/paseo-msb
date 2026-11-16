@@ -1,19 +1,30 @@
 import {
+  CPUS_MAX,
+  CPUS_MIN,
+  CPUS_STEP,
   ERROR_LABEL,
   MAX_LOG_ENTRIES,
+  MEMORY_MIB_MAX,
+  MEMORY_MIB_MIN,
+  MEMORY_MIB_STEP,
   PHASE_LABEL,
+  ROOT_DISK_MIB_MAX,
+  ROOT_DISK_MIB_MIN,
+  ROOT_DISK_MIB_STEP,
+  sandboxName,
   type CredentialName,
   type Phase,
   type RuntimeStatus,
 } from "../shared/constants";
-import type {
-  Availability,
-  LogBundle,
-  Registration,
-  VmChild,
-  VmCreateInput,
-  VmListResult,
-  VmReconcileResult,
+import {
+  VmNameSchema,
+  type Availability,
+  type LogBundle,
+  type Registration,
+  type VmChild,
+  type VmCreateInput,
+  type VmListResult,
+  type VmReconcileResult,
 } from "../shared/contracts";
 import { SAFE_ERROR_MESSAGES, isSafeErrorCode, type SafeErrorCode } from "../shared/errors";
 import {
@@ -36,6 +47,186 @@ export function credentialSourceLabel(
   stored: readonly CredentialName[],
 ): string {
   return stored.includes(name) ? "Stored" : "Environment";
+}
+
+/** The placeholder shown when the user does not pick an explicit name. */
+export function createNamePlaceholder(requestId: string): string {
+  return sandboxName(requestId);
+}
+
+/**
+ * Local name validation mirrors the shared `vm.create` schema so a bad name is
+ * rejected before submit. An empty field is valid: it keeps the generated name.
+ */
+export function createNameIssue(raw: string): string | null {
+  const name = raw.trim();
+  if (name.length === 0) return null;
+  if (VmNameSchema.safeParse(name).success) return null;
+  return "Use 1-63 lowercase letters, digits, or internal hyphens, starting and ending with a letter or digit.";
+}
+
+/** Resource field bounds, shared with the RPC schemas, so the client adds no rules. */
+export interface ResourceFieldBounds {
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  readonly unit: string;
+}
+
+export const MEMORY_FIELD_BOUNDS: ResourceFieldBounds = {
+  min: MEMORY_MIB_MIN,
+  max: MEMORY_MIB_MAX,
+  step: MEMORY_MIB_STEP,
+  unit: "MiB",
+};
+
+export const CPU_FIELD_BOUNDS: ResourceFieldBounds = {
+  min: CPUS_MIN,
+  max: CPUS_MAX,
+  step: CPUS_STEP,
+  unit: "CPUs",
+};
+
+export const DISK_FIELD_BOUNDS: ResourceFieldBounds = {
+  min: ROOT_DISK_MIB_MIN,
+  max: ROOT_DISK_MIB_MAX,
+  step: ROOT_DISK_MIB_STEP,
+  unit: "MiB",
+};
+
+/**
+ * Validates one whole-number field against the shared bounds. A value outside
+ * the range or off the step gets a message that names the actual rule.
+ */
+export function resourceFieldIssue(raw: string, bounds: ResourceFieldBounds): string | null {
+  const text = raw.trim();
+  if (text.length === 0) return `Enter a value in ${bounds.unit}.`;
+  if (!/^\d+$/.test(text)) return `Enter a whole number of ${bounds.unit}.`;
+
+  const value = Number(text);
+  if (
+    value < bounds.min ||
+    value > bounds.max ||
+    (value - bounds.min) % bounds.step !== 0
+  ) {
+    return `Use ${bounds.min}-${bounds.max} ${bounds.unit}, in steps of ${bounds.step}.`;
+  }
+  return null;
+}
+
+/** Raw create form fields, kept as text so partial input never becomes a value. */
+export interface CreateResourceInputs {
+  readonly cpus?: string;
+  readonly memoryMib: string;
+  readonly diskMib: string;
+}
+
+/** Validated resource values from the create form. */
+export interface CreateResourceValues {
+  readonly cpus: number;
+  readonly memoryMib: number;
+  readonly diskMib: number;
+}
+
+/**
+ * Snaps an arbitrary MiB value onto the shared bounds and step grid. The sliders
+ * and any future numeric entry share this, so the client cannot produce a
+ * value the RPC schemas reject.
+ */
+export function snapResourceValue(value: number, bounds: ResourceFieldBounds): number {
+  const clamped = Math.min(bounds.max, Math.max(bounds.min, value));
+  const steps = Math.round((clamped - bounds.min) / bounds.step);
+  return Math.min(bounds.max, bounds.min + steps * bounds.step);
+}
+
+/** Slider position as a 0-1 fraction of the snapped value. */
+export function resourceSliderOffset(value: number, bounds: ResourceFieldBounds): number {
+  return (snapResourceValue(value, bounds) - bounds.min) / (bounds.max - bounds.min);
+}
+
+/** Snapped value at a 0-1 slider position. */
+export function resourceSliderValue(offset: number, bounds: ResourceFieldBounds): number {
+  const clamped = Math.min(1, Math.max(0, offset));
+  return snapResourceValue(bounds.min + clamped * (bounds.max - bounds.min), bounds);
+}
+
+/** The first local problem blocking create, or null when the form is valid. */
+export function createFormIssue(
+  name: string,
+  resources: CreateResourceInputs,
+): string | null {
+  return (
+    createNameIssue(name) ??
+    (resources.cpus === undefined
+      ? null
+      : resourceFieldIssue(resources.cpus, CPU_FIELD_BOUNDS)) ??
+    resourceFieldIssue(resources.memoryMib, MEMORY_FIELD_BOUNDS) ??
+    resourceFieldIssue(resources.diskMib, DISK_FIELD_BOUNDS)
+  );
+}
+
+/**
+ * Builds the `vm.create` input from validated form fields. An empty name is
+ * omitted so the server keeps the generated `paseo-<requestId>` identity;
+ * resources are always sent explicitly from the editable defaults.
+ */
+export function createRequestInput(
+  requestId: string,
+  name: string,
+  plan: CanonicalPlan,
+  resources: CreateResourceValues,
+): VmCreateInput {
+  const chosen = name.trim();
+  return {
+    requestId,
+    ...(chosen.length > 0 ? { name: chosen } : {}),
+    plan,
+    resources: {
+      cpus: resources.cpus,
+      memoryMib: resources.memoryMib,
+      diskMib: resources.diskMib,
+    },
+  };
+}
+
+/** A selected row: named, generation-exact by id, or request-exact while pending. */
+export interface ChildSelection {
+  readonly name: string;
+  readonly id?: string;
+  readonly requestId?: string;
+}
+
+/** Rows that share a name stay distinct by request ID (pending) or id. */
+export function selectionFor(child: VmChild): ChildSelection {
+  return child.kind === "pending"
+    ? { name: child.name, requestId: child.requestId }
+    : { name: child.name, id: child.id };
+}
+
+/**
+ * Resolves a selection against the current list. A pending attempt wins while
+ * it exists; after it settles the same name resolves to its sandbox, so the
+ * detail pane follows the attempt instead of going blank.
+ */
+export function selectChildFor(
+  children: readonly VmChild[],
+  selection: ChildSelection,
+): VmChild | null {
+  const named = children.filter((child) => child.name === selection.name);
+  if (named.length === 0) return null;
+
+  if (selection.requestId) {
+    const pending = named.find(
+      (child) => child.kind === "pending" && child.requestId === selection.requestId,
+    );
+    if (pending) return pending;
+  }
+
+  if (selection.id) {
+    return named.find((child) => child.kind !== "pending" && child.id === selection.id) ?? null;
+  }
+
+  return named.find((child) => child.kind !== "pending") ?? named[0] ?? null;
 }
 
 export function phaseText(phase: Phase): string {
@@ -91,7 +282,13 @@ export function retryCreateInput(child: Extract<VmChild, { kind: "pending" }>): 
     name: child.name,
     plan: child.plan,
     ...(child.resourcesSpecified
-      ? { resources: { memoryMib: child.resources.memoryMib, diskMib: child.resources.diskMib } }
+      ? {
+          resources: {
+            cpus: child.resources.cpus,
+            memoryMib: child.resources.memoryMib,
+            diskMib: child.resources.diskMib,
+          },
+        }
       : {}),
   };
 }
@@ -292,9 +489,15 @@ export function isChildSelected(
   child: VmChild,
   selectedName: string | null,
   selectedId: string | null,
+  selectedRequestId: string | null = null,
 ): boolean {
   if (selectedName === null || child.name !== selectedName) return false;
   if (selectedId !== null) return child.kind !== "pending" && child.id === selectedId;
+  if (selectedRequestId !== null) {
+    if (child.kind === "pending") return child.requestId === selectedRequestId;
+    // The selected attempt settled into this row, so follow it by name.
+    return true;
+  }
   // Pending rows have no id; prefer an attempt over a leftover registration
   // when several rows share the selected name.
   return child.kind !== "registration";

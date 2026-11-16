@@ -1,9 +1,18 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { useMemo, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { useMemo, useRef, useState } from "react";
+import { PanResponder, Pressable, Text, View, type LayoutChangeEvent } from "react-native";
 import type { LogBundle } from "../shared/contracts";
-import { logBundleSummary, logLineCountLabel, logTimestamp, type Tone } from "./state";
+import {
+  logBundleSummary,
+  logLineCountLabel,
+  logTimestamp,
+  resourceSliderOffset,
+  resourceSliderValue,
+  snapResourceValue,
+  type ResourceFieldBounds,
+  type Tone,
+} from "./state";
 
 export type PluginTheme = PluginHostProps["theme"];
 
@@ -356,6 +365,179 @@ export function Notice({ text, theme, tone = "warning" }: NoticeProps) {
       }}
     >
       <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{text}</Text>
+    </View>
+  );
+}
+
+export interface ResourceSliderProps {
+  label: string;
+  value: number;
+  bounds: ResourceFieldBounds;
+  unit?: string;
+  hint?: string;
+  theme: PluginTheme;
+  disabled?: boolean;
+  onChange(value: number): void;
+}
+
+const SLIDER_TRACK_HEIGHT = 6;
+const SLIDER_THUMB_SIZE = 16;
+
+/**
+ * A bounded, step-snapping slider. It is the only way to set a resource value,
+ * so every emitted value already lies on the shared step grid. Dragging and
+ * tapping both use page coordinates measured from the track, which keeps the
+ * hot path clear of per-render closures that could re-create the responder
+ * mid-gesture.
+ */
+export function ResourceSlider({
+  label,
+  value,
+  bounds,
+  unit,
+  hint,
+  theme,
+  disabled = false,
+  onChange,
+}: ResourceSliderProps) {
+  const displayUnit = unit ?? bounds.unit;
+  const [width, setWidth] = useState(0);
+  const trackRef = useRef<View>(null);
+  const widthRef = useRef(0);
+  const leftRef = useRef(0);
+  const valueRef = useRef(value);
+  const boundsRef = useRef(bounds);
+  const disabledRef = useRef(disabled);
+  const onChangeRef = useRef(onChange);
+  valueRef.current = value;
+  boundsRef.current = bounds;
+  disabledRef.current = disabled;
+  onChangeRef.current = onChange;
+
+  const commitRef = useRef<(offset: number) => void>(() => {});
+  commitRef.current = (offset) => {
+    const next = resourceSliderValue(offset, boundsRef.current);
+    if (next !== valueRef.current) onChangeRef.current(next);
+  };
+
+  const pan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !disabledRef.current,
+        onMoveShouldSetPanResponder: () => !disabledRef.current,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: (event) => {
+          if (widthRef.current <= 0) return;
+          commitRef.current((event.nativeEvent.pageX - leftRef.current) / widthRef.current);
+        },
+        onPanResponderMove: (event) => {
+          if (widthRef.current <= 0) return;
+          commitRef.current((event.nativeEvent.pageX - leftRef.current) / widthRef.current);
+        },
+      }),
+    [],
+  );
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    const layout = event.nativeEvent.layout;
+    widthRef.current = layout.width;
+    setWidth(layout.width);
+    trackRef.current?.measureInWindow((x) => {
+      leftRef.current = x;
+    });
+  };
+
+  const resolved = snapResourceValue(value, bounds);
+  const offset = resourceSliderOffset(resolved, bounds);
+  const fillWidth = Math.max(0, Math.min(width, width * offset));
+  const thumbLeft = Math.max(
+    0,
+    Math.min(
+      Math.max(0, width - SLIDER_THUMB_SIZE),
+      fillWidth - SLIDER_THUMB_SIZE / 2,
+    ),
+  );
+
+  const adjust = (delta: number) => {
+    if (disabled) return;
+    onChangeRef.current(snapResourceValue(valueRef.current + delta, boundsRef.current));
+  };
+
+  return (
+    <View style={{ gap: 4, opacity: disabled ? 0.5 : 1 }}>
+      <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 8 }}>
+        <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" }}>
+          {label}
+        </Text>
+        <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>
+          {`${resolved} ${displayUnit}`}
+        </Text>
+      </View>
+
+      <View
+        ref={trackRef}
+        onLayout={handleLayout}
+        {...pan.panHandlers}
+        accessible
+        accessibilityRole="adjustable"
+        accessibilityLabel={label}
+        accessibilityValue={{ min: bounds.min, max: bounds.max, now: resolved }}
+        accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+        onAccessibilityAction={(event) => {
+          const action = event.nativeEvent.actionName;
+          if (action === "increment") adjust(bounds.step);
+          if (action === "decrement") adjust(-bounds.step);
+        }}
+        style={{ height: 24, justifyContent: "center" }}
+      >
+        <View
+          pointerEvents="none"
+          style={{
+            height: SLIDER_TRACK_HEIGHT,
+            borderRadius: SLIDER_TRACK_HEIGHT / 2,
+            backgroundColor: theme.colors.surface2,
+            borderColor: theme.colors.border,
+            borderWidth: 1,
+          }}
+        />
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: 0,
+            height: SLIDER_TRACK_HEIGHT,
+            width: fillWidth,
+            borderRadius: SLIDER_TRACK_HEIGHT / 2,
+            backgroundColor: theme.colors.accent,
+          }}
+        />
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: thumbLeft,
+            width: SLIDER_THUMB_SIZE,
+            height: SLIDER_THUMB_SIZE,
+            borderRadius: SLIDER_THUMB_SIZE / 2,
+            backgroundColor: theme.colors.accent,
+            borderColor: theme.colors.surface0,
+            borderWidth: 2,
+          }}
+        />
+      </View>
+
+      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+          {`${bounds.min} ${displayUnit}`}
+        </Text>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+          {`${bounds.max} ${displayUnit}`}
+        </Text>
+      </View>
+
+      {hint ? (
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{hint}</Text>
+      ) : null}
     </View>
   );
 }
