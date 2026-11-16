@@ -300,6 +300,66 @@ describe("buildVmList", () => {
     expect(VmListOutputSchema.parse(result)).toEqual(result);
   });
 
+  it("hides a failed pending row that the same-name sandbox already reports", async () => {
+    const inventory = await loadManagedSandboxes(
+      fakeRuntime([
+        fakeSandbox({
+          id: "sandbox_1",
+          name: "shared-vm",
+          phase: "installing",
+          error: "provision_failed",
+        }),
+      ]),
+      PARENT_ID,
+    );
+    const failed = {
+      ...PENDING,
+      name: "shared-vm",
+      phase: "failed" as const,
+      errorCode: "provision_failed" as const,
+    };
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [failed],
+      env: {},
+    });
+
+    expect(result.children.map((child) => child.kind)).toEqual(["sandbox"]);
+  });
+
+  it("keeps a failed pending row whose error differs from the sandbox", async () => {
+    const inventory = await loadManagedSandboxes(
+      fakeRuntime([
+        fakeSandbox({
+          id: "sandbox_1",
+          name: "shared-vm",
+          phase: "installing",
+          error: "provision_failed",
+        }),
+      ]),
+      PARENT_ID,
+    );
+    const failed = {
+      ...PENDING,
+      name: "shared-vm",
+      phase: "failed" as const,
+      errorCode: "invalid_request" as const,
+    };
+
+    const result = buildVmList({
+      parentId: PARENT_ID,
+      inventory,
+      registrations: { status: "available", hosts: [] },
+      pending: [failed],
+      env: {},
+    });
+
+    expect(result.children.map((child) => child.kind)).toEqual(["pending", "sandbox"]);
+  });
+
   it("supersedes a pending attempt once a sandbox with the name exists", async () => {
     const inventory = await loadManagedSandboxes(
       fakeRuntime([fakeSandbox({ id: "sandbox_1", name: PENDING.name })]),

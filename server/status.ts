@@ -209,11 +209,21 @@ function registrationsAvailability(registrations: RegistrationsView): Availabili
     : { status: "unavailable", error: registrations.error };
 }
 
+/**
+ * A failed attempt stays visible so a pre-create or shape rejection keeps an
+ * actionable row. The exception is a failure the same-name sandbox already
+ * reports: post-allocation failures are recorded on the sandbox, and repeating
+ * them as a second row adds noise without a second action.
+ */
 function pendingSuperseded(entry: PendingCreate, sandboxes: readonly DecodedSandbox[]): boolean {
-  // A failed attempt stays visible even when a sandbox holds its name: that row
-  // carries the only report of a pre-create or shape rejection, and Retry or
-  // Dismiss needs a target.
-  if (entry.phase === "failed") return false;
+  if (entry.phase === "failed") {
+    return sandboxes.some(
+      (sandbox) =>
+        sandbox.name === entry.name &&
+        entry.errorCode !== null &&
+        sandbox.labels[ERROR_LABEL] === entry.errorCode,
+    );
+  }
   return sandboxes.some((sandbox) => sandbox.name === entry.name);
 }
 

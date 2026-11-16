@@ -33,7 +33,8 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 - A Create that meets a Delete tombstone completes that cleanup and allocates a
   fresh generation instead of reporting success for cleanup alone.
 - A failed pending Create stays visible beside a same-name sandbox, so its error
-  can be retried or dismissed.
+  can be retried or dismissed. A post-allocation failure is reported once, on
+  the sandbox row.
 - A VM destroyed outside the plugin (for example with `msb`) no longer leaves
   its host registration behind: `vm.list` starts a conservative sweep that
   removes a registration only after an exact lookup proves its generation is
