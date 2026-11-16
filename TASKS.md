@@ -474,22 +474,22 @@ scheduling and stale/duplicate handling.
 
 Acceptance:
 
-- [ ] The poller runs every 3000 ms only when enabled, schedules the next
+- [x] The poller runs every 3000 ms only when enabled, schedules the next
       request after completion, and stops on unmount or selection change.
-- [ ] The poller is single-flight; a slow request does not accumulate
+- [x] The poller is single-flight; a slow request does not accumulate
       overlapping calls.
-- [ ] CPU, memory, disk I/O, network, uptime, and root-disk data are formatted
+- [x] CPU, memory, disk I/O, network, uptime, and root-disk data are formatted
       from the sample without inventing values.
-- [ ] The first sample shows absolute values and `—` for rates.
-- [ ] Rates reset on generation change, non-increasing timestamps, stale or
+- [x] The first sample shows absolute values and `—` for rates.
+- [x] Rates reset on generation change, non-increasing timestamps, stale or
       future SDK timestamps beyond `STALE_SAMPLE_MS`/clock-skew bounds, uptime
       regression, and cumulative counter regression; duplicate samples do not
       recompute rates.
-- [ ] CPU uses `cpuPercent` directly and is not differentiated.
-- [ ] Stopped, disabled, unavailable, and no-sandbox states have fixed,
+- [x] CPU uses `cpuPercent` directly and is not differentiated.
+- [x] Stopped, disabled, unavailable, and no-sandbox states have fixed,
       human-readable messages and do not look like zero usage.
-- [ ] Pending and registration-only children do not show a live metrics panel.
-- [ ] Poll scheduling and rate state are extracted into pure helpers and tested
+- [x] Pending and registration-only children do not show a live metrics panel.
+- [x] Poll scheduling and rate state are extracted into pure helpers and tested
       with fake timers for cadence, slow requests, unmount, duplicates, and
       resets.
 
