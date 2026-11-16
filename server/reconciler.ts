@@ -30,6 +30,7 @@ import {
   decodeManagedSandbox,
   isSandboxNotFoundError,
   isSandboxReplacedError,
+  loadManagedSandboxes,
   markSandboxError,
   markSandboxPhase,
   ownershipOf,
@@ -483,6 +484,53 @@ function tracking(
   return { mutations: context.mutations, name };
 }
 
+/**
+ * Derives cleanup candidates from the authoritative parent directory and the
+ * authoritative runtime inventory. A registration is not a candidate when its
+ * exact generation is present in inventory (decoded or undecodable); that row
+ * is attached to its sandbox or retained for Repair.
+ * Returns null when either source is unavailable, because missing proof must
+ * never cause a registration removal.
+ *
+ * The read projection is deliberately not an input: an older registration
+ * hidden behind a same-name live sandbox is still a candidate here.
+ */
+export async function collectStaleRegistrationNames(
+  context: ReconcileContext,
+): Promise<readonly string[] | null> {
+  let directory: HostDirectoryLike;
+  try {
+    directory = await bounded(context.hosts.list(), {
+      timeoutMs: sdkTimeoutMs(context),
+    });
+  } catch {
+    return null;
+  }
+
+  const parentId = directory.self.serverId;
+  if (!parentId) return null;
+
+  const inventory = await loadManagedSandboxes(context.runtime, parentId);
+  if (inventory.status !== "available") return null;
+
+  const present = new Set<string>();
+  for (const loaded of inventory.sandboxes) present.add(loaded.sandbox.id);
+  // An undecodable generation is still present. It is retained for Repair
+  // instead of being treated as proof of deletion.
+  for (const failure of inventory.failures) present.add(failure.id);
+
+  const names = new Set<string>();
+  for (const registration of pluginRegistrations(directory.hosts)) {
+    const key = registration.source?.key;
+    if (typeof key === "string" && present.has(key)) continue;
+
+    const name = registration.metadata.name;
+    if (typeof name === "string" && name.length > 0) names.add(name);
+  }
+
+  return [...names];
+}
+
 function registrationOnlyForName(
   name: string,
   registrations: readonly HostRegistrationLike[],
@@ -493,11 +541,11 @@ function registrationOnlyForName(
 }
 
 /**
- * One bounded, conservative sweep for names the read projection reported as
- * registration-only. Each name runs in its lifecycle lane, re-reads the parent
- * directory, and removes only a registration whose exact generation lookup
- * proves it gone or replaced. A pending mutation, lookup failure, or duplicate
- * row leaves the child for Repair instead of guessing.
+ * One bounded, conservative sweep for candidate names. Each name runs in its
+ * lifecycle lane, re-reads the parent directory, and removes only a
+ * registration whose exact generation lookup proves it gone or replaced. A
+ * pending mutation, lookup failure, or duplicate row leaves the child for
+ * Repair instead of guessing.
  */
 export async function pruneRegistrationOnlyNames(
   context: ReconcileContext,
