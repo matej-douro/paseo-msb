@@ -44,7 +44,7 @@ as a directory plugin, then drives `vm.create`, `vm.dismiss`, `vm.list`,
 stale handle rejects refresh, connect, job reads, and destroy after a same-name
 replacement, while the pinned SDK's stale `modify()` still reaches the
 replacement. This is the executable contract for the residual window described
-in [DESIGN](../DESIGN.md#generation-exact-label-writes-pinned-sdk-limitation).
+in [DESIGN](../DESIGN.md#24-generation-exact-mutations-and-the-pinned-sdk-limitation).
 
 ## Credential matrix
 

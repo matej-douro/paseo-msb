@@ -7,6 +7,12 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Added
 
+- Create accepts explicit CPU, RAM, and root-disk selections within the
+  documented bounds; the defaults are 2 CPUs, 4096 MiB RAM, and 10240 MiB root
+  disk.
+- A running child's detail shows a bounded live resource chart for CPU, memory,
+  disk I/O, network, and root-disk usage. Samples are polled from `vm.metrics`
+  every 3 seconds, kept only for the open detail, and never persisted.
 - A **Paseo tools** integration enables Paseo tools for the selected providers
   and installs all bundled orchestration skills once the child is online and its
   selected providers are ready. It needs no credential and is unchecked by
@@ -28,6 +34,11 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   `paseo-<token>` name, only one attempt exists per name, and a same-name Create
   joins only when its plan and resource shape match. Request IDs and the guest
   `PASEO_MSB_REQUEST` marker were removed.
+- New parent registrations use the canonical child name as `label` and
+  `metadata.name`; Repair corrects display drift.
+- Registration-only children are presented as transient cleanup states: while
+  absence is unproven they show `VM state unknown`, not `Missing`, and Repair
+  and Delete remain available.
 - Create and Retry check credential-store availability before acting; store
   failures surface as action errors and toasts rather than stale availability.
 - Selection remains stable when a pending child becomes a sandbox, duplicate
@@ -49,9 +60,9 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   can be retried or dismissed. A post-allocation failure is not repeated as a
   second pending row.
 - A VM destroyed outside the plugin (for example with `msb`) no longer leaves
-  its host registration behind: `vm.list` starts a conservative sweep that
-  removes a registration only after an exact lookup proves its generation is
-  gone or replaced.
+  its host registration behind: a lightweight background sweep, also
+  triggerable by `vm.list`, removes a registration only after a fresh exact
+  lookup proves its generation is gone or replaced.
 - Repeated Create and recovery can join an existing VM after its current
   credentials were removed or the store became unavailable.
 - Delete accepts an owned exact-generation VM with an invalid historical plan,

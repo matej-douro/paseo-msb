@@ -84,7 +84,10 @@ produced a sandbox can also be dismissed from its detail.
 ## Use
 
 Open a ready child through Paseo's normal host picker. There are no
-plugin-specific copy, shell, metrics, or start/stop controls.
+plugin-specific copy, shell, or start/stop controls. A running child's detail
+shows a bounded live resource chart for CPU, memory, disk I/O, network, and
+root-disk usage; samples exist only while the detail is open and are never
+persisted.
 
 ## Repair
 
@@ -110,10 +113,12 @@ Already-missing resources count as success, and failed or incomplete children
 need no CLI cleanup. Reload during deletion resumes cleanup, never setup; a
 failed registration removal leaves a registration-only child for Repair or Delete.
 
-A VM destroyed outside the plugin (for example with `msb`) shows as a
-registration-only child. `vm.list` starts a conservative cleanup sweep for those
-rows: an exact runtime lookup must show the generation gone or replaced before
-its registration is removed. The sweep never blocks the list response, at most
+A VM destroyed outside the plugin (for example with `msb`) leaves a
+registration-only child, which is a transient cleanup state. A lightweight
+background sweep, also triggerable by `vm.list`, removes such a registration
+only after a fresh exact lookup shows the generation gone or replaced. While
+absence is unproven the row says `VM state unknown`, not `Missing`, and Repair
+and Delete remain available. The sweep never blocks the list response, at most
 one sweep runs at a time, and a name that could not be verified is retried after
 a short cooldown.
 
@@ -148,11 +153,12 @@ substitution is header-only and limited to the fixed hosts above; TLS
 interception and guest CA setup are microsandbox responsibilities.
 
 The image is fixed; CPU, RAM, and root disk are chosen at Create within the
-documented bounds (2 CPUs, 4096 MiB RAM, and 10240 MiB root disk by default).
-There is no CPU resize, image selection, start/stop/restart, volumes, snapshots,
-unlabelled-sandbox adoption, operation history, or plugin-specific shell. After
-`ready`, the plugin does not monitor tool health, repair drift, or re-provision;
-stopped VMs are not started automatically.
+documented bounds (2 CPUs, 4096 MiB RAM, and 10240 MiB root disk by default)
+and are not editable in the UI yet. There is no resource editor, image
+selection, start/stop/restart, volumes, snapshots, unlabelled-sandbox adoption,
+operation history, or plugin-specific shell. After `ready`, the plugin does not
+monitor tool health, repair drift, or re-provision; stopped VMs are not started
+automatically.
 
 Detached sandboxes, jobs, and registrations survive restarts; recovery
 reconciles them without creating, starting, or adopting a VM and only completes
