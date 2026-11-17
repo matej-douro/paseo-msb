@@ -138,10 +138,10 @@ DTOs without exposing raw config. Keep `paseo-msb=v1` as the managed-label value
 
 Acceptance:
 
-- [x] Name schema accepts `paseo-<uuid>` and lowercase slugs, and rejects
+- [x] Name schema accepts `paseo-<token>` and lowercase slugs, and rejects
       uppercase, `/`, whitespace, leading/trailing hyphens, and names over 63
       characters.
-- [x] `vm.create` accepts optional `name` and a complete optional `resources`
+- [x] `vm.create` requires `name` and accepts an optional complete `resources`
       selection; defaults are 2 CPUs, 4096 MiB RAM, and 10240 MiB disk.
 - [x] `vm.resize` requires `name`, `id`, and at least one of `memoryMib` or
       `diskMib`; `restart` is optional.
@@ -149,9 +149,9 @@ Acceptance:
       null for legacy VMs; pending resources are non-null. Create accepts any
       valid disk, while resize rejects a shrink, a null disk baseline, and a
       memory target with a null baseline.
-- [x] `vm.detail` accepts an optional `requestId` to select a pending attempt;
-      `id` and `requestId` are mutually exclusive, and detail does not include
-      metrics.
+- [x] `vm.detail` accepts an optional `id` to select an exact sandbox or
+      registration-only row; omitting it follows the name's pending attempt
+      first, and detail does not include metrics.
 - [x] Pending child DTOs include `resourcesSpecified`; sandbox and
       registration-only DTOs do not.
 - [x] `vm.metrics` has a discriminated availability result with fixed reasons
@@ -167,44 +167,41 @@ Files: `shared/constants.ts`, `shared/contracts.ts`, `shared/errors.ts`,
 
 ### 2.2 Carry name and resources through pending creates
 
-Extend the pending entry and reservation comparison. A repeated request must
-match the original name, plan, and resources; a different one is a conflict.
-Two different requests may briefly reserve the same name; they remain distinct
-by request ID.
+Extend the pending entry and reservation comparison. A repeated Create must
+match the original name, plan, and resources; a different shape is a conflict.
+At most one pending attempt exists per name.
 
 Acceptance:
 
 - [x] Pending entries and pending DTOs retain `name`, canonical `resources`,
       and the resources-specified flag.
-- [x] Same request ID with the same name/plan/resources/specified flag joins
-      the running attempt or restarts a failed one.
-- [x] Same request ID with a different name, plan, resources, or specified flag
-      is `invalid_request`.
-- [x] Different request IDs may reserve the same name; both entries remain
-      distinct and visible until reconciliation or dismissal resolves them.
+- [x] A repeated Create with the same name, plan, resources, and specified flag
+      joins the running attempt or restarts a failed one.
+- [x] A repeat with a different plan, resources, or specified flag is
+      `invalid_request`.
+- [x] A failed attempt stays visible beside a same-name sandbox or
+      registration-only child until it is retried or dismissed.
 - [x] Create returns the derived name immediately and never waits for sandbox
       work.
-- [x] Retry-create input reconstructs the original request ID, name, resources,
-      and plan.
-- [x] Pending-store tests cover join, restart, conflict, same-name attempts, and
-      settlement.
+- [x] Retry-create input reconstructs the original name, resources, and plan.
+- [x] Pending-store tests cover join, restart, conflict, and settlement.
 
 Files: `server/pending.ts`, `server/create.ts`,
 `tests/server/pending.test.ts`, `tests/server/create.test.ts`
 
 ### 2.3 Extend the sandbox create plan and adapter
 
-Add the request and resources environment variables, explicit root disk,
+Add the resources environment variables, explicit root disk,
 maximum hotpluggable memory, metrics sample interval, and the resize/metrics
 surface to the adapter interfaces. Keep the create plan pure so fake-runtime
 tests can assert the pinned values.
 
 Acceptance:
 
-- [x] New create plans include `PASEO_MSB_REQUEST`,
-      `PASEO_MSB_RESOURCES`, `PASEO_MSB_RESOURCES_SPECIFIED`, the requested root
-      disk, the requested CPU count, requested memory, `maxMemory` at the
-      allowed maximum, and a 2-second metrics interval.
+- [x] New create plans include `PASEO_MSB_RESOURCES`,
+      `PASEO_MSB_RESOURCES_SPECIFIED`, the requested root disk, the requested
+      CPU count, requested memory, `maxMemory` at the allowed maximum, and a
+      2-second metrics interval.
 - [x] The real runtime sets `.image(...).rootDisk(...).cpus(...)
       .memory(...).maxMemory(...).metricsSampleIntervalMs(...)` in SDK order.
 - [x] `SandboxHandleLike` exposes the raw `modify()` promise, metrics, and the
@@ -220,26 +217,26 @@ Files: `server/sandbox.ts`, `server/runtime.ts`,
 ### 2.4 Decode resources and project them into list/detail
 
 Read observed resources from the sandbox config only, with snake_case and
-camelCase fallbacks. Read desired resources and the request marker from the
-managed environment. Do not substitute desired values for observations.
+camelCase fallbacks. Read desired resources from the managed environment. Do not
+substitute desired values for observations.
 
 Acceptance:
 
 - [x] New sandboxes report CPU, memory, and root-disk size from config.
 - [x] Legacy fields are `null` when not reported; an unreported root disk is
       never invented.
-- [x] `requestedResources`, the internal request marker, and the
-      resources-specified flag are decoded from environment; malformed request,
-      resources, or specified-flag values are `invalid_config`.
-- [x] A live sandbox supersedes the pending attempt with the same request
-      marker, or a legacy sandbox supersedes the pending attempt whose generated
-      name matches; a different request's failed/slow pending row stays visible.
+- [x] `requestedResources` and the resources-specified flag are decoded from
+      environment; malformed resources or specified-flag values are
+      `invalid_config`.
+- [x] A live sandbox supersedes an active pending attempt with the same name; a
+      failed attempt stays visible unless the sandbox reports the same error
+      code.
 - [x] Pending, sandbox, and registration-only DTOs have explicit resource
       shapes; pending rows expose `resourcesSpecified`, sandbox rows expose
       requested resources, and registration-only rows have no fabricated
       resources.
-- [x] The decoder never leaks raw config, env, credential values, or the request
-      marker through public DTOs.
+- [x] The decoder never leaks raw config, env, or credential values through
+      public DTOs.
 - [x] List/detail tests cover new, legacy, malformed, partially reported, and
       same-name pending/sandbox merges.
 
@@ -247,37 +244,36 @@ Files: `server/sandbox.ts`, `server/status.ts`, `server/rpc.ts`,
 `tests/server/list.test.ts`, `tests/server/detail.test.ts`,
 `tests/server/config.test.ts`
 
-### 2.5 Enforce name ownership, request identity, and registration display
+### 2.5 Enforce name ownership, shape matching, and registration display
 
-Pass the request ID into the reconciler. Scan managed inventory for
-`PASEO_MSB_REQUEST` before allocation. A request that already owns a generation
-must use the same name, plan, resources, and resources-specified flag. A
+Scan managed inventory by name before allocation. A Create that already owns a
+generation must use the same plan, resources, and resources-specified flag. A
 markerless legacy generation rejects explicit resources. Update registration
 label/metadata to the canonical name and repair drift.
 
 Acceptance:
 
-- [x] A repeated request ID after readiness finds its generation and does not
-      create a second VM.
-- [x] A repeated request ID with a different name, plan, or resources is
-      rejected as `invalid_request`, naming the already-owned generation.
-- [x] A different request under the same name fails with `name_conflict` and
-      never relabels, adopts, or destroys the existing sandbox.
-- [x] A repeated request after readiness must match the persisted
-      resources-specified flag as well as name/plan/resources.
-- [x] A legacy sandbox without `PASEO_MSB_REQUEST` is joinable only when its
-      name is exactly `paseo-<requestId>` and the request did not explicitly
-      supply resources. An explicit resource selection against a markerless
-      legacy sandbox is `invalid_request`.
+- [x] A repeated Create after readiness finds its generation and does not create
+      a second VM.
+- [x] A repeated Create with a different plan or resources is rejected as
+      `invalid_request`, naming the already-owned generation.
+- [x] A repeated Create must also match the persisted resources-specified flag.
+- [x] A Create under a name owned by another plugin or parent fails with
+      `name_conflict` and never relabels, adopts, or destroys the existing
+      sandbox.
+- [x] A legacy sandbox without resource markers is joinable only when its name
+      matches the requested name and the request did not explicitly supply
+      resources. An explicit resource selection against a markerless legacy
+      sandbox is `invalid_request`.
 - [x] New registrations use `label = <name>` and
       `metadata = { source: "paseo-msb", name }`.
 - [x] Recovery/Repair update an enabled V1 registration from
       `<parent>/<name>` to `<name>`; a disabled registration is untouched.
 - [x] Recovery, Repair, and Create still produce at most one registration per
       generation.
-- [x] Tests cover same-request join, different-request conflict, post-ready
-      request reuse, legacy omitted-vs-explicit resources, foreign-name
-      conflict, duplicate pending rows, and registration drift.
+- [x] Tests cover same-name join, different-shape conflict, post-ready reuse,
+      legacy omitted-vs-explicit resources, foreign-name conflict, failed-attempt
+      visibility, and registration drift.
 
 Files: `server/reconciler.ts`, `server/registration.ts`,
 `server/status.ts`, `server/recovery.ts`, `server/reconcile.ts`,
@@ -439,9 +435,9 @@ Files: `server/prune.ts`, `server/index.ts`, `server/reconciler.ts`,
 
 ### 4.1 Add name, resources, and same-name attempt selection to Create
 
-Add the optional name field, fixed CPU display, and editable RAM/root-disk
-fields. Keep retry inputs intact. Make pending rows and detail selection
-request-ID aware so two attempts may share a name safely.
+Add the optional name field and editable CPU/RAM/root-disk fields. Keep retry
+inputs intact. Make pending rows and detail selection name-aware so one attempt
+per name stays unambiguous.
 
 Acceptance:
 
@@ -450,14 +446,16 @@ Acceptance:
 - [x] CPU, RAM, and disk default to 2, 4096 MiB, and 10240 MiB; all three are
       editable within the shared bounds.
 - [x] CPU/RAM/disk validation matches the shared bounds and steps.
-- [x] Create sends `name` only when the user entered one, plus `resources`.
+- [x] Create always sends an explicit name, either the user's value or the
+      generated `paseo-<token>`, plus `resources`.
 - [x] Synchronous validation/credential errors stay in the modal. An
       asynchronous `name_conflict` appears on the new pending child and can be
       dismissed; the modal does not claim to have detected it.
 - [x] Retry create preserves the original name, resources, and whether
       resources were explicitly supplied.
-- [x] Pending rows use request ID in their key and selection; detail requests
-      include `requestId` for pending children.
+- [x] Pending rows are keyed by kind and name; detail selection omits the
+      generation id for pending children and includes it for sandbox and
+      registration rows.
 - [x] Compact and wide layouts remain usable.
 - [x] Pure validation/formatting/selection helpers are unit tested.
 
@@ -614,26 +612,27 @@ Files: `client/ChildList.tsx`, `client/ChildDetail.tsx`, `client/state.ts`,
 
 ## 5. Verification and documentation
 
-### 5.1 Names, request IDs, legacy, and registration integration
+### 5.1 Names, create identity, legacy, and registration integration
 
-Drive names and request identity through the real runtime and parent daemon.
+Drive names, create identity, and legacy children through the real runtime and
+parent daemon.
 
 Acceptance:
 
 - [ ] A custom-named child reaches ready, appears under that name in
       `vm.list`, and has a registration row with the name in `label` and
       `metadata.name`.
-- [ ] A second request using the same name fails with `name_conflict` and
-      leaves the first generation untouched.
-- [ ] Two same-name pending attempts remain distinct and the losing conflict
-      stays visible after the winner becomes a sandbox.
-- [ ] A repeated request ID after readiness is rejected if it changes the
-      name/selection, resources-specified flag, or resources and does not create
-      a second VM.
-- [ ] Generated names still work, and a real V1-shaped child without request or
-      resources markers can be listed, repaired, and deleted without being
-      adopted by a new request. An omitted-resources retry may join it; an
-      explicit resource selection is rejected.
+- [ ] A Create under a name owned by another plugin or parent fails with
+      `name_conflict` and leaves that generation untouched.
+- [ ] A failed attempt stays visible beside a same-name sandbox or
+      registration-only child until it is retried or dismissed.
+- [ ] A repeated Create after readiness with a different plan, resources, or
+      resources-specified flag is rejected as `invalid_request` and does not
+      create a second VM; an identical shape joins the existing generation.
+- [ ] Generated names still work, and a real V1-shaped child without resource
+      markers can be listed, repaired, and deleted without being adopted. An
+      omitted-resources retry may join it; an explicit resource selection is
+      rejected.
 - [ ] The V1-shaped fixture has no explicit root disk, `maxMemory`, or metrics
       interval, and keeps the old `<parent>/<name>` registration label.
 - [ ] Canary credentials remain absent from RPC output, logs, raw sinks,
@@ -737,18 +736,18 @@ Acceptance:
 - [ ] README states that only a confirmed resize of a running VM may restart it
       and that there are still no general lifecycle controls, CPU resize,
       rename, disk shrink, or metrics history.
-- [ ] README explains that registration-only rows are transient cleanup states
+- [x] README explains that registration-only rows are transient cleanup states
       and that unproven VM absence is shown as `VM state unknown`.
 - [ ] CHANGELOG has an Unreleased V1.1 entry covering names, resources, resize,
       live metrics, registration display migration, and background cleanup of
       confirmed-stale registrations.
-- [ ] `docs/release-test.md` no longer links to the old
+- [x] `docs/release-test.md` no longer links to the old
       `generation-exact-label-writes-pinned-sdk-limitation` heading; it points
       to the current `Generation-exact mutations and the pinned SDK limitation`
       section.
-- [ ] No documentation claims that V1.1 can rename an existing child or shrink
+- [x] No documentation claims that V1.1 can rename an existing child or shrink
       a disk.
-- [ ] Links to `DESIGN.md` and the release test remain valid.
+- [x] Links to `DESIGN.md` and the release test remain valid.
 
 Files: `README.md`, `CHANGELOG.md`, `docs/release-test.md`
 
