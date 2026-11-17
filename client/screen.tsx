@@ -11,9 +11,11 @@ import {
   vmDeleteRpc,
   vmDismissRpc,
   vmReconcileRpc,
+  vmResizeRpc,
   type VmCreateInput,
   type VmDeleteInput,
   type VmDismissInput,
+  type VmResizeInput,
 } from "../shared/contracts";
 import { selectVmChild, type ChildSelection } from "../shared/selection";
 import { ChildDetail } from "./ChildDetail";
@@ -50,6 +52,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
   const dismiss = useRpc(vmDismissRpc);
   const reconcile = useRpc(vmReconcileRpc);
   const remove = useRpc(vmDeleteRpc);
+  const resize = useRpc(vmResizeRpc);
   const readSecrets = useRpc(secretsListRpc);
   const secrets = useSecrets();
   const setSecret = useRpc(secretsSetRpc);
@@ -98,6 +101,12 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
   // Selection and list cleanup live in onDeleted, after the success toast.
   const handleDelete = async (input: VmDeleteInput) => {
     await remove(input);
+  };
+
+  const handleResize = async (input: VmResizeInput) => {
+    const result = await resize(input);
+    await Promise.all([list.refresh(), detail.refresh()]);
+    return result;
   };
 
   const openCreate = async () => {
@@ -250,6 +259,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
         setSelection(null);
         void list.refresh();
       }}
+      onResize={handleResize}
     />
   ) : (
     <View style={styles.emptyDetail}>

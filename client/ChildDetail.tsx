@@ -11,10 +11,13 @@ import type {
   VmDismissInput,
   VmMetricsResult,
   VmReconcileResult,
+  VmResizeInput,
+  VmResizeResult,
 } from "../shared/contracts";
 import { useVmMetrics } from "./hooks/useVmMetrics";
 import { metricsUnavailableText, type MetricsHistoryPoint } from "./metrics";
 import {
+  canResize,
   childErrorText,
   childPhase,
   childPlan,
@@ -28,11 +31,13 @@ import {
   reconcileSuccessMessage,
   registrationOnlyDetailText,
   registrationText,
+  resourceDetailLines,
   retryCreateInput,
   runtimeText,
   setupPill,
   vmPill,
 } from "./state";
+import { ResizeChild } from "./ResizeChild";
 import { ActionButton, IconButton, LogBlock, MetricsChart, Notice, RootDiskBar, StatusPill, type PluginTheme } from "./ui";
 
 export interface ChildDetailProps {
@@ -50,6 +55,7 @@ export interface ChildDetailProps {
   onDismissed(): void;
   onDelete(input: VmDeleteInput): Promise<void>;
   onDeleted(): void;
+  onResize(input: VmResizeInput): Promise<VmResizeResult>;
 }
 
 /**
@@ -71,6 +77,7 @@ export function ChildDetail({
   onDismissed,
   onDelete,
   onDeleted,
+  onResize,
 }: ChildDetailProps) {
   const toast = useToast();
   const [repairing, setRepairing] = useState(false);
@@ -81,6 +88,7 @@ export function ChildDetail({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [resizeOpen, setResizeOpen] = useState(false);
 
   const child = data?.child ?? null;
   const registrations = data?.registrations ?? ({ status: "available" } as const);
@@ -158,6 +166,13 @@ export function ChildDetail({
     }
   };
 
+  // A settled resize refreshes the live metrics alongside the detail and list.
+  const resize = async (input: VmResizeInput) => {
+    const result = await onResize(input);
+    await metrics.refresh();
+    return result;
+  };
+
   const confirmDelete = async () => {
     if (!deleteTarget || deleting) return;
     setDeleting(true);
@@ -200,6 +215,15 @@ export function ChildDetail({
           </Text>
           {deleteTarget ? (
             <View style={{ flexDirection: "row", gap: 6 }}>
+              {sandbox && canResize(sandbox.resources) ? (
+                <IconButton
+                  icon="SlidersHorizontal"
+                  label="Edit resources"
+                  theme={theme}
+                  onPress={() => setResizeOpen(true)}
+                  disabled={repairing || deleting || retrying}
+                />
+              ) : null}
               <IconButton
                 icon="Wrench"
                 label={repairing ? "Repairing…" : "Repair child"}
@@ -257,6 +281,9 @@ export function ChildDetail({
                     value={registrationText(sandbox.registration, registrations)}
                   />
                   <DetailRow theme={theme} label="Stable ID" value={sandbox.id} mono />
+                  {resourceDetailLines(sandbox.resources, sandbox.requestedResources).map((line) => (
+                    <DetailRow key={line.label} theme={theme} label={line.label} value={line.value} />
+                  ))}
                 </>
               ) : registrationOnly ? (
                 <>
@@ -334,6 +361,21 @@ export function ChildDetail({
           </>
         ) : null}
       </ScrollView>
+
+      {sandbox ? (
+        <ResizeChild
+          open={resizeOpen}
+          name={sandbox.name}
+          id={sandbox.id}
+          observed={sandbox.resources}
+          requestedResources={sandbox.requestedResources}
+          runtimeStatus={sandbox.runtimeStatus}
+          theme={theme}
+          compact={compact}
+          onOpenChange={setResizeOpen}
+          onResize={resize}
+        />
+      ) : null}
 
       <Modal title="Delete child" open={deleteOpen} onOpenChange={setDeleteOpen}>
         <Modal.Content>

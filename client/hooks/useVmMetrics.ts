@@ -1,5 +1,5 @@
 import { useRpc } from "@getpaseo/plugin/client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { vmMetricsRpc, type VmMetricsResult } from "../../shared/contracts";
 import {
   createMetricsHistory,
@@ -12,6 +12,8 @@ export interface VmMetricsState {
   /** Bounded rolling history for the selected generation. */
   readonly points: readonly MetricsHistoryPoint[];
   readonly loading: boolean;
+  /** Reads once now, for an action that changes the VM (for example a resize). */
+  refresh(): Promise<void>;
 }
 
 const UNAVAILABLE: VmMetricsResult = {
@@ -37,9 +39,11 @@ export function useVmMetrics(
   const [availability, setAvailability] = useState<VmMetricsResult | null>(null);
   const [points, setPoints] = useState<readonly MetricsHistoryPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const reload = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     if (!enabled || !name || !id) {
+      reload.current = async () => {};
       setAvailability(null);
       setPoints([]);
       setLoading(false);
@@ -53,6 +57,8 @@ export function useVmMetrics(
     setLoading(true);
 
     const poll = async () => {
+      if (!active) return;
+
       try {
         const result = await invokeRef.current({ name, id });
         if (!active) return;
@@ -77,14 +83,20 @@ export function useVmMetrics(
       }
     };
 
+    reload.current = poll;
     const poller = createMetricsPoller(poll);
     poller.start();
 
     return () => {
       active = false;
+      reload.current = async () => {};
       poller.stop();
     };
   }, [name, id, enabled]);
 
-  return { availability, points, loading };
+  const refresh = useCallback(async () => {
+    await reload.current();
+  }, []);
+
+  return { availability, points, loading, refresh };
 }

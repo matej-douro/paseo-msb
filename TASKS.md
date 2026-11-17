@@ -564,23 +564,23 @@ require a second explicit confirmation before calling again with
 
 Acceptance:
 
-- [ ] The detail shows RAM/disk, and `requestedResources` when a restart is
+- [x] The detail shows RAM/disk, and `requestedResources` when a restart is
       pending.
-- [ ] List rows show requested resources for pending children and known
+- [x] List rows show requested resources for pending children and known
       observed resources for sandboxes; null fields are omitted.
-- [ ] The resize dialog defaults to current/requested values, enforces bounds,
+- [x] The resize dialog defaults to current/requested values, enforces bounds,
       disallows disk shrink, disables disk editing when the observed disk is
       null, and disables RAM editing when observed memory is null.
-- [ ] `unchanged`, `applied`, `converging`, and `restart_required` each produce
+- [x] `unchanged`, `applied`, `converging`, and `restart_required` each produce
       distinct feedback; only the last offers a restart action.
-- [ ] The restart action is shown only for a running VM; created/stopped/
+- [x] The restart action is shown only for a running VM; created/stopped/
       crashed/paused VMs show why the plugin will not start them.
-- [ ] The restart confirmation names the child and says active sessions will
+- [x] The restart confirmation names the child and says active sessions will
       disconnect.
-- [ ] Successful resize and restart refresh the detail, metrics, and list.
-- [ ] Errors stay in the dialog or as a toast without closing it.
-- [ ] No general stop/start/restart controls are introduced.
-- [ ] Dialog validation and restart-state transitions are extracted into pure
+- [x] Successful resize and restart refresh the detail, metrics, and list.
+- [x] Errors stay in the dialog or as a toast without closing it.
+- [x] No general stop/start/restart controls are introduced.
+- [x] Dialog validation and restart-state transitions are extracted into pure
       helpers and unit tested.
 
 Files: `client/ChildDetail.tsx`, `client/ChildList.tsx`, `client/screen.tsx`,

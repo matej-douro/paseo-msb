@@ -3,6 +3,7 @@ import { Pressable, Text, View } from "react-native";
 import type { VmChild, VmListResult } from "../shared/contracts";
 import {
   childErrorText,
+  childResourcesText,
   inventoryNotice,
   isEmptyInventory,
   registrationsNotice,
@@ -118,6 +119,7 @@ function ChildRow({
   onSelect(): void;
 }) {
   const error = childErrorText(child);
+  const resources = childResourcesText(child);
   const setup = setupPill(child);
   const vm = vmPill(child, registrations);
 
@@ -153,6 +155,12 @@ function ChildRow({
         <StatusPill label={setup.label} tone={setup.tone} theme={theme} filled />
         <StatusPill label={vm.label} tone={vm.tone} theme={theme} filled />
       </View>
+
+      {resources ? (
+        <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+          {resources}
+        </Text>
+      ) : null}
 
       {error ? (
         <Text

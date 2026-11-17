@@ -167,12 +167,14 @@ substitution is header-only and limited to the fixed hosts above; TLS
 interception and guest CA setup are microsandbox responsibilities.
 
 The image is fixed; CPU, RAM, and root disk are chosen at Create within the
-documented bounds (2 CPUs, 4096 MiB RAM, and 10240 MiB root disk by default)
-and are not editable in the UI yet. There is no resource editor, image
-selection, start/stop/restart, volumes, snapshots, unlabelled-sandbox adoption,
-operation history, or plugin-specific shell. After `ready`, the plugin does not
-monitor tool health, repair drift, or re-provision; stopped VMs are not started
-automatically.
+documented bounds (2 CPUs, 4096 MiB RAM, and 10240 MiB root disk by default).
+**Edit resources** changes RAM and grows the root disk, but never the CPU.
+There are no general start/stop/restart controls: the only restart is the
+explicit confirmation after a resize needs one, and it is offered only for a
+running VM. There is no image selection, volumes, snapshots, unlabelled-sandbox
+adoption, operation history, or plugin-specific shell. After `ready`, the plugin
+does not monitor tool health, repair drift, or re-provision; stopped VMs are not
+started automatically.
 
 Detached sandboxes, jobs, and registrations survive restarts; recovery
 reconciles them without creating, starting, or adopting a VM and only completes
