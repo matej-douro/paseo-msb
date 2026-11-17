@@ -7,6 +7,8 @@ import {
 } from "../../server/jobs";
 import { LifecycleAbortedError } from "../../server/lanes";
 import { piInstallArgv } from "../../server/pi-install";
+import { findLatestProvisionJob } from "../../server/provision";
+import { PROVISIONING_STATE_DIR } from "../../shared/provisioning";
 import type {
   SandboxHandleLike,
   SandboxJobInfoLike,
@@ -60,7 +62,6 @@ describe("job inventory", () => {
     ).toBe(false);
   });
 
-
   it("reports a still-running job instead of failing the install", async () => {
     const handle = fakeSandbox({
       id: "sandbox_1",
@@ -103,5 +104,41 @@ describe("job inventory", () => {
       id: "job_1",
       exitCode: 1,
     });
+  });
+});
+
+describe("provision job lookup", () => {
+  it("finds a provision job launched under an older plan hash", async () => {
+    const handle = fakeSandbox({
+      id: "sandbox_1",
+      name: "paseo-1",
+      jobs: [
+        {
+          id: "old",
+          command: [
+            "/bin/sh",
+            `${PROVISIONING_STATE_DIR}/provision-0123456789abcdef.sh`,
+            "0123456789abcdef",
+          ],
+          state: "exited",
+          exitCode: 0,
+        },
+      ],
+    });
+
+    await expect(findLatestProvisionJob(handle)).resolves.toMatchObject({ id: "old" });
+  });
+
+  it("ignores jobs that are not provision scripts", async () => {
+    const handle = fakeSandbox({
+      id: "sandbox_1",
+      name: "paseo-1",
+      jobs: [
+        { id: "pi", command: piInstallArgv(), state: "exited", exitCode: 0 },
+        { id: "echo", command: ["echo"], state: "exited", exitCode: 0 },
+      ],
+    });
+
+    await expect(findLatestProvisionJob(handle)).resolves.toBeNull();
   });
 });

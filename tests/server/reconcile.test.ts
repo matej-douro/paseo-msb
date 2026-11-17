@@ -11,6 +11,7 @@ import { deleteVm } from "../../server/delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "../../server/lanes";
 import { createMutationRegistry } from "../../server/mutations";
 import { reconcileVm, type ReconcileVmContext } from "../../server/reconcile";
+import type { ExecSpec } from "../../server/sandbox";
 import {
   failingRuntime,
   fakeHostDirectory,
@@ -200,6 +201,163 @@ describe("reconcileVm", () => {
     expect(paseoTools.enabledProviders).toEqual([["pi"]]);
     expect(paseoTools.installCalls).toBe(1);
     expect(paseoTools.closes).toBe(1);
+  });
+
+  it("reapplies the VM setup skill after Paseo tools", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+    const provision = buildProvisionScript(plan);
+    const connectExecs: ExecSpec[] = [];
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "installing",
+      plan,
+      connectExecs,
+      skillProbeCodes: [1, 0],
+      provisionStatus: {
+        planHash: provision.planHash,
+        ok: true,
+        steps: [{ id: "vm-setup-skill", status: "ok", exitCode: 0 }],
+        failedStep: null,
+        error: null,
+      },
+    });
+    const hosts = new FakePaseoHosts();
+    const paseoTools = new FakePaseoTools();
+
+    const result = await reconcileVm(
+      reconcileContext(
+        fakeRuntime([sandbox]),
+        hosts,
+        new FakeSandboxCreator({ existing: sandbox }),
+        { paseoTools: (connection, options) => paseoTools.connect(connection, options) },
+      ),
+      INPUT,
+    );
+
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(paseoTools.installCalls).toBe(1);
+    const skillWrites = connectExecs.filter((spec) =>
+      spec.args[1]?.startsWith("set -eu\numask 077\nfor d in ") === true,
+    );
+    expect(skillWrites).toHaveLength(1);
+  });
+
+  it("does not reapply base steps without Paseo tools", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: [],
+    };
+    const provision = buildProvisionScript(plan);
+    const connectExecs: ExecSpec[] = [];
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "installing",
+      plan,
+      connectExecs,
+      provisionStatus: {
+        planHash: provision.planHash,
+        ok: true,
+        steps: [{ id: "vm-setup-skill", status: "ok", exitCode: 0 }],
+        failedStep: null,
+        error: null,
+      },
+    });
+    const hosts = new FakePaseoHosts();
+
+    const result = await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox })),
+      INPUT,
+    );
+
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(
+      connectExecs.some((spec) => spec.args[1]?.startsWith('test -f "$HOME/.agents/skills/') === true),
+    ).toBe(false);
+  });
+
+  it("reports a post-registration VM setup skill failure", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+    const provision = buildProvisionScript(plan);
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "installing",
+      plan,
+      skillProbeCodes: [1, 1],
+      provisionStatus: {
+        planHash: provision.planHash,
+        ok: true,
+        steps: [{ id: "vm-setup-skill", status: "ok", exitCode: 0 }],
+        failedStep: null,
+        error: null,
+      },
+    });
+    const hosts = new FakePaseoHosts();
+    const paseoTools = new FakePaseoTools();
+
+    const result = await reconcileVm(
+      reconcileContext(
+        fakeRuntime([sandbox]),
+        hosts,
+        new FakeSandboxCreator({ existing: sandbox }),
+        { paseoTools: (connection, options) => paseoTools.connect(connection, options) },
+      ),
+      INPUT,
+    );
+
+    expect(result.repaired).toEqual([]);
+    expect(result.errors[0]?.error.code).toBe("provision_failed");
+    expect(result.errors[0]?.error.detail).toContain("after registration");
+    expect(sandbox.config()).toMatchObject({
+      labels: { [PHASE_LABEL]: "registering", [ERROR_LABEL]: "provision_failed" },
+    });
+  });
+
+  it("reports a VM setup skill write failure", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+    const provision = buildProvisionScript(plan);
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "installing",
+      plan,
+      skillProbeCodes: [1],
+      skillActionCode: 7,
+      provisionStatus: {
+        planHash: provision.planHash,
+        ok: true,
+        steps: [{ id: "vm-setup-skill", status: "ok", exitCode: 0 }],
+        failedStep: null,
+        error: null,
+      },
+    });
+    const hosts = new FakePaseoHosts();
+    const paseoTools = new FakePaseoTools();
+
+    const result = await reconcileVm(
+      reconcileContext(
+        fakeRuntime([sandbox]),
+        hosts,
+        new FakeSandboxCreator({ existing: sandbox }),
+        { paseoTools: (connection, options) => paseoTools.connect(connection, options) },
+      ),
+      INPUT,
+    );
+
+    expect(result.repaired).toEqual([]);
+    expect(result.errors[0]?.error.code).toBe("provision_failed");
+    expect(result.errors[0]?.error.detail).toContain("after registration");
   });
 
   it("resumes an interrupted install from a successful provision status", async () => {

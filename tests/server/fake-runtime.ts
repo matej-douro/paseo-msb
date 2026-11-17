@@ -152,6 +152,12 @@ export interface FakeSandboxOptions {
   execError?: Error;
   execCode?: number;
   execOutput?: string;
+  /** Return codes for successive VM setup skill probes; the last repeats. */
+  skillProbeCodes?: readonly number[];
+  /** Return code for the VM setup skill write action. */
+  skillActionCode?: number;
+  /** Records every exec made over the connect handle. */
+  connectExecs?: ExecSpec[];
   /** Defaults to "from-jobs": a successful Pi job or a ready phase. */
   piInstalled?: boolean | "from-jobs";
   jobs?: FakeJobOptions[];
@@ -352,6 +358,18 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
   const connectHandle: SandboxConnectHandleLike = {
     async exec(spec) {
       if (options.execError) throw options.execError;
+      options.connectExecs?.push(spec);
+      const snippet =
+        spec.command === "sh" && spec.args[0] === "-c" ? (spec.args[1] ?? "") : "";
+      if (snippet.startsWith("set -eu\numask 077\nfor d in ")) {
+        return { code: options.skillActionCode ?? 0, stdout: "" };
+      }
+      if (snippet.startsWith('test -f "$HOME/.agents/skills/')) {
+        const codes = options.skillProbeCodes;
+        const index = Math.min(skillProbeCalls, (codes?.length ?? 1) - 1);
+        skillProbeCalls += 1;
+        return { code: codes?.[index] ?? 0, stdout: "" };
+      }
       if (spec.args.some((arg) => arg.endsWith("status.json"))) {
         return provisionStatus
           ? { code: 0, stdout: JSON.stringify(provisionStatus) }
@@ -376,6 +394,7 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
   };
 
   let currentLabels = labels;
+  let skillProbeCalls = 0;
 
   const handle: SandboxHandleLike = {
     id: options.id,

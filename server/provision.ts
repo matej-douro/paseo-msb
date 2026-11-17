@@ -1,5 +1,7 @@
 import { GUEST_HOME, GUEST_PATH, GUEST_USER } from "../shared/constants";
 import {
+  BASE_STEPS,
+  PROVISIONING_STATE_DIR,
   buildProvisionScript,
   isProvisionSuccess,
   parseProvisionStatus,
@@ -155,16 +157,52 @@ async function awaitProvisionJob(
 /** The newest matching provision job, used for the detail log bundle. */
 export async function findLatestProvisionJob(
   handle: SandboxHandleLike,
-  argv: readonly string[],
   options?: { readonly timeoutMs?: number; readonly signal?: AbortSignal },
 ): Promise<SandboxJobInfoLike | null> {
   const jobs = (await listAllJobs(handle, undefined, options)).filter((job) =>
-    sameArgv(job.command, argv),
+    isProvisionScriptCommand(job.command),
   );
   if (jobs.length === 0) return null;
 
   const sorted = [...jobs].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
   return sorted[sorted.length - 1] ?? null;
+}
+
+/**
+ * Applies the catalog's idempotent base steps outside the detached job. The
+ * Paseo tools integration reconciles the skill roots after provisioning, so the
+ * reconciler calls this once that integration has run.
+ */
+export async function applyBaseSteps(
+  context: ReconcileContext,
+  handle: SandboxHandleLike,
+  redaction: readonly string[],
+  token: LaneToken,
+): Promise<boolean> {
+  token.throwIfAborted();
+  const connected = await connectSandbox(context, handle, redaction, token);
+  let changed = false;
+
+  for (const step of BASE_STEPS) {
+    token.throwIfAborted();
+    if ((await execSnippet(context, connected, step.probe, token)) === 0) continue;
+
+    if ((await execSnippet(context, connected, step.action, token)) !== 0) {
+      throw new SetupFailure(
+        "provision_failed",
+        `provisioning step ${step.id} failed after registration`,
+      );
+    }
+    if ((await execSnippet(context, connected, step.probe, token)) !== 0) {
+      throw new SetupFailure(
+        "provision_failed",
+        `provisioning step ${step.id} failed after registration`,
+      );
+    }
+    changed = true;
+  }
+
+  return changed;
 }
 
 async function confirmStatus(
@@ -365,6 +403,37 @@ async function execGuest(
 function sameArgv(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
+}
+
+/**
+ * Script paths embed the plan hash. The detail read must still find a job
+ * launched under an older hash after the catalog changes, so match the family.
+ */
+function isProvisionScriptCommand(command: readonly string[]): boolean {
+  if (command.length !== 3 || command[0] !== "/bin/sh") return false;
+  const script = command[1];
+  return script.startsWith(`${PROVISIONING_STATE_DIR}/provision-`) && script.endsWith(".sh");
+}
+
+async function execSnippet(
+  context: ReconcileContext,
+  connected: SandboxConnectHandleLike,
+  snippet: string,
+  token: LaneToken,
+): Promise<number> {
+  const result = await execGuest(
+    context,
+    connected,
+    {
+      command: "sh",
+      args: ["-c", snippet],
+      user: GUEST_USER,
+      env: { HOME: GUEST_HOME, PATH: GUEST_PATH },
+      stdinNull: true,
+    },
+    token,
+  );
+  return result.code;
 }
 
 function sdkTimeoutMs(context: ReconcileContext): number {

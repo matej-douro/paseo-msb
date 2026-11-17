@@ -16,7 +16,7 @@ import { failureDetail, persistedCredentialValues } from "./diagnostics";
 import { cleanupName } from "./cleanup";
 import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
 import { runMutation, type MutationRegistry } from "./mutations";
-import { ensureProvisioned } from "./provision";
+import { ensureProvisioned, applyBaseSteps } from "./provision";
 import {
   ensureRegistration,
   SetupFailure,
@@ -313,6 +313,12 @@ async function advanceSandbox(
       { integrations: configureIntegrations ? plan.integrations : [] },
     );
     if (ensured.changed) changed = true;
+
+    if (configureIntegrations && plan.integrations.includes("paseo-tools")) {
+      // Installing Paseo tools reconciles both skill roots, so the plugin skill
+      // is re-applied afterwards. Its probe makes this a no-op when unchanged.
+      if (await applyBaseSteps(context, handle, redaction, token)) changed = true;
+    }
 
     // A registration left by an older generation under this name is stale now
     // that the exact live generation owns the name.

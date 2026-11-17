@@ -4,7 +4,6 @@ import type {
   VmListResult,
 } from "../shared/contracts";
 import type { CredentialName } from "../shared/constants";
-import { buildProvisionScript, legacyPiPlan } from "../shared/provisioning";
 import { selectVmChild } from "../shared/selection";
 import { safeError, type SafeError } from "../shared/errors";
 import { persistedCredentialValues } from "./diagnostics";
@@ -128,9 +127,8 @@ export async function readVmDetail(
         ...credentialValues(context.env, context.storedSecrets),
         ...persistedCredentialValues(sandbox.handle.config()),
       ];
-      const provision = buildProvisionScript(sandbox.sandbox.plan ?? legacyPiPlan());
       const job =
-        (await findLatestProvisionJob(sandbox.handle, provision.argv).catch(() => null)) ??
+        (await findLatestProvisionJob(sandbox.handle).catch(() => null)) ??
         (await findLatestInstallJob(sandbox.handle).catch(() => null));
       logs = {
         sandbox: await readSandboxLogs(sandbox.handle, secrets),
