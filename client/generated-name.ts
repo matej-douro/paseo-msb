@@ -1,5 +1,3 @@
-import { generatedChildName } from "../shared/constants";
-
 /**
  * Short, opaque name token. The alphabet stays inside the shared name schema
  * (lowercase letters and digits), so a generated name is always a valid slug.
@@ -20,5 +18,5 @@ export function newGeneratedChildName(): string {
   while (token.length < TOKEN_LENGTH) {
     token += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
   }
-  return generatedChildName(token);
+  return `paseo-${token}`;
 }

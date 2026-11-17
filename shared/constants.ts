@@ -153,17 +153,6 @@ export const REGISTRATION_SOURCE = PLUGIN_ID;
  */
 export const REGISTRATION_PRODUCER_ID = `plugin:${PLUGIN_ID}`;
 
-/**
- * A generated child name is `paseo-<token>`, per DESIGN.md. This is deliberately
- * shorter than the plugin ID; ownership is proven by the managed and parent
- * labels, and the current generation is the exact handle id.
- */
-export const MANAGED_NAME_PREFIX = "paseo-";
-
-export function generatedChildName(token: string): string {
-  return `${MANAGED_NAME_PREFIX}${token}`;
-}
-
 /** Read-side size bounds. */
 export const MAX_JOB_PAGES = 100;
 export const MAX_LOG_ENTRIES = 100;
