@@ -1,6 +1,6 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/ui";
-import { memo, useMemo, useRef, useState } from "react";
+import { Icon, TextInput } from "@getpaseo/plugin/client/ui";
+import { memo, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   PanResponder,
   Pressable,
@@ -389,6 +389,73 @@ export function Notice({ text, theme, tone = "warning" }: NoticeProps) {
       }}
     >
       <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{text}</Text>
+    </View>
+  );
+}
+
+export interface TextFieldProps {
+  label: string;
+  value: string;
+  placeholder?: string;
+  hint?: string;
+  error: string | null;
+  theme: PluginTheme;
+  editable: boolean;
+  keyboardType?: ComponentProps<typeof TextInput>["keyboardType"];
+  onChangeText?(text: string): void;
+}
+
+/**
+ * One labelled form field. An optional hint is replaced by the validation
+ * message, so the form never shows a rule and a failure at the same time.
+ */
+export function TextField({
+  label,
+  value,
+  placeholder,
+  hint,
+  error,
+  theme,
+  editable,
+  keyboardType,
+  onChangeText,
+}: TextFieldProps) {
+  return (
+    <View style={{ gap: 4, opacity: editable ? 1 : 0.6 }}>
+      <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" }}>
+        {label}
+      </Text>
+      <View
+        style={{
+          backgroundColor: theme.colors.surface2,
+          borderColor: error ? theme.colors.statusDanger : theme.colors.border,
+          borderWidth: 1,
+          borderRadius: 6,
+          paddingHorizontal: 8,
+        }}
+      >
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor={theme.colors.foregroundMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={editable}
+          keyboardType={keyboardType}
+          style={{ color: theme.colors.foreground, fontSize: 12, paddingVertical: 6 }}
+        />
+      </View>
+      {error || hint ? (
+        <Text
+          style={{
+            color: error ? theme.colors.statusDanger : theme.colors.foregroundMuted,
+            fontSize: 11,
+          }}
+        >
+          {error ?? hint}
+        </Text>
+      ) : null}
     </View>
   );
 }

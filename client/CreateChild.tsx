@@ -1,11 +1,5 @@
-import {
-  Icon,
-  Modal,
-  SettingsCard,
-  SettingsSection,
-  TextInput,
-} from "@getpaseo/plugin/client/ui";
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { Icon, Modal, SettingsCard, SettingsSection } from "@getpaseo/plugin/client/ui";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import {
   CPUS,
@@ -44,7 +38,7 @@ import {
   planSummary,
   resourceFieldIssue,
 } from "./state";
-import { ActionButton, ResourceSlider, type PluginTheme } from "./ui";
+import { ActionButton, ResourceSlider, TextField, type PluginTheme } from "./ui";
 
 export interface CreateChildProps {
   open: boolean;
@@ -181,11 +175,6 @@ export function CreateChild({
   return (
     <Modal title="Create child" open={open} onOpenChange={onOpenChange}>
       <Modal.Content>
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
-          One microsandbox child. Name it, size it, then select the providers and integrations it
-          should have.
-        </Text>
-
         <View style={{ gap: 10 }}>
           <TextField
             label="Name"
@@ -219,7 +208,7 @@ export function CreateChild({
                 onChange={setDiskMib}
               />
             </View>
-            <View style={{ width: compact ? undefined : 96, minWidth: 0 }}>
+            <View style={{ width: compact ? undefined : 64, minWidth: 0 }}>
               <TextField
                 label="CPUs"
                 value={cpus}
@@ -792,67 +781,4 @@ function FixedRow({
   );
 }
 
-/**
- * One labelled create field. An optional hint is replaced by the validation
- * message so the form never shows a rule and a failure at the same time.
- */
-function TextField({
-  label,
-  value,
-  placeholder,
-  hint,
-  error,
-  theme,
-  editable,
-  keyboardType,
-  onChangeText,
-}: {
-  label: string;
-  value: string;
-  placeholder?: string;
-  hint?: string;
-  error: string | null;
-  theme: PluginTheme;
-  editable: boolean;
-  keyboardType?: ComponentProps<typeof TextInput>["keyboardType"];
-  onChangeText?(text: string): void;
-}) {
-  return (
-    <View style={{ gap: 4, opacity: editable ? 1 : 0.6 }}>
-      <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" }}>
-        {label}
-      </Text>
-      <View
-        style={{
-          backgroundColor: theme.colors.surface2,
-          borderColor: error ? theme.colors.statusDanger : theme.colors.border,
-          borderWidth: 1,
-          borderRadius: 6,
-          paddingHorizontal: 8,
-        }}
-      >
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor={theme.colors.foregroundMuted}
-          autoCapitalize="none"
-          autoCorrect={false}
-          editable={editable}
-          keyboardType={keyboardType}
-          style={{ color: theme.colors.foreground, fontSize: 12, paddingVertical: 6 }}
-        />
-      </View>
-      {error || hint ? (
-        <Text
-          style={{
-            color: error ? theme.colors.statusDanger : theme.colors.foregroundMuted,
-            fontSize: 11,
-          }}
-        >
-          {error ?? hint}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
+
