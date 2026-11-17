@@ -18,7 +18,8 @@ Docs: [DESIGN.md](./DESIGN.md) · [provisioning](./docs/provisioning.md) ·
 - Guest image tag `ghcr.io/getpaseo/paseo:0.15.4`, Node `>= 22.19` (pinned:
   `22.23.4`), and npm.
 - When selected: Pi `1.5.2`, NeuralWatt Pi extension `0.19.3`, Claude Code
-  `2.1.323`, GitHub CLI `2.104.0`.
+  `2.1.323`, GitHub CLI `2.104.0`. The Paseo tools integration uses the child
+  daemon's bundled orchestration skills and adds no guest package or credential.
 
 Install this checkout as a directory plugin from the parent daemon. Use an
 isolated `PASEO_HOME` while developing.
@@ -56,7 +57,10 @@ The confirmation shows the fixed image and editable CPU/RAM/root-disk fields plu
 **Providers** and **Integrations** sections. Secrets gate availability; the selection decides which
 credentials enter the sandbox. Claude takes one auth option (Anthropic API key or
 Claude subscription); Pi takes one or more LLM options (Anthropic, OpenAI,
-Gemini, NeuralWatt). GitHub CLI is independent and unchecked by default.
+Gemini, NeuralWatt). GitHub CLI requires `GH_TOKEN`. **Paseo tools** needs no
+credential: it enables Paseo tools for the selected providers and installs the
+bundled orchestration skills after the child daemon is online. Both integrations
+are independent and unchecked by default.
 
 The name is the create identity; the form generates `paseo-<token>` with a
 short random token when it is left blank, and the current generation is the
@@ -66,15 +70,16 @@ the detached sandbox with the requested CPUs
 and RAM (defaults `2 CPU` / `4096 MiB`) and the requested root disk,
 with a loopback-only port, `PASEO_MSB_PLAN`, and only the selected header-only
 secrets; runs the content-addressed provisioning script as one detached job;
-registers the exact generation, waits for routed online, and confirms selected
-providers; then marks it `ready`.
+registers the exact generation, waits for routed online, confirms selected
+providers, applies the **Paseo tools** integration when selected, then marks it
+`ready`.
 
 Phase (`creating`, `installing`, `registering`, `ready`, `deleting`) is a hint,
 not proof of a side effect. A repeated Create under the same name joins the same
 reconciliation and must use the original plan and resource shape. Provisioning
-failures are fatal; Retry or Repair re-runs the idempotent steps and skips
-completed ones. A failed attempt that has not produced a sandbox can also be
-dismissed from its detail.
+or **Paseo tools** setup failures are fatal; Retry or Repair re-runs the
+idempotent steps and skips completed ones. A failed attempt that has not
+produced a sandbox can also be dismissed from its detail.
 
 ## Use
 
@@ -136,9 +141,11 @@ or a Paseo build signed to load the addon.
 ## Trust boundary and limits
 
 The child daemon listens only on parent loopback and runs without
-`PASEO_PASSWORD`; the authenticated parent daemon is the security boundary.
-Credential substitution is header-only and limited to the fixed hosts above;
-TLS interception and guest CA setup are microsandbox responsibilities.
+`PASEO_PASSWORD`; the authenticated parent daemon is the user-facing security
+boundary. The optional **Paseo tools** setup also uses the child’s loopback port
+directly to apply its daemon config and orchestration skills. Credential
+substitution is header-only and limited to the fixed hosts above; TLS
+interception and guest CA setup are microsandbox responsibilities.
 
 The image is fixed; CPU, RAM, and root disk are chosen at Create within the
 documented bounds (2 CPUs, 4096 MiB RAM, and 10240 MiB root disk by default).

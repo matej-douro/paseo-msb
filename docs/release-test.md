@@ -60,7 +60,8 @@ PASEO_MSB_RELEASE_CREDENTIALS=CLAUDE_CODE_OAUTH_TOKEN npm run test:release
 PASEO_MSB_RELEASE_CREDENTIALS=OPENAI_API_KEY,NEURALWATT_API_KEY \
 PASEO_MSB_RELEASE_ENV_CREDENTIAL=OPENAI_API_KEY \
 PASEO_MSB_RELEASE_ENV_VALUE=paseo-msb-env-canary-1b2c3d4e-5f60-4718-9a2b-3c4d5e6f7081 \
-PASEO_MSB_RELEASE_GITHUB_CLI=1 npm run test:release
+PASEO_MSB_RELEASE_GITHUB_CLI=1 \
+PASEO_MSB_RELEASE_PASEO_TOOLS=1 npm run test:release
 ```
 
 The second run starts the daemon with the same
@@ -69,6 +70,9 @@ The second run starts the daemon with the same
 reports the value as `environment: true`, `stored: false`, and that redaction
 survives store replacement and removal. `PASEO_MSB_RELEASE_GITHUB_CLI=1` adds
 the GitHub CLI integration and its `GH_TOKEN` canary.
+`PASEO_MSB_RELEASE_PASEO_TOOLS=1` adds the Paseo tools integration and asserts
+that the child config has `mcp.injectIntoAgents`, each selected provider has
+`paseoTools.enabled`, and `~/.agents/skills/paseo/SKILL.md` exists.
 
 ## Failure injection
 

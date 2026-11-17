@@ -751,3 +751,70 @@ Acceptance:
 - [ ] Links to `DESIGN.md` and the release test remain valid.
 
 Files: `README.md`, `CHANGELOG.md`, `docs/release-test.md`
+
+## 6. Paseo tools integration
+
+### 6.1 Add the integration to the shared plan
+
+Add `paseo-tools` to the integration catalog and plan schema. It requires no
+credential, contributes no provisioning-script step, and is canonicalized with
+the other integrations. Keep runtime-only integrations out of the
+provision-job fingerprint so existing plans keep their identity.
+
+Acceptance:
+
+- [x] `INTEGRATION_CATALOG` and `INTEGRATION_IDS` include `paseo-tools`.
+- [x] The Create screen lists **Paseo tools** with an always-available switch.
+- [x] A plan with `paseo-tools` resolves with no added credentials and produces
+      the same script steps as the same plan without it.
+- [x] The plan hash still distinguishes the two plans.
+- [x] Existing plans without `paseo-tools` keep their provision-job hash.
+
+Files: `shared/provisioning/catalog.ts`, `shared/provisioning/plan.ts`,
+`client/provider-icons.ts`, `tests/shared/provisioning.test.ts`
+
+### 6.2 Apply Paseo tools after registration
+
+After the child is routed online and its selected providers report ready, and
+only when the child is not already `ready`, set `mcp.injectIntoAgents`, enable
+`providers.<paseoProviderId>.paseoTools.enabled` for every selected Paseo
+provider, and save the `{ mode: "all" }` orchestration-skill selection through
+the child’s published loopback port. Treat a confirmation-required skill
+removal or a not-up-to-date result as a fatal `paseo_tools_failed` setup failure.
+Never reapply this to a ready child, so a user’s later tool or skill selection
+is preserved.
+
+Acceptance:
+
+- [x] Create applies the integration once and closes the child client.
+- [x] A failure is reported as `paseo_tools_failed` in the `registering` sandbox
+      phase while preserving the sandbox for Retry or Repair.
+- [x] Repair applies the integration to a non-ready child and skips a ready
+      child.
+- [x] The connector is injected in the plugin context and recorded by the test
+      fake; no test opens a real child connection.
+- [x] The child client uses the existing bounded/abortable lifecycle contract.
+
+Files: `server/paseo-tools.ts`, `server/registration.ts`,
+`server/reconciler.ts`, `server/index.ts`, `shared/errors.ts`,
+`tests/server/create.test.ts`, `tests/server/reconcile.test.ts`,
+`tests/server/fake-runtime.ts`
+
+### 6.3 Document and verify
+
+Describe the integration in the Create flow and provisioning reference, state
+that it is applied after registration, and update the changelog.
+
+Acceptance:
+
+- [x] README and `docs/provisioning.md` describe Paseo tools, its lack of a
+      credential, and its post-registration behavior.
+- [x] DESIGN.md phases, create flow, and Repair semantics mention the
+      integration.
+- [x] CHANGELOG has an Unreleased entry for Paseo tools.
+- [x] `docs/release-test.md` covers the Paseo tools flag and the child config
+      and skill-file assertions.
+- [x] `npm run typecheck`, `npm run lint`, and `npm test` pass.
+
+Files: `README.md`, `docs/provisioning.md`, `docs/release-test.md`,
+`DESIGN.md`, `CHANGELOG.md`, `tests/integration/vertical.test.ts`

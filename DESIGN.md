@@ -89,6 +89,7 @@ Create is a single confirmation flow with the following choices. This mockup mir
 |                                                                         |
 | Integrations (1)                                                        |
 |   [x] GitHub CLI                                                        |
+|   [ ] Paseo tools                                                       |
 |                                                                         |
 | Will install: Claude (Anthropic), GitHub CLI                            |
 | Credentials: ANTHROPIC_API_KEY (stored), GH_TOKEN (environment)         |
@@ -124,6 +125,7 @@ The confirmation uses settings-style **Providers** and **Integrations** sections
 - Claude takes exactly one authentication option: Anthropic API key or Claude subscription.
 - Pi takes one or more of Anthropic, OpenAI, Gemini, and NeuralWatt.
 - The GitHub CLI integration requires `GH_TOKEN` and is independent of provider selection.
+- The Paseo tools integration needs no credential and is independent of provider selection. After registration it enables Paseo tools for every selected provider and installs all bundled orchestration skills.
 
 Only credentials required by the selected options enter the child. The plan contains identifiers, not credential values.
 
@@ -141,7 +143,7 @@ Setup has four user-visible phases:
 | --- | --- |
 | `creating` | Allocate the exact VM generation and its initial configuration. |
 | `installing` | Run the idempotent provisioning job for the selected plan. |
-| `registering` | Register the child with the parent, wait for routed online state, and verify selected providers. |
+| `registering` | Register the child with the parent, wait for routed online state, verify selected providers, and apply host-level integrations. |
 | `ready` | The child is available through Paseo's normal host UI. |
 
 An error produces a failed presentation without erasing the next actionable phase. The user can inspect bounded logs and use Retry or Repair as appropriate. Provisioning failures preserve the VM, jobs, and registration for diagnosis and retry rather than deleting the evidence.
@@ -405,11 +407,11 @@ The reconciler observes actual resources and advances only unambiguous steps:
 2. **Allocate if absent.** Strictly create the pinned image, detached, with requested CPU and RAM, `maxMemory` set to the allowed maximum for later live hotplug where supported, the requested managed root disk, a 2-second metrics interval, managed labels and plan/resource variables, only selected header-only secrets, and a loopback-only published port for guest 6767. The verified image requires explicit `/usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint`. Host port `0` is unsupported, so the plugin probes and retries internally. If Create fails but the named managed sandbox appeared, continue through that exact handle.
 3. **Provision once.** Materialize content-addressed `/home/paseo/.paseo-msb/provision-<planHash>.sh` and run it as one detached job. The status file is the success proof. Each step probes first so retries skip completed work. Await one active matching job; never start another because inventory or inspection failed, and preserve uncertain `JobError.jobId` values when available.
 4. **Advance after proof.** After a successful status, move to `registering`.
-5. **Register and verify.** Ensure the exact producer/source-key registration with idempotent `hosts.add` or deliberate `hosts.update`, wait for routed online state, call `providers.refresh({ providers: selected })`, and confirm every selected provider in a provider snapshot before moving to `ready`.
+5. **Register and verify.** Ensure the exact producer/source-key registration with idempotent `hosts.add` or deliberate `hosts.update`, wait for routed online state, call `providers.refresh({ providers: selected })`, and confirm every selected provider in a provider snapshot. When **Paseo tools** is selected, set `mcp.injectIntoAgents`, enable `paseoTools` for every selected provider, and save the `{ mode: "all" }` orchestration-skill selection through the child’s published loopback port before moving to `ready`.
 
 The child daemon binds only to parent loopback and runs without `PASEO_PASSWORD`; the authenticated parent is the security boundary.
 
-Provisioning failures are fatal and preserve the sandbox, jobs, and registration for inspection and retry. Running jobs, timeouts, inspection failures, registration failures or timeouts, and provider unavailability retain the actionable phase and a safe error. Retry Create or Repair re-runs the idempotent script. Retrying an empty pre-create failure reuses the same name and resources; after a sandbox exists, repeated Create joins reconciliation rather than replaying side effects.
+Provisioning failures are fatal and preserve the sandbox, jobs, and registration for inspection and retry. Running jobs, timeouts, inspection failures, registration failures or timeouts, provider unavailability, and Paseo tools setup failures retain the actionable phase and a safe error. Retry Create or Repair re-runs the idempotent script and setup steps. Retrying an empty pre-create failure reuses the same name and resources; after a sandbox exists, repeated Create joins reconciliation rather than replaying side effects.
 
 Detached VMs normally remain running across plugin and parent-daemon restarts. V1.1 has no general start operation for stopped VMs and no separate lifecycle controls. The only plugin-initiated restart is the explicit resize confirmation.
 
@@ -523,7 +525,7 @@ Each sweep considers **all** registrations with `source.id = plugin:paseo-msb`, 
 
 The pruner uses the existing per-name lanes, skips names with unsettled native mutations, re-reads the parent directory before removal, and runs at most one sweep at a time. `vm.list` never waits for it. An unverifiable name is retained and retried after a short cooldown; removal failure is also retryable. Confirmed removal makes the registration-only row disappear. While proof is unavailable, the client presents `VM state unknown`, not `Missing`. Completely hiding these rows would be unsafe because ambiguous or failed cleanup still needs a visible recovery path.
 
-`vm.reconcile` is the single Repair mutation and uses the reconciler from section 2.5. It resumes unambiguous provisioning or registration work, restores missing registrations, repairs display drift, and removes confirmed stale plugin-owned registrations. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It never initiates deletion; completing an existing `deleting` tombstone is Delete cleanup, not a new Repair deletion.
+`vm.reconcile` is the single Repair mutation and uses the reconciler from section 2.5. It resumes unambiguous provisioning or registration work, restores missing registrations, repairs display drift, and removes confirmed stale plugin-owned registrations. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It never initiates deletion; completing an existing `deleting` tombstone is Delete cleanup, not a new Repair deletion. A ready child’s Paseo tools and orchestration-skill selection is user-owned and is not reapplied.
 
 Absence from managed, decoded, label-filtered inventory is not proof of deletion. Stale-registration removal requires either:
 

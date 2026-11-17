@@ -7,6 +7,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Added
 
+- A **Paseo tools** integration enables Paseo tools for the selected providers
+  and installs all bundled orchestration skills once the child is online and its
+  selected providers are ready. It needs no credential and is unchecked by
+  default.
 - Failed pending Create attempts can be dismissed without a plugin reload.
 - The release suite covers concurrent Create/Repair, registration drift,
   deletion-tombstone recovery, Create over a deleting tombstone, stale
@@ -15,6 +19,9 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Changed
 
+- The Create screen’s provision-job identity ignores runtime-only integrations
+  such as **Paseo tools**, so existing plans keep their content-addressed job
+  hash.
 - The Create screen no longer repeats resource step and bounds help beneath
   the RAM/root-disk sliders and the CPU field.
 - Create identity is now the child name: the form submits a short generated

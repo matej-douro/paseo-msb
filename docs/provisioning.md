@@ -17,6 +17,10 @@ injected.
   **Google Gemini API key**, and **NeuralWatt**.
 - The GitHub CLI integration is independent of providers, unchecked by
   default, and requires `GH_TOKEN`.
+- The Paseo tools integration is independent of providers, unchecked by
+  default, needs no credential, and configures the child daemon after
+  registration: it enables Paseo tools for every selected provider and installs
+  all bundled orchestration skills (`mode: "all"`).
 
 | Provider | Paseo provider id | Nested options | Install |
 | --- | --- | --- | --- |
@@ -26,6 +30,7 @@ injected.
 | Integration | Requires | Install |
 | --- | --- | --- |
 | GitHub CLI | `GH_TOKEN` | `gh` `2.104.0` from the pinned linux arm64/amd64 release tarball |
+| Paseo tools | none | Enable `providers.<id>.paseoTools` and install every bundled orchestration skill after the child is online |
 
 ### Availability
 
@@ -36,6 +41,7 @@ injected.
   options are greyed independently; submit stays blocked until at least one is
   available and selected.
 - GitHub CLI is available when `GH_TOKEN` exists.
+- Paseo tools is always available because it needs no credential.
 - The UI shows a reason on an unavailable option, for example
   `Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN to enable Claude.`
 - The server re-validates availability. A credential removed between screen
@@ -52,7 +58,7 @@ The canonical plan contains identifiers only:
     { "provider": "claude", "llms": ["anthropic-api-key"] },
     { "provider": "pi", "llms": ["neuralwatt"] }
   ],
-  "integrations": ["github-cli"]
+  "integrations": ["github-cli", "paseo-tools"]
 }
 ```
 
@@ -79,6 +85,14 @@ different plan.
 
 - Steps are composed as: provider base steps, then selected LLM steps, then
   integrations.
+- The Paseo tools integration contributes no script step. It is applied after
+  the child registers and its selected providers report ready, using the
+  child’s published loopback port: set `mcp.injectIntoAgents = true` and
+  `providers.<paseoProviderId>.paseoTools.enabled = true`, then call
+  `agent.skills.save_selection` with `{ "mode": "all" }`. The daemon installs
+  the bundled skills into `~/.agents/skills` and `~/.claude/skills`. A
+  confirmation-required response is a failure; the plugin never auto-confirms
+  skill removals.
 - Each step has a **probe** and an **action**. A passing probe records
   `skipped`, which makes retries idempotent. A failing action records `failed`
   and aborts the script.
@@ -101,11 +115,14 @@ different plan.
 - All provisioning failures are fatal. A failed step keeps the sandbox for
   inspection and retry; it does not advance to `ready`.
 - `ready` requires every step to succeed and Paseo’s provider snapshot to report
-  ready for each selected provider.
+  ready for each selected provider. When the Paseo tools integration is
+  selected, it also requires the config patch and skill selection to succeed.
 - Paseo’s snapshot only proves the provider binary launches; the provisioner’s
   probes are the real configuration check.
 - After `ready`, the plugin does not observe tool health, repair drift, or
-  re-provision. User mutations through a terminal are out of scope.
+  re-provision. User mutations through a terminal are out of scope. Repair does
+  not reapply Paseo tools to an already-ready child, so a user can change the
+  child’s tool or skill selection without the plugin fighting it.
 
 ## Step catalog
 
@@ -131,6 +148,9 @@ substituted. `gh` works because it sends the placeholder as a raw
   environment; microsandbox substitutes them only in headers for the fixed
   allowed hosts.
 - Steps run as the non-root `paseo` user. Root is not required.
+- The Paseo tools setup uses the child’s loopback-only published port. The
+  child runs without `PASEO_PASSWORD`; setup connects to that loopback directly,
+  while the authenticated parent route remains the user-facing boundary.
 - Install downloads use general egress, not secret substitution. Claude Code
   pins a version and the native installer verifies its published checksum; `gh`
   pins both the tarball and its SHA-256.
