@@ -15,6 +15,8 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Changed
 
+- The Create screen no longer repeats resource step and bounds help beneath
+  the RAM/root-disk sliders and the CPU field.
 - Create identity is now the child name: the form submits a short generated
   `paseo-<token>` name, only one attempt exists per name, and a same-name Create
   joins only when its plan and resource shape match. Request IDs and the guest

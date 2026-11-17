@@ -11,9 +11,7 @@ import {
   CPUS,
   GUEST_IMAGE,
   MEMORY_MIB,
-  MEMORY_MIB_STEP,
   ROOT_DISK_MIB,
-  ROOT_DISK_MIB_STEP,
   type CredentialName,
 } from "../shared/constants";
 import type { VmCreateInput } from "../shared/contracts";
@@ -206,7 +204,6 @@ export function CreateChild({
                 label="RAM"
                 value={memoryMib}
                 bounds={MEMORY_FIELD_BOUNDS}
-                hint={`${MEMORY_MIB_STEP} MiB steps.`}
                 theme={theme}
                 disabled={pending}
                 onChange={setMemoryMib}
@@ -217,7 +214,6 @@ export function CreateChild({
                 label="Root disk"
                 value={diskMib}
                 bounds={DISK_FIELD_BOUNDS}
-                hint={`${ROOT_DISK_MIB_STEP} MiB steps. Growth only after create.`}
                 theme={theme}
                 disabled={pending}
                 onChange={setDiskMib}
@@ -227,7 +223,6 @@ export function CreateChild({
               <TextField
                 label="CPUs"
                 value={cpus}
-                hint={`${CPU_FIELD_BOUNDS.min}-${CPU_FIELD_BOUNDS.max} ${CPU_FIELD_BOUNDS.unit}, in steps of ${CPU_FIELD_BOUNDS.step}.`}
                 error={cpuError}
                 theme={theme}
                 editable={!pending}
@@ -798,8 +793,8 @@ function FixedRow({
 }
 
 /**
- * One labelled create field. The hint is replaced by the validation message so
- * the form never shows a rule and a failure at the same time.
+ * One labelled create field. An optional hint is replaced by the validation
+ * message so the form never shows a rule and a failure at the same time.
  */
 function TextField({
   label,
@@ -815,7 +810,7 @@ function TextField({
   label: string;
   value: string;
   placeholder?: string;
-  hint: string;
+  hint?: string;
   error: string | null;
   theme: PluginTheme;
   editable: boolean;
@@ -848,14 +843,16 @@ function TextField({
           style={{ color: theme.colors.foreground, fontSize: 12, paddingVertical: 6 }}
         />
       </View>
-      <Text
-        style={{
-          color: error ? theme.colors.statusDanger : theme.colors.foregroundMuted,
-          fontSize: 11,
-        }}
-      >
-        {error ?? hint}
-      </Text>
+      {error || hint ? (
+        <Text
+          style={{
+            color: error ? theme.colors.statusDanger : theme.colors.foregroundMuted,
+            fontSize: 11,
+          }}
+        >
+          {error ?? hint}
+        </Text>
+      ) : null}
     </View>
   );
 }

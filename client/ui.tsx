@@ -398,7 +398,6 @@ export interface ResourceSliderProps {
   value: number;
   bounds: ResourceFieldBounds;
   unit?: string;
-  hint?: string;
   theme: PluginTheme;
   disabled?: boolean;
   onChange(value: number): void;
@@ -419,7 +418,6 @@ export function ResourceSlider({
   value,
   bounds,
   unit,
-  hint,
   theme,
   disabled = false,
   onChange,
@@ -558,10 +556,6 @@ export function ResourceSlider({
           {`${bounds.max} ${displayUnit}`}
         </Text>
       </View>
-
-      {hint ? (
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{hint}</Text>
-      ) : null}
     </View>
   );
 }
