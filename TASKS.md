@@ -597,16 +597,16 @@ through the server cleanup in task 3.4.
 
 Acceptance:
 
-- [ ] Registration-only rows show `VM state unknown`, not `Missing`; absence
+- [x] Registration-only rows show `VM state unknown`, not `Missing`; absence
       from the read projection is not presented as deletion proof.
-- [ ] Inventory-unavailable and partial-unavailable notices remain visible and
+- [x] Inventory-unavailable and partial-unavailable notices remain visible and
       are not replaced by an empty-list or confirmed-missing claim.
-- [ ] Repair and Delete remain available for registration-only children, and
+- [x] Repair and Delete remain available for registration-only children, and
       the detail explains that Repair revalidates while Delete removes only an
       exactly matching registration.
-- [ ] Pending and sandbox presentations are unchanged, and no live metrics
+- [x] Pending and sandbox presentations are unchanged, and no live metrics
       panel appears for registration-only children.
-- [ ] Unit tests cover available, unavailable, and partial inventory plus the
+- [x] Unit tests cover available, unavailable, and partial inventory plus the
       registration-only pill and action copy.
 
 Files: `client/ChildList.tsx`, `client/ChildDetail.tsx`, `client/state.ts`,
