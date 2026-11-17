@@ -357,7 +357,8 @@ describe("reconcileVm", () => {
       directory: fakeHostDirectory([ownedRegistration()]),
     });
     const creator = new FakeSandboxCreator({
-      findSequence: [null, reappeared, reappeared],
+      existing: reappeared,
+      findSequence: [null, reappeared],
     });
 
     const result = await reconcileVm(reconcileContext(fakeRuntime([]), hosts, creator), INPUT);
@@ -595,31 +596,6 @@ describe("reconcileVm", () => {
     expect(labels.filter((entry) => entry[PHASE_LABEL] === "ready")).toEqual([]);
   });
 
-  it("completes a deleting tombstone whose generation already vanished", async () => {
-    const sandbox = fakeSandbox({
-      id: "sandbox_1",
-      name: NAME,
-      phase: "deleting",
-      refreshError: Object.assign(new Error("sandbox not found"), {
-        code: "sandboxNotFound",
-      }),
-    });
-    const creator = new FakeSandboxCreator({ existing: sandbox });
-    const hosts = new FakePaseoHosts({
-      directory: fakeHostDirectory([ownedRegistration()]),
-    });
-
-    const result = await reconcileVm(
-      reconcileContext(fakeRuntime([sandbox]), hosts, creator),
-      INPUT,
-    );
-
-    expect(result).toEqual({ repaired: [NAME], errors: [] });
-    expect(hosts.added).toEqual([]);
-    expect(hosts.removed).toEqual(["reg_owned"]);
-    expect(creator.destroyed).toEqual([]);
-  });
-
   it("targets one name and reports a missing child", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: "paseo-other", phase: "ready" });
     const hosts = new FakePaseoHosts();
@@ -729,15 +705,9 @@ describe("reconcileVm", () => {
     expect(result).toEqual({ repaired: [], errors: [] });
   });
 
-  it("resumes a deletion interrupted by plugin cleanup without creating a replacement", async () => {
+  it("cleans up after a Delete interrupted during destruction without creating a replacement", async () => {
     const gate = deferred<void>();
-    const labelUpdates: Record<string, string>[] = [];
-    const sandbox = fakeSandbox({
-      id: "sandbox_1",
-      name: NAME,
-      phase: "ready",
-      labelUpdates,
-    });
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
     const creator = new FakeSandboxCreator({
       existing: sandbox,
       destroyGate: gate.promise,
@@ -746,8 +716,8 @@ describe("reconcileVm", () => {
       directory: fakeHostDirectory([ownedRegistration()]),
     });
 
-    // First plugin instance: Delete tombstones the sandbox, then cleanup aborts
-    // the destroy wait. The tombstone is durable in the managed labels.
+    // First plugin instance: Delete starts the native destroy, then plugin
+    // cleanup aborts the wait. The sandbox is gone but its host row is not.
     const lanes = createLifecycleLanes();
     const deletion = lanes.run(
       NAME,
@@ -766,14 +736,13 @@ describe("reconcileVm", () => {
       { abortPrevious: true },
     );
 
-    await waitFor(() =>
-      labelUpdates.some((labels) => labels[PHASE_LABEL] === "deleting"),
-    );
+    await waitFor(() => creator.destroyCalls === 1);
     await lanes.settle(100);
     await expect(deletion).rejects.toBeInstanceOf(LifecycleAbortedError);
 
     gate.resolve();
     await waitFor(() => creator.destroyed.length === 1);
+    expect(hosts.removed).toEqual([]);
 
     // Replacement plugin instance: recovery finishes cleanup, never setup.
     const recovery = await reconcileVm(

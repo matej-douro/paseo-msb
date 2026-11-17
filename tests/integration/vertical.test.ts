@@ -1457,7 +1457,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       trackSandbox(name, oldId);
 
       // Delete while provisioning is the active work for this name. The lane
-      // aborts Create, persists the tombstone, and destroys the exact handle.
+      // aborts Create and destroys the exact handle.
       const deleted = await rpc<VmDeleteResult>(vmDeleteRpc.name, {
         name,
         id: oldId,

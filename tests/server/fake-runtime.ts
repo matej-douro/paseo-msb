@@ -747,6 +747,8 @@ export interface FakeCreatorOptions {
   modifyGate?: Promise<void>;
   destroyError?: Error;
   destroyGate?: Promise<void>;
+  /** Leave the handle visible after destroy to model runtime lag. */
+  keepAfterDestroy?: boolean;
   hostPorts?: readonly number[];
   probeError?: Error;
 }
@@ -760,6 +762,7 @@ export class FakeSandboxCreator implements SandboxHost {
   readonly labelUpdates: Record<string, string>[] = [];
   readonly execSpecs: ExecSpec[] = [];
   readonly destroyed: string[] = [];
+  destroyCalls = 0;
   createCount = 0;
   probeCount = 0;
   connectCount = 0;
@@ -875,9 +878,10 @@ export class FakeSandboxCreator implements SandboxHost {
   }
 
   async destroy(handle: SandboxHandleLike): Promise<void> {
+    this.destroyCalls += 1;
     if (this.options.destroyError) throw this.options.destroyError;
     if (this.options.destroyGate) await this.options.destroyGate;
     this.destroyed.push(handle.id);
-    this.sandboxes.delete(handle.name);
+    if (!this.options.keepAfterDestroy) this.sandboxes.delete(handle.name);
   }
 }

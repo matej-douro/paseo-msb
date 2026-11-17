@@ -444,28 +444,3 @@ async function listDirectory(context: RegistrationContext): Promise<HostDirector
 }
 
 export { listDirectory };
-
-/**
- * Removing a registration is idempotent for this plugin: an error is treated as
- * success only when a fresh directory confirms the registration is gone.
- */
-export async function removeRegistration(
-  context: RegistrationContext,
-  registrationId: string,
-): Promise<void> {
-  try {
-    await bounded(context.hosts.remove(registrationId), {
-      timeoutMs: timeoutMs(context),
-      signal: context.signal,
-    });
-    return;
-  } catch {
-    const directory = await bounded(context.hosts.list(), {
-      timeoutMs: timeoutMs(context),
-      signal: context.signal,
-    }).catch(() => null);
-    const stillPresent =
-      directory?.hosts.some((entry) => entry.registrationId === registrationId) ?? true;
-    if (stillPresent) throw new SetupFailure("registration_failed");
-  }
-}

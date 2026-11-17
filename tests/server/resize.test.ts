@@ -411,7 +411,7 @@ describe("resizeVm", () => {
 
     await expect(
       deleteVm(
-        { ...context, deleteTimeoutMs: 20, mutationSettleMs: 10 },
+        { ...context, deleteTimeoutMs: 20 },
         { name: NAME, id: ID, confirmName: NAME },
         token(),
       ),

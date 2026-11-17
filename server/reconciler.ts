@@ -13,30 +13,25 @@ import {
 } from "../shared/provisioning";
 
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
-import { bounded, LifecycleAbortedError, type LaneToken, type LifecycleLanes } from "./lanes";
+import { cleanupName } from "./cleanup";
+import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
 import { runMutation, type MutationRegistry } from "./mutations";
 import { ensureProvisioned } from "./provision";
 import {
   ensureRegistration,
-  matchingRegistrations,
-  pluginRegistrations,
-  removeRegistration,
   SetupFailure,
   type RegistrationContext,
   type RegistrationHostsLike,
 } from "./registration";
 import {
   decodeManagedSandbox,
-  isSandboxNotFoundError,
   isSandboxReplacedError,
-  loadManagedSandboxes,
   markSandboxError,
   markSandboxPhase,
   ownershipOf,
   readSandboxHostPort,
   sandboxCredentialNames,
   SandboxGenerationError,
-  SandboxMissingError,
   type DecodedSandbox,
   type SandboxCreateHandleLike,
   type SandboxCreateRequest,
@@ -137,19 +132,11 @@ async function reconcileAbsent(
   token.throwIfAborted();
 
   const directory = await readDirectory(context, request.redactionValues, token);
-  const registrations = registrationOnlyForName(request.name, directory.hosts);
+  const cleanup = await cleanupName(context, request.name, directory.hosts, {
+    signal: token.signal,
+  });
 
-  if (registrations.length > 0) {
-    // A registration-only child means an earlier Delete is still settling.
-    // Remove only generations that are proven gone.
-    await removeStaleRegistrations(
-      context,
-      request.name,
-      registrations,
-      request.redactionValues,
-      token,
-    );
-
+  if (cleanup.found > 0) {
     // A generation created between the absence check and the cleanup wins:
     // advance it instead of allocating a second sandbox under the same name.
     const appeared = await findSandbox(
@@ -173,7 +160,7 @@ async function reconcileAbsent(
         name: request.name,
         phase: "registering",
         registration: null,
-        repaired: true,
+        repaired: cleanup.removed > 0,
       };
     }
   } else if (!request.allowCreate) {
@@ -254,14 +241,31 @@ async function advanceSandbox(
   assertCreateShape(request, decoded);
 
   if (decoded.labels[PHASE_LABEL] === "deleting") {
-    // Cleanup-only: never resume setup after a Delete tombstone. A reload that
-    // observed the tombstone before destruction completes that exact deletion.
-    const cleaned = await completeDeletion(context, handle, redaction, token);
+    // A legacy Delete tombstone: never resume setup. Destroy the generation if it
+    // is still present and remove its host rows; a replaced generation keeps its
+    // own row because cleanup only removes confirmed-stale entries.
+    token.throwIfAborted();
+    try {
+      await bounded(context.sandboxHost.destroy(handle), {
+        timeoutMs: sdkTimeoutMs(context),
+        signal: token.signal,
+      });
+    } catch (error) {
+      if (error instanceof LifecycleAbortedError) throw error;
+      throw new SetupFailure("delete_failed");
+    }
+
+    const directory = await readDirectory(context, redaction, token);
+    const cleanup = await cleanupName(context, request.name, directory.hosts, {
+      signal: token.signal,
+      confirmedGoneId: handle.id,
+    });
+    if (cleanup.failed > 0) throw new SetupFailure("registration_failed");
     return {
       name: request.name,
       phase: "deleting",
       registration: null,
-      repaired: cleaned,
+      repaired: cleanup.removed > 0,
     };
   }
 
@@ -310,11 +314,13 @@ async function advanceSandbox(
     );
     if (ensured.changed) changed = true;
 
-    if (
-      await removeStaleSameNameRegistrations(context, request.name, handle.id, redaction, token)
-    ) {
-      changed = true;
-    }
+    // A registration left by an older generation under this name is stale now
+    // that the exact live generation owns the name.
+    const directory = await readDirectory(context, redaction, token);
+    const cleanup = await cleanupName(context, request.name, directory.hosts, {
+      signal: token.signal,
+    });
+    if (cleanup.removed > 0) changed = true;
 
     if (phase !== "ready") {
       phase = "ready";
@@ -476,249 +482,6 @@ function tracking(
   name: string,
 ): { mutations: MutationRegistry; name: string } {
   return { mutations: context.mutations, name };
-}
-
-/**
- * Derives cleanup candidates from the authoritative parent directory and the
- * authoritative runtime inventory. A registration is not a candidate when its
- * exact generation is present in inventory (decoded or undecodable); that row
- * is attached to its sandbox or retained for Repair.
- * Returns null when either source is unavailable, because missing proof must
- * never cause a registration removal.
- *
- * The read projection is deliberately not an input: an older registration
- * hidden behind a same-name live sandbox is still a candidate here.
- */
-export async function collectStaleRegistrationNames(
-  context: ReconcileContext,
-): Promise<readonly string[] | null> {
-  let directory: HostDirectoryLike;
-  try {
-    directory = await bounded(context.hosts.list(), {
-      timeoutMs: sdkTimeoutMs(context),
-    });
-  } catch {
-    return null;
-  }
-
-  const parentId = directory.self.serverId;
-  if (!parentId) return null;
-
-  const inventory = await loadManagedSandboxes(context.runtime, parentId);
-  if (inventory.status !== "available") return null;
-
-  const present = new Set<string>();
-  for (const loaded of inventory.sandboxes) present.add(loaded.sandbox.id);
-  // An undecodable generation is still present. It is retained for Repair
-  // instead of being treated as proof of deletion.
-  for (const failure of inventory.failures) present.add(failure.id);
-
-  const names = new Set<string>();
-  for (const registration of pluginRegistrations(directory.hosts)) {
-    const key = registration.source?.key;
-    if (typeof key === "string" && present.has(key)) continue;
-
-    const name = registration.metadata.name;
-    if (typeof name === "string" && name.length > 0) names.add(name);
-  }
-
-  return [...names];
-}
-
-function registrationOnlyForName(
-  name: string,
-  registrations: readonly HostRegistrationLike[],
-): HostRegistrationLike[] {
-  return pluginRegistrations(registrations).filter(
-    (registration) => registration.metadata.name === name,
-  );
-}
-
-/**
- * One bounded, conservative sweep for candidate names. Each name runs in its
- * lifecycle lane, re-reads the parent directory, and removes only a
- * registration whose exact generation lookup proves it gone or replaced. A
- * pending mutation, lookup failure, or duplicate row leaves the child for
- * Repair instead of guessing.
- */
-export async function pruneRegistrationOnlyNames(
-  context: ReconcileContext,
-  names: readonly string[],
-  lanes: LifecycleLanes,
-): Promise<readonly string[]> {
-  const removed: string[] = [];
-
-  for (const name of [...new Set(names)].sort()) {
-    try {
-      const didRemove = await lanes.run(name, (token) =>
-        pruneRegistrationOnlyName(context, name, token),
-      );
-      if (didRemove) removed.push(name);
-    } catch (error) {
-      // Lanes close permanently on plugin teardown: stop the whole sweep.
-      if (error instanceof LifecycleAbortedError) break;
-      // Ambiguous or unavailable state stays actionable in Repair.
-    }
-  }
-
-  return removed;
-}
-
-async function pruneRegistrationOnlyName(
-  context: ReconcileContext,
-  name: string,
-  token: LaneToken,
-): Promise<boolean> {
-  token.throwIfAborted();
-  if (context.mutations.pending(name)) return false;
-
-  const directory = await readDirectory(context, [], token);
-  const registrations = registrationOnlyForName(name, directory.hosts);
-  if (registrations.length === 0) return false;
-
-  return removeStaleRegistrations(context, name, registrations, [], token);
-}
-
-/**
- * Removes registrations whose generation is proven gone. Absence observed
- * earlier is not proof: the runtime is re-read at removal time, and a live row
- * for the same generation is kept.
- */
-async function removeStaleRegistrations(
-  context: ReconcileContext,
-  name: string,
-  registrations: readonly HostRegistrationLike[],
-  redaction: readonly string[],
-  token: LaneToken,
-): Promise<boolean> {
-  const byKey = new Map<string, HostRegistrationLike[]>();
-  for (const registration of registrations) {
-    const key = registration.source?.key ?? "";
-    byKey.set(key, [...(byKey.get(key) ?? []), registration]);
-  }
-
-  let removed = false;
-  for (const group of byKey.values()) {
-    if (group.length > 1) throw new SetupFailure("registration_conflict");
-    if (await removeIfGenerationGone(context, name, group[0], redaction, token)) {
-      removed = true;
-    }
-  }
-
-  return removed;
-}
-
-/**
- * A different live generation under the same name proves the other plugin-owned
- * registration is stale. Only exact authenticated producer rows are considered.
- */
-async function removeStaleSameNameRegistrations(
-  context: ReconcileContext,
-  name: string,
-  currentId: string,
-  redaction: readonly string[],
-  token: LaneToken,
-): Promise<boolean> {
-  const directory = await readDirectory(context, redaction, token);
-
-  const stale = pluginRegistrations(directory.hosts).filter(
-    (registration) =>
-      registration.metadata.name === name && registration.source?.key !== currentId,
-  );
-
-  let removed = false;
-  for (const registration of stale) {
-    if (await removeIfGenerationGone(context, name, registration, redaction, token)) removed = true;
-  }
-
-  return removed;
-}
-
-/**
- * Removes one registration only when a fresh exact lookup proves its
- * generation is absent or that a different generation replaced it.
- *
- * The pinned SDK has no conditional remove; this revalidation is the strongest
- * available guarantee against deleting a live replacement's registration.
- */
-async function removeIfGenerationGone(
-  context: ReconcileContext,
-  name: string,
-  registration: HostRegistrationLike,
-  redaction: readonly string[],
-  token: LaneToken,
-): Promise<boolean> {
-  const key = registration.source?.key ?? null;
-  const handle = await findSandbox(context, name, redaction, token);
-  if (handle && handle.id === key) return false;
-
-  await removeRegistration(context, registration.registrationId).catch(() => {
-    throw new SetupFailure("registration_failed");
-  });
-  return true;
-}
-
-/**
- * Completes a tombstoned deletion for the exact generation. This is cleanup of
- * explicit user intent, never a new setup path or an adoption of a replacement.
- */
-async function completeDeletion(
-  context: ReconcileContext,
-  handle: SandboxHandleLike,
-  redaction: readonly string[],
-  token: LaneToken,
-): Promise<boolean> {
-  token.throwIfAborted();
-
-  let current: SandboxHandleLike;
-  try {
-    current = await bounded(handle.refresh(), {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    // The tombstoned generation vanished before this reload reached it. The
-    // user's intent is satisfied; only its exact registration remains to clear.
-    if (error instanceof SandboxMissingError || isSandboxNotFoundError(error)) {
-      return cleanupGeneration(context, handle.id, redaction, token);
-    }
-    throw new SetupFailure("delete_failed");
-  }
-  if (current.id !== handle.id) throw new SetupFailure("id_mismatch");
-
-  token.throwIfAborted();
-  try {
-    await bounded(context.sandboxHost.destroy(current), {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    throw new SetupFailure("delete_failed");
-  }
-
-  return cleanupGeneration(context, handle.id, redaction, token);
-}
-
-/** Removes only the registration for this exact generation. */
-async function cleanupGeneration(
-  context: ReconcileContext,
-  sandboxId: string,
-  redaction: readonly string[],
-  token: LaneToken,
-): Promise<boolean> {
-  const directory = await readDirectory(context, redaction, token);
-  const matches = matchingRegistrations(sandboxId, directory.hosts);
-  if (matches.length > 1) throw new SetupFailure("registration_conflict");
-
-  const registration = matches[0];
-  if (!registration) return false;
-
-  await removeRegistration(context, registration.registrationId).catch(() => {
-    throw new SetupFailure("registration_failed");
-  });
-  return true;
 }
 
 function mergeRedaction(
