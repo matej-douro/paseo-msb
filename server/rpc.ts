@@ -1,11 +1,11 @@
 import type {
-  VmChild,
   VmDetailInput,
   VmDetailResult,
   VmListResult,
 } from "../shared/contracts";
 import type { CredentialName } from "../shared/constants";
 import { buildProvisionScript, legacyPiPlan } from "../shared/provisioning";
+import { selectVmChild } from "../shared/selection";
 import { safeError, type SafeError } from "../shared/errors";
 import { persistedCredentialValues } from "./diagnostics";
 import { findLatestInstallJob } from "./jobs";
@@ -110,7 +110,7 @@ export async function readVmDetail(
   input: VmDetailInput,
 ): Promise<VmDetailResult> {
   const projection = await readProjection(context);
-  const child = selectChild(projection.list.children, input);
+  const child = selectVmChild(projection.list.children, input);
 
   let logs: VmDetailResult["logs"] = {
     sandbox: unavailableLogBundle(),
@@ -147,20 +147,4 @@ export async function readVmDetail(
     child,
     logs,
   };
-}
-
-/**
- * Rows can share a name (a pending attempt plus its leftover registration, or a
- * stale registration for a replaced generation). Omitting `id` selects the
- * pending attempt; an explicit id selects the exact non-pending row.
- */
-function selectChild(children: readonly VmChild[], input: VmDetailInput): VmChild | null {
-  const named = children.filter((candidate) => candidate.name === input.name);
-  if (named.length === 0) return null;
-  if (!input.id) {
-    return named.find((candidate) => candidate.kind === "pending") ?? named[0] ?? null;
-  }
-  return (
-    named.find((candidate) => candidate.kind !== "pending" && candidate.id === input.id) ?? null
-  );
 }

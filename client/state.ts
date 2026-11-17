@@ -25,6 +25,7 @@ import {
   type VmListResult,
   type VmReconcileResult,
 } from "../shared/contracts";
+import type { ChildSelection } from "../shared/selection";
 import { SAFE_ERROR_MESSAGES, isSafeErrorCode, type SafeErrorCode } from "../shared/errors";
 import {
   INTEGRATION_CATALOG,
@@ -183,42 +184,8 @@ export function createRequestInput(
 }
 
 /** A selected row: named, or name plus the exact generation id. */
-export interface ChildSelection {
-  readonly name: string;
-  readonly id?: string;
-  /** True when the name's pending attempt is selected; pending rows have no id. */
-  readonly pending?: true;
-}
-
-/** A pending row has no generation id, so the flag distinguishes it from a row. */
 export function selectionFor(child: VmChild): ChildSelection {
-  return child.kind === "pending"
-    ? { name: child.name, pending: true }
-    : { name: child.name, id: child.id };
-}
-
-/**
- * Resolves a selection against the current list. A pending selection follows the
- * attempt; once it settles, the same name resolves to its sandbox so the detail
- * pane follows the attempt instead of going blank. A name-only selection follows
- * the pending attempt first, then any row with that name.
- */
-export function selectChildFor(
-  children: readonly VmChild[],
-  selection: ChildSelection,
-): VmChild | null {
-  const named = children.filter((child) => child.name === selection.name);
-  if (named.length === 0) return null;
-
-  if (selection.pending) {
-    return named.find((child) => child.kind === "pending") ?? named[0] ?? null;
-  }
-
-  if (selection.id) {
-    return named.find((child) => child.kind !== "pending" && child.id === selection.id) ?? null;
-  }
-
-  return named.find((child) => child.kind === "pending") ?? named[0] ?? null;
+  return child.kind === "pending" ? { name: child.name } : { name: child.name, id: child.id };
 }
 
 export function phaseText(phase: Phase): string {
@@ -471,23 +438,6 @@ export function createBlockedMessage(
   if (error) return error;
   if (!data) return "Credentials are still loading. Try again in a moment.";
   return null;
-}
-
-/**
- * A row is selected by exact generation when the id is known. A name-only
- * selection follows a pending attempt into its sandbox, so the transition does
- * not drop the selection or require re-selecting the row.
- */
-export function isChildSelected(
-  child: VmChild,
-  selectedName: string | null,
-  selectedId: string | null,
-  selectedPending = false,
-): boolean {
-  if (selectedName === null || child.name !== selectedName) return false;
-  if (selectedPending) return child.kind === "pending";
-  if (selectedId !== null) return child.kind !== "pending" && child.id === selectedId;
-  return false;
 }
 
 export function isEmptyInventory(data: VmListResult): boolean {

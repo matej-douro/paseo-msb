@@ -4,7 +4,6 @@ import type { VmChild, VmListResult } from "../shared/contracts";
 import {
   childErrorText,
   inventoryNotice,
-  isChildSelected,
   isEmptyInventory,
   registrationsNotice,
   setupPill,
@@ -16,9 +15,8 @@ export interface ChildListProps {
   data: VmListResult | null;
   error: string | null;
   loading: boolean;
-  selectedName: string | null;
-  selectedId: string | null;
-  selectedPending: boolean;
+  /** A member of `data.children`; highlighted by identity. */
+  selected: VmChild | null;
   theme: PluginTheme;
   compact: boolean;
   onSelect(child: VmChild): void;
@@ -29,9 +27,7 @@ export function ChildList({
   data,
   error,
   loading,
-  selectedName,
-  selectedId,
-  selectedPending,
+  selected,
   theme,
   compact,
   onSelect,
@@ -83,7 +79,7 @@ export function ChildList({
           key={`${child.kind}:${child.name}:${child.kind === "pending" ? "" : child.id}`}
           child={child}
           registrations={data.registrations}
-          selected={isChildSelected(child, selectedName, selectedId, selectedPending)}
+          selected={child === selected}
           theme={theme}
           onSelect={() => onSelect(child)}
         />

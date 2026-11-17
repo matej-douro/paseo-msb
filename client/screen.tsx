@@ -15,6 +15,7 @@ import {
   type VmDeleteInput,
   type VmDismissInput,
 } from "../shared/contracts";
+import { selectVmChild, type ChildSelection } from "../shared/selection";
 import { ChildDetail } from "./ChildDetail";
 import { ChildList } from "./ChildList";
 import { CreateChild } from "./CreateChild";
@@ -22,7 +23,7 @@ import { useSecrets } from "./hooks/useSecrets";
 import { useVmDetail } from "./hooks/useVmDetail";
 import { useVmList } from "./hooks/useVmList";
 import { ManageSecrets } from "./ManageSecrets";
-import { createBlockedMessage, errorMessage, selectChildFor, selectionFor, type ChildSelection } from "./state";
+import { createBlockedMessage, errorMessage, selectionFor } from "./state";
 import { IconButton } from "./ui";
 
 /**
@@ -37,7 +38,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
   );
   const selectedName = selection?.name ?? null;
   const selectedChild =
-    selection && list.data ? selectChildFor(list.data.children, selection) : null;
+    selection && list.data ? selectVmChild(list.data.children, selection) : null;
   // A pending attempt has no generation id, so only non-pending children pass one.
   const detailId = selectedChild?.kind === "pending" ? undefined : selectedChild?.id;
   const detail = useVmDetail(selectedName, detailId);
@@ -181,9 +182,7 @@ export function MainScreen({ theme, layout, params }: PluginScreenProps) {
       data={list.data}
       error={list.error}
       loading={list.loading}
-      selectedName={selectedChild?.name ?? null}
-      selectedId={selectedChild && selectedChild.kind !== "pending" ? selectedChild.id : null}
-      selectedPending={selectedChild?.kind === "pending"}
+      selected={selectedChild}
       theme={theme}
       compact={compact}
       onSelect={(child) => setSelection(selectionFor(child))}

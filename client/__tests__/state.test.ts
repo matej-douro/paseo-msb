@@ -22,7 +22,6 @@ import {
   deleteConfirmationText,
   DISK_FIELD_BOUNDS,
   inventoryNotice,
-  isChildSelected,
   isEmptyInventory,
   logBundleSummary,
   logLineCountLabel,
@@ -40,7 +39,6 @@ import {
   resourceSliderValue,
   retryCreateInput,
   runtimeText,
-  selectChildFor,
   selectionFor,
   setupPill,
   snapResourceValue,
@@ -235,33 +233,10 @@ describe("create form", () => {
 });
 
 describe("selection", () => {
-  const pending = { ...PENDING, name: "shared" };
-  const settled = { ...SANDBOX, name: "shared" };
-  const staleRegistration = { ...REGISTRATION, name: "shared", id: "sandbox_old" };
-  const children = [pending, settled, staleRegistration];
-
-  it("selects a pending attempt by name and another row by generation", () => {
-    expect(selectionFor(PENDING)).toEqual({ name: PENDING.name, pending: true });
+  it("maps a row to a name or a name plus generation", () => {
+    expect(selectionFor(PENDING)).toEqual({ name: PENDING.name });
     expect(selectionFor(SANDBOX)).toEqual({ name: SANDBOX.name, id: SANDBOX.id });
-
-    expect(selectChildFor(children, { name: "shared", pending: true })).toBe(pending);
-    expect(selectChildFor([settled], { name: "shared", pending: true })).toBe(settled);
-    expect(selectChildFor(children, { name: "shared" })).toBe(pending);
-    expect(selectChildFor(children, { name: "shared", id: settled.id })).toBe(settled);
-    expect(selectChildFor(children, { name: "shared", id: staleRegistration.id })).toBe(
-      staleRegistration,
-    );
-    expect(selectChildFor(children, { name: "missing" })).toBeNull();
-  });
-
-  it("follows a settled attempt to its same-name sandbox", () => {
-    expect(selectChildFor([settled], { name: "shared" })).toBe(settled);
-    expect(isChildSelected(pending, "shared", null, true)).toBe(true);
-    expect(isChildSelected(settled, "shared", null, true)).toBe(false);
-    expect(isChildSelected(settled, "shared", settled.id)).toBe(true);
-    expect(isChildSelected(staleRegistration, "shared", settled.id)).toBe(false);
-    expect(isChildSelected(pending, "shared", settled.id)).toBe(false);
-    expect(isChildSelected(pending, "shared", null)).toBe(false);
+    expect(selectionFor(REGISTRATION)).toEqual({ name: REGISTRATION.name, id: REGISTRATION.id });
   });
 });
 
@@ -375,19 +350,6 @@ describe("child presentation", () => {
     expect(
       childErrorText({ ...REGISTRATION, error: safeError("registration_failed") }),
     ).toBe(safeError("registration_failed").message);
-  });
-
-  it("keeps a selected row through pending to sandbox", () => {
-    expect(isChildSelected(PENDING, PENDING.name, null, true)).toBe(true);
-    expect(isChildSelected(SANDBOX, PENDING.name, SANDBOX.id, true)).toBe(false);
-    expect(isChildSelected(SANDBOX, SANDBOX.name, SANDBOX.id)).toBe(true);
-    expect(isChildSelected(SANDBOX, SANDBOX.name, "sandbox_other")).toBe(false);
-    expect(isChildSelected(PENDING, PENDING.name, SANDBOX.id)).toBe(false);
-    expect(isChildSelected(SANDBOX, SANDBOX.name, null)).toBe(false);
-    expect(isChildSelected(REGISTRATION, REGISTRATION.name, null)).toBe(false);
-    expect(isChildSelected(REGISTRATION, REGISTRATION.name, REGISTRATION.id)).toBe(true);
-    expect(isChildSelected(SANDBOX, "paseo-pending", null)).toBe(false);
-    expect(isChildSelected(SANDBOX, null, null)).toBe(false);
   });
 });
 
