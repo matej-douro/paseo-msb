@@ -15,7 +15,6 @@ import {
   childPlan,
   createBlockedMessage,
   CPU_FIELD_BOUNDS,
-  createFormIssue,
   createNameIssue,
   createRequestInput,
   credentialSourceLabel,
@@ -173,17 +172,6 @@ describe("create form", () => {
     expect(resourceFieldIssue("1024", DISK_FIELD_BOUNDS)).toBeNull();
     expect(resourceFieldIssue("262144", DISK_FIELD_BOUNDS)).toBeNull();
     expect(resourceFieldIssue("1500", DISK_FIELD_BOUNDS)).not.toBeNull();
-  });
-
-  it("reports the first local problem blocking submit", () => {
-    expect(createFormIssue("", { memoryMib: "4096", diskMib: "10240" })).toBeNull();
-    expect(createFormIssue("", { cpus: "2", memoryMib: "4096", diskMib: "10240" })).toBeNull();
-    expect(
-      createFormIssue("", { cpus: "17", memoryMib: "4096", diskMib: "10240" }),
-    ).not.toBeNull();
-    expect(createFormIssue("MY-VM", { memoryMib: "4096", diskMib: "10240" })).not.toBeNull();
-    expect(createFormIssue("", { memoryMib: "1000", diskMib: "10240" })).not.toBeNull();
-    expect(createFormIssue("", { memoryMib: "4096", diskMib: "1000" })).not.toBeNull();
   });
 
   it("sends the generated name for an empty field and the typed name otherwise", () => {

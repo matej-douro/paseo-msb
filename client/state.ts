@@ -109,13 +109,6 @@ export function resourceFieldIssue(raw: string, bounds: ResourceFieldBounds): st
   return null;
 }
 
-/** Raw create form fields, kept as text so partial input never becomes a value. */
-export interface CreateResourceInputs {
-  readonly cpus?: string;
-  readonly memoryMib: string;
-  readonly diskMib: string;
-}
-
 /** Validated resource values from the create form. */
 export interface CreateResourceValues {
   readonly cpus: number;
@@ -143,21 +136,6 @@ export function resourceSliderOffset(value: number, bounds: ResourceFieldBounds)
 export function resourceSliderValue(offset: number, bounds: ResourceFieldBounds): number {
   const clamped = Math.min(1, Math.max(0, offset));
   return snapResourceValue(bounds.min + clamped * (bounds.max - bounds.min), bounds);
-}
-
-/** The first local problem blocking create, or null when the form is valid. */
-export function createFormIssue(
-  name: string,
-  resources: CreateResourceInputs,
-): string | null {
-  return (
-    createNameIssue(name) ??
-    (resources.cpus === undefined
-      ? null
-      : resourceFieldIssue(resources.cpus, CPU_FIELD_BOUNDS)) ??
-    resourceFieldIssue(resources.memoryMib, MEMORY_FIELD_BOUNDS) ??
-    resourceFieldIssue(resources.diskMib, DISK_FIELD_BOUNDS)
-  );
 }
 
 /**
