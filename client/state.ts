@@ -24,7 +24,11 @@ import {
   type VmCreateInput,
   type VmDetailResult,
   type VmListResult,
+  type VmObservedResources,
   type VmReconcileResult,
+  type VmResizeInput,
+  type VmResizeResult,
+  type VmResources,
 } from "../shared/contracts";
 import type { ChildSelection } from "../shared/selection";
 import { SAFE_ERROR_MESSAGES, isSafeErrorCode, type SafeErrorCode } from "../shared/errors";
@@ -139,6 +143,65 @@ export function resourceSliderValue(offset: number, bounds: ResourceFieldBounds)
   return snapResourceValue(bounds.min + clamped * (bounds.max - bounds.min), bounds);
 }
 
+/** A labelled resource value for detail and confirmation rows. */
+export interface ResourceLine {
+  readonly label: string;
+  readonly value: string;
+}
+
+export function cpuText(cpus: number): string {
+  return cpus === 1 ? "1 CPU" : `${cpus} CPUs`;
+}
+
+function desiredResourceParts(resources: VmResources): string[] {
+  return [
+    cpuText(resources.cpus),
+    `${resources.memoryMib} MiB RAM`,
+    `${resources.diskMib} MiB root disk`,
+  ];
+}
+
+function observedResourceParts(resources: VmObservedResources): string[] {
+  const parts = [cpuText(resources.cpus)];
+  if (resources.memoryMib !== null) parts.push(`${resources.memoryMib} MiB RAM`);
+  if (resources.diskMib !== null) parts.push(`${resources.diskMib} MiB root disk`);
+  return parts;
+}
+
+/**
+ * One-line resource summary for a list row. Pending attempts show their desired
+ * shape, sandboxes show only reported fields, and registration-only rows none.
+ */
+export function childResourcesText(child: VmChild): string | null {
+  if (child.kind === "registration") return null;
+  if (child.kind === "pending") return desiredResourceParts(child.resources).join(" · ");
+  return observedResourceParts(child.resources).join(" · ");
+}
+
+/**
+ * Detail rows for observed resources. A requested target is shown after an
+ * arrow until the runtime confirms it.
+ */
+export function resourceDetailLines(
+  observed: VmObservedResources,
+  requested: VmResources | null,
+): ResourceLine[] {
+  return [
+    { label: "CPUs", value: String(observed.cpus) },
+    { label: "RAM", value: resourceValueLine(observed.memoryMib, requested?.memoryMib ?? null) },
+    {
+      label: "Root disk",
+      value: resourceValueLine(observed.diskMib, requested?.diskMib ?? null),
+    },
+  ];
+}
+
+function resourceValueLine(observed: number | null, requested: number | null): string {
+  if (observed === null) return "Unknown";
+  if (requested !== null && requested !== observed) return `${observed} MiB → ${requested} MiB`;
+  return `${observed} MiB`;
+}
+
 /**
  * Builds the `vm.create` input from validated form fields. An empty name falls
  * back to the generated name; resources are always sent explicitly from the
@@ -229,6 +292,147 @@ export function retryCreateInput(child: Extract<VmChild, { kind: "pending" }>): 
           },
         }
       : {}),
+  };
+}
+
+/** A resize target; null disables a field the runtime does not report. */
+export interface ResizeTarget {
+  readonly memoryMib: number | null;
+  readonly diskMib: number | null;
+}
+
+/** Defaults from current/requested values; unreported fields stay disabled. */
+export function resizeTargetFor(
+  observed: VmObservedResources,
+  requested: VmResources | null,
+): ResizeTarget {
+  const memory = requested?.memoryMib ?? observed.memoryMib;
+  const disk = requested?.diskMib ?? observed.diskMib;
+  return {
+    memoryMib: observed.memoryMib === null ? null : memory,
+    diskMib: observed.diskMib === null || disk === null ? null : Math.max(observed.diskMib, disk),
+  };
+}
+
+/** Grow-only root-disk bounds anchored at the observed size. */
+export function resizeDiskBounds(observed: VmObservedResources): ResourceFieldBounds {
+  if (observed.diskMib === null) return DISK_FIELD_BOUNDS;
+  return { ...DISK_FIELD_BOUNDS, min: Math.max(DISK_FIELD_BOUNDS.min, observed.diskMib) };
+}
+
+/** True when at least one resource has a reported baseline to resize. */
+export function canResize(observed: VmObservedResources): boolean {
+  return observed.memoryMib !== null || observed.diskMib !== null;
+}
+
+/**
+ * Validates a resize target against the shared bounds and the observed
+ * baseline. Sliders already snap to the bounds; this is the single rule set
+ * used by both the dialog and its tests.
+ */
+export function resizeTargetIssue(
+  target: ResizeTarget,
+  observed: VmObservedResources,
+): string | null {
+  if (target.memoryMib === null && target.diskMib === null) {
+    return "This VM reports neither RAM nor root disk, so there is nothing to resize. Repair may restore a value.";
+  }
+  if (target.memoryMib !== null) {
+    if (observed.memoryMib === null) {
+      return "RAM cannot be changed until Repair reports its effective value.";
+    }
+    const issue = resourceFieldIssue(String(target.memoryMib), MEMORY_FIELD_BOUNDS);
+    if (issue) return issue;
+  }
+  if (target.diskMib !== null) {
+    if (observed.diskMib === null) {
+      return "The root disk size is unreported, so it cannot be changed.";
+    }
+    if (target.diskMib < observed.diskMib) return "The root disk can only grow.";
+    const issue = resourceFieldIssue(String(target.diskMib), resizeDiskBounds(observed));
+    if (issue) return issue;
+  }
+  return null;
+}
+
+/** Distinct user feedback for each resize outcome. */
+export interface ResizeFeedback {
+  readonly text: string;
+  readonly tone: Tone;
+  /** Whether the result is a no-restart refusal the user can restart through. */
+  readonly offersRestart: boolean;
+}
+
+export function resizeFeedback(result: VmResizeResult): ResizeFeedback {
+  switch (result.result) {
+    case "applied":
+      return { text: "Resources updated.", tone: "success", offersRestart: false };
+    case "unchanged":
+      return { text: "The VM already has these resources.", tone: "muted", offersRestart: false };
+    case "converging":
+      return {
+        text: "The runtime accepted the change and is converging; the detail updates when it confirms.",
+        tone: "warning",
+        offersRestart: false,
+      };
+    case "restart_required":
+      return {
+        text: "The runtime cannot apply this change live.",
+        tone: "warning",
+        offersRestart: true,
+      };
+    case "resize_failed":
+      return {
+        text: "The resource change was not applied. The previous values remain.",
+        tone: "danger",
+        offersRestart: false,
+      };
+  }
+}
+
+/** Why a restart-and-apply action is unavailable, or null for a running VM. */
+export function resizeRestartIssue(runtimeStatus: RuntimeStatus): string | null {
+  if (runtimeStatus === "running") return null;
+  return `Restart is only offered for a running VM. This VM is ${runtimeText(runtimeStatus).toLowerCase()}, and resize never starts it.`;
+}
+
+/** Change rows for a restart confirmation; unchanged values are named. */
+export function resizeChangeLines(
+  observed: VmObservedResources,
+  target: ResizeTarget,
+): ResourceLine[] {
+  return [
+    { label: "RAM", value: changeLine(observed.memoryMib, target.memoryMib, "unchanged") },
+    {
+      label: "Root disk",
+      value: changeLine(observed.diskMib, target.diskMib, "unchanged; grow only"),
+    },
+  ];
+}
+
+function changeLine(observed: number | null, target: number | null, unchanged: string): string {
+  if (observed === null || target === null) return "Unknown";
+  return target === observed ? `${observed} MiB (${unchanged})` : `${observed} MiB → ${target} MiB`;
+}
+
+/** The disruptive warning shown by the restart confirmation. */
+export function restartConfirmationText(name: string): string {
+  return `The runtime cannot apply this RAM change live. Restarting ${name} disconnects active sessions.`;
+}
+
+/** Builds the resize RPC input, omitting fields with no editable baseline. */
+export function resizeRequestInput(
+  name: string,
+  id: string,
+  target: ResizeTarget,
+  restart: boolean,
+): VmResizeInput {
+  return {
+    name,
+    id,
+    ...(target.memoryMib === null ? {} : { memoryMib: target.memoryMib }),
+    ...(target.diskMib === null ? {} : { diskMib: target.diskMib }),
+    ...(restart ? { restart: true } : {}),
   };
 }
 
