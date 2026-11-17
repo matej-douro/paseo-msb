@@ -35,6 +35,8 @@ import {
   GH_VERSION,
   PROVISIONING_PI_VERSION,
   PROVISIONING_STATE_DIR,
+  VM_SETUP_SKILL_DIRS,
+  VM_SETUP_SKILL_MARKER,
   buildProvisionScript,
   canonicalizePlan,
   providerEntry,
@@ -893,6 +895,13 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         );
         expect(ghVersion).toContain(GH_VERSION);
       }
+      const setupSkill = await runGuest(
+        handles[0],
+        `${VM_SETUP_SKILL_DIRS.map(
+          (dir) => `grep -qxF '${VM_SETUP_SKILL_MARKER}' ${dir}/SKILL.md`,
+        ).join(" && ")} && echo present`,
+      );
+      expect(setupSkill).toBe("present");
       if (plan.integrations.includes("paseo-tools")) {
         const skill = await runGuest(
           handles[0],
@@ -1104,7 +1113,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           .filter((step) => step.status === "ok" || step.status === "skipped")
           .map((step) => step.id);
         if (fault.step === "pi-install") {
-          expect(completedBefore).toEqual([]);
+          expect(completedBefore).toEqual(["vm-setup-skill"]);
         } else {
           expect(completedBefore.length).toBeGreaterThan(0);
         }

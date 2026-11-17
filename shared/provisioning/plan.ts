@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  BASE_STEPS,
   CLAUDE_CODE_VERSION,
   GH_VERSION,
   INTEGRATION_CATALOG,
@@ -19,6 +20,7 @@ import {
   llmEntry,
   providerEntry,
 } from "./catalog";
+import { stableHash } from "./hash";
 
 export const ProvisionProviderSelectionSchema = z
   .object({
@@ -239,23 +241,6 @@ export function paseoProviderIds(plan: CanonicalPlan): readonly string[] {
   return plan.providers.map((selection) => providerEntry(selection.provider).paseoProviderId);
 }
 
-/**
- * FNV-1a over the canonical plan plus the pin fingerprint. This is an
- * idempotency key, not a security primitive.
- */
-export function stableHash(input: string): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= BigInt(input.charCodeAt(index));
-    hash = (hash * prime) & mask;
-  }
-
-  return hash.toString(16).padStart(16, "0");
-}
-
 export function catalogFingerprint(): string {
   return stableHash(
     JSON.stringify({
@@ -266,6 +251,9 @@ export function catalogFingerprint(): string {
         neuralwatt: PI_NEURALWATT_VERSION,
         gh: GH_VERSION,
       },
+      // Base steps always run, and their content participates in identity so a
+      // changed VM setup skill produces a new provision script.
+      base: BASE_STEPS,
       providers: PROVIDER_CATALOG.map((provider) => ({
         id: provider.id,
         steps: provider.steps,

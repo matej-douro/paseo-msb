@@ -1,4 +1,5 @@
 import {
+  BASE_STEPS,
   PROVISIONING_GUEST_HOME,
   PROVISIONING_GUEST_PATH,
   PROVISIONING_STATE_DIR,
@@ -13,6 +14,7 @@ import { canonicalizePlan, planHash, type CanonicalPlan } from "./plan";
 import { shellQuote } from "./shell";
 
 export type PlannedStepSource =
+  | { readonly kind: "base" }
   | { readonly kind: "provider"; readonly provider: ProviderId }
   | { readonly kind: "llm"; readonly provider: ProviderId; readonly llm: LlmId }
   | { readonly kind: "integration"; readonly integration: IntegrationId };
@@ -39,9 +41,9 @@ export interface ProvisionExecSpec {
 const SCRIPT_DELIMITER = "PASEO_MSB_PROVISION_SCRIPT";
 
 /**
- * Composes provider base steps, then their selected LLM steps, then
- * integrations. Provider and LLM order comes from the canonical plan, so the
- * rendered script is deterministic for a given selection.
+ * Composes base steps, then provider base steps, then their selected LLM
+ * steps, then integrations. Base and catalog order are fixed, so the rendered
+ * script is deterministic for a given selection.
  */
 export function plannedSteps(plan: CanonicalPlan): readonly PlannedStep[] {
   const canonical = canonicalizePlan(plan);
@@ -55,6 +57,10 @@ export function plannedSteps(plan: CanonicalPlan): readonly PlannedStep[] {
     seen.add(step.id);
     steps.push({ ...step, source });
   };
+
+  for (const step of BASE_STEPS) {
+    add(step, { kind: "base" });
+  }
 
   for (const selection of canonical.providers) {
     const provider = providerEntry(selection.provider);

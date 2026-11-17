@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  BASE_STEPS,
   CLAUDE_CODE_VERSION,
   GH_LINUX_AMD64_SHA256,
   GH_LINUX_ARM64_SHA256,
@@ -17,6 +18,9 @@ import {
   PROVISIONING_PI_VERSION,
   PROVIDER_CATALOG,
   PROVIDER_IDS,
+  VM_SETUP_SKILL_CONTENT,
+  VM_SETUP_SKILL_MARKER,
+  VM_SETUP_SKILL_SUBDIRS,
   availableCredentialSet,
   buildProvisionScript,
   canonicalizePlan,
@@ -69,6 +73,11 @@ describe("provisioning catalog", () => {
   it("declares only known credentials and unique step ids", () => {
     const credentials = new Set<string>(PROVISIONING_CREDENTIAL_NAMES);
     const stepIds = new Set<string>();
+
+    for (const step of BASE_STEPS) {
+      expect(stepIds.has(step.id)).toBe(false);
+      stepIds.add(step.id);
+    }
 
     for (const provider of PROVIDER_CATALOG) {
       expect(provider.paseoProviderId).toBe(provider.id);
@@ -328,6 +337,7 @@ describe("provision script", () => {
     expect(first.path).toBe(`/home/paseo/.paseo-msb/provision-${first.planHash}.sh`);
     expect(first.argv).toEqual(["/bin/sh", first.path, first.planHash]);
     expect(first.steps.map((step) => step.id)).toEqual([
+      "vm-setup-skill",
       "pi-install",
       "pi-neuralwatt-install",
       "github-cli-install",
@@ -337,19 +347,100 @@ describe("provision script", () => {
   it("installs the provider before its LLM extension and integrations last", () => {
     const steps = plannedSteps(resolve(PI_NEURALWATT_GH).plan);
     expect(steps.map((step) => step.id)).toEqual([
+      "vm-setup-skill",
       "pi-install",
       "pi-neuralwatt-install",
       "github-cli-install",
     ]);
-    expect(steps[1]?.source).toEqual({
+    expect(steps[0]?.source).toEqual({ kind: "base" });
+    expect(steps[2]?.source).toEqual({
       kind: "llm",
       provider: "pi",
       llm: "neuralwatt",
     });
-    expect(steps[2]?.source).toEqual({
+    expect(steps[3]?.source).toEqual({
       kind: "integration",
       integration: "github-cli",
     });
+  });
+
+  it("installs the VM setup skill into both skill roots for every plan", () => {
+    const plan = resolve(PI_NEURALWATT_GH).plan;
+    const provision = buildProvisionScript(plan);
+    const base = plannedSteps(plan)[0];
+
+    expect(base?.id).toBe("vm-setup-skill");
+    expect(base?.source).toEqual({ kind: "base" });
+    for (const subdir of VM_SETUP_SKILL_SUBDIRS) {
+      expect(base?.probe).toContain(`"$HOME/${subdir}/SKILL.md"`);
+      expect(base?.action).toContain(`"$HOME/${subdir}"`);
+      expect(provision.script).toContain(`$HOME/${subdir}`);
+    }
+    expect(provision.script).toContain(VM_SETUP_SKILL_MARKER);
+    expect(provision.script).toContain("chmod 600");
+  });
+
+  it("writes the VM setup skill into both skill roots", () => {
+    const step = plannedSteps(resolve(PI_NEURALWATT_GH).plan)[0];
+    const home = mkdtempSync(join(tmpdir(), "paseo-msb-skill-"));
+    const env = { ...process.env, HOME: home };
+
+    try {
+      const before = spawnSync("sh", ["-c", step?.probe ?? ""], { env, encoding: "utf8" });
+      expect(before.status).not.toBe(0);
+
+      const action = spawnSync("sh", ["-c", step?.action ?? ""], { env, encoding: "utf8" });
+      expect(action.stderr).toBe("");
+      expect(action.status).toBe(0);
+
+      const probe = spawnSync("sh", ["-c", step?.probe ?? ""], { env, encoding: "utf8" });
+      expect(probe.status).toBe(0);
+
+      for (const subdir of VM_SETUP_SKILL_SUBDIRS) {
+        const path = join(home, subdir, "SKILL.md");
+        expect(readFileSync(path, "utf8")).toBe(VM_SETUP_SKILL_CONTENT);
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites a stale marker and keeps the file mode", () => {
+    const step = plannedSteps(resolve(PI_NEURALWATT_GH).plan)[0];
+    const home = mkdtempSync(join(tmpdir(), "paseo-msb-skill-"));
+    const env = { ...process.env, HOME: home };
+
+    try {
+      expect(spawnSync("sh", ["-c", step?.action ?? ""], { env }).status).toBe(0);
+      const path = join(home, VM_SETUP_SKILL_SUBDIRS[0], "SKILL.md");
+      writeFileSync(path, readFileSync(path, "utf8").replace(/<!-- .* -->/, "<!-- stale -->"));
+
+      expect(spawnSync("sh", ["-c", step?.probe ?? ""], { env }).status).not.toBe(0);
+      expect(spawnSync("sh", ["-c", step?.action ?? ""], { env }).status).toBe(0);
+      expect(spawnSync("sh", ["-c", step?.probe ?? ""], { env }).status).toBe(0);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("renders every step probe and action as valid POSIX shell", () => {
+    const plan = resolve({
+      providers: [
+        { provider: "claude", llms: ["anthropic-api-key"] },
+        { provider: "pi", llms: ["neuralwatt"] },
+      ],
+      integrations: ["github-cli"],
+    }).plan;
+
+    for (const step of plannedSteps(plan)) {
+      for (const snippet of [step.probe, step.action]) {
+        const result = spawnSync("sh", ["-n", "-c", snippet], { encoding: "utf8" });
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
+      }
+    }
   });
 
   it("keeps a runtime-only integration out of the provision script", () => {
@@ -362,7 +453,10 @@ describe("provision script", () => {
       integrations: [],
     }).plan;
 
-    expect(plannedSteps(plan).map((step) => step.id)).toEqual(["pi-install"]);
+    expect(plannedSteps(plan).map((step) => step.id)).toEqual([
+      "vm-setup-skill",
+      "pi-install",
+    ]);
     expect(planHash(plan)).not.toBe(planHash(withoutIntegration));
   });
 

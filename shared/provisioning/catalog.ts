@@ -1,4 +1,10 @@
 import { CREDENTIAL_NAMES, GUEST_HOME, GUEST_PATH, PI_PACKAGE, PI_PREFIX } from "../constants";
+import { shellQuote } from "./shell";
+import {
+  VM_SETUP_SKILL_CONTENT,
+  VM_SETUP_SKILL_MARKER,
+  VM_SETUP_SKILL_SUBDIRS,
+} from "./vm-setup-skill";
 
 /**
  * Shared, data-only provisioning catalog.
@@ -142,6 +148,42 @@ const GH_INSTALL: ProvisionStep = {
     `install -m 0755 "$tmp/\${asset%.tar.gz}/bin/gh" "${PI_PREFIX}/bin/gh"`,
   ].join("\n"),
 };
+
+/**
+ * Installs the plugin-provided VM setup skill into both skill roots. The probe
+ * matches the content-derived marker line, so editing the payload rewrites the
+ * file while unchanged content stays a no-op.
+ */
+const VM_SETUP_SKILL_ACTION = [
+  "set -eu",
+  "umask 077",
+  `for d in ${VM_SETUP_SKILL_SUBDIRS.map((subdir) => `"$HOME/${subdir}"`).join(" ")}; do`,
+  '  mkdir -p "$d"',
+  "  cat > \"$d/SKILL.md.tmp\" <<'PASEO_MSB_VM_SETUP_SKILL'",
+  VM_SETUP_SKILL_CONTENT.replace(/\n$/, ""),
+  "PASEO_MSB_VM_SETUP_SKILL",
+  '  chmod 600 "$d/SKILL.md.tmp"',
+  '  mv -f "$d/SKILL.md.tmp" "$d/SKILL.md"',
+  "done",
+].join("\n");
+
+const VM_SETUP_SKILL_PROBE = VM_SETUP_SKILL_SUBDIRS.map(
+  (subdir) =>
+    `test -f "$HOME/${subdir}/SKILL.md" && grep -qxF ${shellQuote(VM_SETUP_SKILL_MARKER)} "$HOME/${subdir}/SKILL.md"`,
+).join(" && ");
+
+const VM_SETUP_SKILL_STEP: ProvisionStep = {
+  id: "vm-setup-skill",
+  label: "Install the paseo-msb VM setup skill",
+  probe: VM_SETUP_SKILL_PROBE,
+  action: VM_SETUP_SKILL_ACTION,
+};
+
+/**
+ * Steps every plan runs before providers, LLM options, and integrations. They
+ * describe the VM itself rather than a selected tool.
+ */
+export const BASE_STEPS: readonly ProvisionStep[] = [VM_SETUP_SKILL_STEP];
 
 const ANTHROPIC_API_KEY_LLM: LlmCatalogEntry = {
   id: "anthropic-api-key",
