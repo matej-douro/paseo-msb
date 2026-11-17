@@ -2,7 +2,7 @@ import type { PluginClientContext, PluginSidebarItemProps } from "@getpaseo/plug
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { MainScreen } from "./client/screen";
 
-function VmHostsItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
+function VmsItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
   return (
     <SidebarRow
       icon="Boxes"
@@ -13,7 +13,7 @@ function VmHostsItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
 }
 
 export default function contribute(client: PluginClientContext) {
-  client.addScreen({ id: "main", title: "VM hosts", Component: MainScreen });
-  client.addSidebarHeaderItem({ id: "main", title: "VM hosts", Component: VmHostsItem });
+  client.addScreen({ id: "main", title: "VMs", Component: MainScreen });
+  client.addSidebarHeaderItem({ id: "main", title: "VMs", Component: VmsItem });
   return () => {};
 }
