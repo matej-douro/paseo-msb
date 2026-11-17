@@ -21,10 +21,12 @@ import {
   deleteConfirmationText,
   errorMessage,
   mergeLogBundles,
+  missingChildText,
   phaseText,
   planSummary,
   reconcileFailureMessage,
   reconcileSuccessMessage,
+  registrationOnlyDetailText,
   registrationText,
   retryCreateInput,
   runtimeText,
@@ -52,7 +54,7 @@ export interface ChildDetailProps {
 
 /**
  * Read-only detail with bounded logs, Repair, and Delete. Delete always names
- * the child and states that the sandbox and registration are removed.
+ * the child and states exactly what matching cleanup removes.
  */
 export function ChildDetail({
   name,
@@ -230,14 +232,7 @@ export function ChildDetail({
         ) : null}
 
         {data && !child ? (
-          <Notice
-            text={
-              data.inventory.status === "unavailable"
-                ? "Inventory is unavailable, so this child's state cannot be confirmed. It is not known to be deleted."
-                : "This child is no longer in the managed inventory. It may have been deleted or reloaded."
-            }
-            theme={theme}
-          />
+          <Notice text={missingChildText(data)} theme={theme} />
         ) : null}
 
         {child ? (
@@ -274,6 +269,10 @@ export function ChildDetail({
                 </>
               ) : null}
             </View>
+
+            {registrationOnly ? (
+              <Notice text={registrationOnlyDetailText()} theme={theme} />
+            ) : null}
 
             {childError ? <Notice text={childError} tone="danger" theme={theme} /> : null}
 
@@ -339,7 +338,9 @@ export function ChildDetail({
       <Modal title="Delete child" open={deleteOpen} onOpenChange={setDeleteOpen}>
         <Modal.Content>
           <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
-            {deleteConfirmationText(name)}
+            {deleteTarget
+              ? deleteConfirmationText(name, deleteTarget.kind)
+              : "This child is no longer available. Close this dialog."}
           </Text>
           {deleteError ? (
             <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>{deleteError}</Text>
@@ -356,7 +357,7 @@ export function ChildDetail({
               theme={theme}
               variant="danger"
               onPress={() => void confirmDelete()}
-              disabled={deleting}
+              disabled={deleting || !deleteTarget}
             />
           </View>
         </Modal.Content>

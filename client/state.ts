@@ -22,6 +22,7 @@ import {
   type Registration,
   type VmChild,
   type VmCreateInput,
+  type VmDetailResult,
   type VmListResult,
   type VmReconcileResult,
 } from "../shared/contracts";
@@ -331,7 +332,9 @@ export function setupPill(child: VmChild): Pill {
  */
 export function vmPill(child: VmChild, registrations: Availability): Pill {
   if (child.kind === "pending") return { label: "No VM yet", tone: "muted" };
-  if (child.kind === "registration") return { label: "Missing", tone: "danger" };
+  // A registration-only row means the join found no sandbox, not that the VM is
+  // gone: inventory may be unavailable. Only exact cleanup proof removes a row.
+  if (child.kind === "registration") return { label: "VM state unknown", tone: "muted" };
 
   switch (child.runtimeStatus) {
     case "crashed":
@@ -372,6 +375,11 @@ export function vmPill(child: VmChild, registrations: Availability): Pill {
   }
 }
 
+/** Explains why a registration-only row exists and what its actions do. */
+export function registrationOnlyDetailText(): string {
+  return "This child exists only as a parent registration, so its VM state is unknown. A missing sandbox row is not proof of deletion. Repair revalidates this child against the runtime. Delete re-reads it and removes only an exactly matching registration, plus its sandbox generation only if that generation still exists.";
+}
+
 /** Safe text plus bounded, redacted detail when the server has one. */
 export function childErrorText(child: VmChild): string | null {
   if (child.kind === "pending" || child.kind === "registration") {
@@ -403,6 +411,22 @@ export function registrationsNotice(availability: Availability): string | null {
     "Parent registrations are unavailable. Registration state may be stale.",
     availability.error.detail,
   );
+}
+
+/**
+ * Explains an absent detail child. Only a complete read of both sources can
+ * suggest deletion; a partial read says the state is unknown.
+ */
+export function missingChildText(
+  data: Pick<VmDetailResult, "inventory" | "registrations">,
+): string {
+  if (data.inventory.status === "unavailable") {
+    return "Inventory is unavailable, so this child's state cannot be confirmed. It is not known to be deleted.";
+  }
+  if (data.registrations.status === "unavailable") {
+    return "Parent registrations are unavailable, so this child's state cannot be confirmed. It is not known to be deleted.";
+  }
+  return "This child is no longer in the managed inventory. It may have been deleted or reloaded.";
 }
 
 /**
@@ -447,8 +471,14 @@ export function reconcileSuccessMessage(result: VmReconcileResult): string {
     : "Nothing needed repair.";
 }
 
-/** Names the child and states that both the sandbox and registration go away. */
-export function deleteConfirmationText(name: string): string {
+/** Names the child and states exactly what the matching Delete call removes. */
+export function deleteConfirmationText(
+  name: string,
+  kind: "sandbox" | "registration",
+): string {
+  if (kind === "registration") {
+    return `Delete ${name}? Only what exactly matches this child is removed: its sandbox generation, if still present, and its matching parent registration. This cannot be undone.`;
+  }
   return `Delete ${name}? Its sandbox and parent registration are removed. This cannot be undone.`;
 }
 

@@ -27,10 +27,12 @@ import {
   logTimestamp,
   MEMORY_FIELD_BOUNDS,
   mergeLogBundles,
+  missingChildText,
   phaseText,
   planSummary,
   reconcileFailureMessage,
   reconcileSuccessMessage,
+  registrationOnlyDetailText,
   registrationText,
   registrationsNotice,
   resourceFieldIssue,
@@ -289,7 +291,13 @@ describe("child presentation", () => {
     const available = { status: "available" } as const;
 
     expect(vmPill(PENDING, available)).toEqual({ label: "No VM yet", tone: "muted" });
-    expect(vmPill(REGISTRATION, available)).toEqual({ label: "Missing", tone: "danger" });
+    expect(vmPill(REGISTRATION, available)).toEqual({ label: "VM state unknown", tone: "muted" });
+    expect(
+      vmPill(REGISTRATION, {
+        status: "unavailable",
+        error: safeError("registrations_unavailable"),
+      }),
+    ).toEqual({ label: "VM state unknown", tone: "muted" });
     expect(vmPill(SANDBOX, available)).toEqual({ label: "Online", tone: "success" });
     expect(vmPill(sandbox({ registration: null }), available)).toEqual({
       label: "Not registered",
@@ -405,6 +413,45 @@ describe("list states", () => {
         children: [],
       }),
     ).toBe(false);
+    expect(
+      isEmptyInventory({
+        inventory: { status: "available" },
+        registrations: {
+          status: "unavailable",
+          error: safeError("registrations_unavailable"),
+        },
+        credentials: [],
+        storedCredentials: [],
+        children: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat a partial read as deletion proof", () => {
+    expect(
+      missingChildText({
+        inventory: { status: "available" },
+        registrations: { status: "available" },
+      }),
+    ).toContain("may have been deleted");
+    expect(
+      missingChildText({
+        inventory: { status: "available" },
+        registrations: {
+          status: "unavailable",
+          error: safeError("registrations_unavailable"),
+        },
+      }),
+    ).toContain("not known to be deleted");
+    expect(
+      missingChildText({
+        inventory: {
+          status: "unavailable",
+          error: safeError("inventory_unavailable"),
+        },
+        registrations: { status: "available" },
+      }),
+    ).toContain("not known to be deleted");
   });
 });
 
@@ -439,11 +486,24 @@ describe("repair and delete text", () => {
     );
   });
 
-  it("names the child and both removed resources", () => {
-    const text = deleteConfirmationText("paseo-abc");
-    expect(text).toContain("paseo-abc");
-    expect(text).toContain("sandbox");
-    expect(text).toContain("registration");
+  it("describes exactly what Delete removes", () => {
+    const sandbox = deleteConfirmationText("paseo-abc", "sandbox");
+    expect(sandbox).toContain("paseo-abc");
+    expect(sandbox).toContain("sandbox");
+    expect(sandbox).toContain("registration");
+
+    const registration = deleteConfirmationText("paseo-abc", "registration");
+    expect(registration).toContain("paseo-abc");
+    expect(registration).toContain("registration");
+    expect(registration).toContain("exactly matches this child");
+    expect(registration).toContain("if still present");
+  });
+
+  it("explains registration-only revalidation and exact removal", () => {
+    const text = registrationOnlyDetailText();
+    expect(text).toContain("VM state is unknown");
+    expect(text).toContain("Repair");
+    expect(text).toContain("exactly matching registration");
   });
 });
 
