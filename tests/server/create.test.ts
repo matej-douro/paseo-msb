@@ -29,6 +29,7 @@ import {
   fakeRuntime,
   fakeSandbox,
   FakePaseoHosts,
+  FakePaseoTools,
   FakeSandboxCreator,
   memorySecretsStore,
   PARENT_ID,
@@ -833,6 +834,214 @@ describe("createVm", () => {
 
     gate.resolve();
     await attempt.started;
+  });
+
+  it("configures Paseo tools and orchestration skills for the selected integration", async () => {
+    const creator = new FakeSandboxCreator();
+    const paseoTools = new FakePaseoTools();
+    const context = createContext(creator, {
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(paseoTools.connections).toEqual(["127.0.0.1:41000"]);
+    expect(paseoTools.enabledProviders).toEqual([["pi"]]);
+    expect(paseoTools.installCalls).toBe(1);
+    expect(paseoTools.closes).toBe(1);
+    expect(context.pending.find(NAME)).toBeNull();
+
+    const created = await creator.find(NAME);
+    expect(created).not.toBeNull();
+    expect(created!.config()).toMatchObject({ labels: { [PHASE_LABEL]: "ready" } });
+  });
+
+  it("reports a Paseo tools failure in the registering phase and keeps the sandbox", async () => {
+    const creator = new FakeSandboxCreator();
+    const paseoTools = new FakePaseoTools({ skillsError: new Error("skills failed") });
+    const context = createContext(creator, {
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(paseoTools.closes).toBe(1);
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "paseo_tools_failed",
+    });
+    const created = await creator.find(NAME);
+    expect(created).not.toBeNull();
+    expect(created!.config()).toMatchObject({ labels: { [PHASE_LABEL]: "registering" } });
+  });
+
+  it("fails the Paseo tools step when the child-daemon connector is unavailable", async () => {
+    const creator = new FakeSandboxCreator();
+    const context = createContext(creator);
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "paseo_tools_failed",
+    });
+  });
+
+  it("does not apply Paseo tools before the selected providers are ready", async () => {
+    const creator = new FakeSandboxCreator();
+    const hosts = new FakePaseoHosts({ providerStatus: "starting" });
+    const paseoTools = new FakePaseoTools();
+    const context = createContext(creator, {
+      hosts,
+      timeoutMs: 30,
+      pollMs: 1,
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "provider_unavailable",
+    });
+    expect(paseoTools.connections).toEqual([]);
+  });
+
+  it("maps a connector failure without leaking a client", async () => {
+    const creator = new FakeSandboxCreator();
+    const paseoTools = new FakePaseoTools({ connectError: new Error("connect failed") });
+    const context = createContext(creator, {
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "paseo_tools_failed",
+    });
+    expect(paseoTools.closes).toBe(0);
+    expect(paseoTools.installCalls).toBe(0);
+  });
+
+  it("closes the client when enabling tools fails", async () => {
+    const creator = new FakeSandboxCreator();
+    const paseoTools = new FakePaseoTools({ enableError: new Error("policy failed") });
+    const context = createContext(creator, {
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "paseo_tools_failed",
+    });
+    expect(paseoTools.closes).toBe(1);
+    expect(paseoTools.installCalls).toBe(0);
+  });
+
+  it("bounds a hanging skills install and still closes the client", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator();
+    const paseoTools = new FakePaseoTools({ skillsGate: gate.promise });
+    const context = createContext(creator, {
+      sdkCallTimeoutMs: 25,
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "paseo_tools_failed",
+    });
+    expect(paseoTools.installCalls).toBe(1);
+    expect(paseoTools.closes).toBe(1);
+  });
+
+  it("closes the client when the lane aborts during skills setup", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator();
+    const paseoTools = new FakePaseoTools({ skillsGate: gate.promise });
+    const context = createContext(creator, {
+      sdkCallTimeoutMs: 5_000,
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await waitFor(() => paseoTools.installCalls === 1);
+    context.lanes.close();
+    await attempt.started;
+
+    expect(paseoTools.closes).toBe(1);
+    expect(context.pending.find(NAME)).toBeNull();
+  });
+
+  it("closes a client that connects after the setup deadline", async () => {
+    const gate = deferred<void>();
+    const creator = new FakeSandboxCreator();
+    const paseoTools = new FakePaseoTools({ connectGate: gate.promise });
+    const context = createContext(creator, {
+      sdkCallTimeoutMs: 25,
+      paseoTools: (connection, options) => paseoTools.connect(connection, options),
+    });
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+
+    const attempt = await startCreate(context, { name: NAME, plan });
+    await attempt.started;
+
+    expect(context.pending.find(NAME)).toMatchObject({
+      phase: "failed",
+      errorCode: "paseo_tools_failed",
+    });
+    expect(paseoTools.closes).toBe(0);
+
+    gate.resolve();
+    await tick();
+    expect(paseoTools.closes).toBe(1);
   });
 });
 

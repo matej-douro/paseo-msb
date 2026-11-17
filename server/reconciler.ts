@@ -276,6 +276,10 @@ async function advanceSandbox(
   const providers = paseoProviderIds(plan);
 
   let phase = decoded.labels[PHASE_LABEL];
+  // A ready child is already converged. Repair may restore its registration,
+  // but it must not re-apply host-level integrations a user may have changed
+  // in the child since creation.
+  const configureIntegrations = phase !== "ready";
   let changed = false;
 
   try {
@@ -302,6 +306,7 @@ async function advanceSandbox(
       { id: handle.id, name: handle.name },
       hostPort,
       providers,
+      { integrations: configureIntegrations ? plan.integrations : [] },
     );
     if (ensured.changed) changed = true;
 

@@ -28,7 +28,7 @@ export const LLM_IDS = [
 ] as const;
 export type LlmId = (typeof LLM_IDS)[number];
 
-export const INTEGRATION_IDS = ["github-cli"] as const;
+export const INTEGRATION_IDS = ["github-cli", "paseo-tools"] as const;
 export type IntegrationId = (typeof INTEGRATION_IDS)[number];
 
 /** Bump when the catalog shape changes in a way the planner must reject. */
@@ -219,7 +219,22 @@ const GITHUB_CLI_INTEGRATION: IntegrationCatalogEntry = {
   steps: [GH_INSTALL],
 };
 
-export const INTEGRATION_CATALOG: readonly IntegrationCatalogEntry[] = [GITHUB_CLI_INTEGRATION];
+const PASEO_TOOLS_INTEGRATION: IntegrationCatalogEntry = {
+  id: "paseo-tools",
+  label: "Paseo tools",
+  description:
+    "Enable Paseo tools for the selected providers and install the bundled orchestration skills.",
+  requiredCredentials: [],
+  // This is a host-level setup step after registration, not a provisioning script
+  // step: the child daemon must be online before it can patch its own config and
+  // install skills.
+  steps: [],
+};
+
+export const INTEGRATION_CATALOG: readonly IntegrationCatalogEntry[] = [
+  GITHUB_CLI_INTEGRATION,
+  PASEO_TOOLS_INTEGRATION,
+];
 
 const PROVIDERS_BY_ID: Readonly<Record<ProviderId, ProviderCatalogEntry>> = {
   claude: CLAUDE_PROVIDER,
@@ -228,6 +243,7 @@ const PROVIDERS_BY_ID: Readonly<Record<ProviderId, ProviderCatalogEntry>> = {
 
 const INTEGRATIONS_BY_ID: Readonly<Record<IntegrationId, IntegrationCatalogEntry>> = {
   "github-cli": GITHUB_CLI_INTEGRATION,
+  "paseo-tools": PASEO_TOOLS_INTEGRATION,
 };
 
 export function providerEntry(id: ProviderId): ProviderCatalogEntry {

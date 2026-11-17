@@ -275,11 +275,15 @@ export function catalogFingerprint(): string {
           steps: llm.steps,
         })),
       })),
-      integrations: INTEGRATION_CATALOG.map((integration) => ({
-        id: integration.id,
-        requiredCredentials: integration.requiredCredentials,
-        steps: integration.steps,
-      })),
+      // Runtime-only integrations have no provisioning steps and must not change
+      // an existing plan's provision-job identity.
+      integrations: INTEGRATION_CATALOG.filter((integration) => integration.steps.length > 0).map(
+        (integration) => ({
+          id: integration.id,
+          requiredCredentials: integration.requiredCredentials,
+          steps: integration.steps,
+        }),
+      ),
     }),
   );
 }

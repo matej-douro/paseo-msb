@@ -178,6 +178,15 @@ describe("provider and integration availability", () => {
       missing: [],
     });
   });
+
+  it("makes Paseo tools available without a credential", () => {
+    expect(integrationAvailability("paseo-tools", availableCredentialSet([]))).toEqual({
+      id: "paseo-tools",
+      available: true,
+      reason: null,
+      missing: [],
+    });
+  });
 });
 
 describe("plan resolution", () => {
@@ -213,6 +222,19 @@ describe("plan resolution", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe("invalid_request");
+  });
+
+  it("supports Paseo tools without adding credentials", () => {
+    const result = resolve(
+      {
+        providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+        integrations: ["paseo-tools"],
+      },
+      availableCredentialSet(["ANTHROPIC_API_KEY"]),
+    );
+
+    expect(result.requiredCredentials).toEqual(["ANTHROPIC_API_KEY"]);
+    expect(result.plan.integrations).toEqual(["paseo-tools"]);
   });
 
   it("rejects plans with no provider, duplicate providers, duplicate LLMs, or foreign LLMs", () => {
@@ -328,6 +350,20 @@ describe("provision script", () => {
       kind: "integration",
       integration: "github-cli",
     });
+  });
+
+  it("keeps a runtime-only integration out of the provision script", () => {
+    const plan = resolve({
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    }).plan;
+    const withoutIntegration = resolve({
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: [],
+    }).plan;
+
+    expect(plannedSteps(plan).map((step) => step.id)).toEqual(["pi-install"]);
+    expect(planHash(plan)).not.toBe(planHash(withoutIntegration));
   });
 
   it("builds a Claude script that disables auto-update", () => {

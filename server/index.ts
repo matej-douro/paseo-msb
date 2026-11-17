@@ -19,6 +19,7 @@ import { deleteVm } from "./delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "./lanes";
 import { createMetricsCoalescer, createParentIdCache, readVmMetrics } from "./metrics";
 import { createMutationRegistry } from "./mutations";
+import { connectPaseoTools } from "./paseo-tools";
 import { createPendingCreateStore, dismissPendingCreate } from "./pending";
 import { createRegistrationPruner } from "./prune";
 import { reconcileVm } from "./reconcile";
@@ -76,6 +77,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
       pending,
       secretsStore,
       lanes,
+      paseoTools: connectPaseoTools,
     };
   }
 

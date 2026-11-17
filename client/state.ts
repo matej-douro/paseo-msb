@@ -280,6 +280,7 @@ const SETUP_ERROR_PILLS: Partial<Record<SafeErrorCode, Pill>> = {
   job_inventory_unavailable: { label: "Install unconfirmed", tone: "warning" },
   path_unverified: { label: "Pi missing on PATH", tone: "danger" },
   provider_unavailable: { label: "Provider not ready", tone: "warning" },
+  paseo_tools_failed: { label: "Paseo tools failed", tone: "danger" },
   registration_failed: { label: "Registration failed", tone: "warning" },
   registration_timeout: { label: "Registration pending", tone: "warning" },
   registration_conflict: { label: "Registration conflict", tone: "danger" },

@@ -3,7 +3,9 @@ import {
   REGISTRATION_SOURCE,
 } from "../shared/constants";
 import type { SafeErrorCode } from "../shared/errors";
+import type { IntegrationId } from "../shared/provisioning";
 import { abortableSleep, bounded, LifecycleAbortedError } from "./lanes";
+import type { PaseoToolsConnector, PaseoToolsHandle } from "./paseo-tools";
 import {
   isManagedRegistration,
   type HostDirectoryLike,
@@ -65,10 +67,19 @@ export class SetupFailure extends Error {
 
 export interface RegistrationContext {
   readonly hosts: RegistrationHostsLike;
+  /** Host-level integration setup that needs the routed child daemon. */
+  readonly paseoTools?: PaseoToolsConnector;
   /** Wait for routed online and Pi readiness; tests shorten it. */
   readonly timeoutMs?: number;
   readonly pollMs?: number;
+  /** Bound for one non-job setup call; defaults to a capped registration timeout. */
+  readonly sdkCallTimeoutMs?: number;
   readonly signal?: AbortSignal;
+}
+
+export interface RegistrationSetup {
+  /** Selected integrations after provisioning, in canonical order. */
+  readonly integrations?: readonly IntegrationId[];
 }
 
 export const DEFAULT_REGISTRATION_TIMEOUT_MS = 120_000;
@@ -150,9 +161,11 @@ export async function ensureRegistration(
   sandbox: SandboxIdentity,
   hostPort: number,
   providers: readonly string[],
+  setup: RegistrationSetup = {},
 ): Promise<{ readonly registration: HostRegistrationLike; readonly changed: boolean }> {
+  const connection = `127.0.0.1:${hostPort}`;
   const desired = {
-    connection: `127.0.0.1:${hostPort}`,
+    connection,
     // The chosen name is the display label; identity is producer + source.key.
     label: sandbox.name,
     metadata: registrationMetadata(sandbox),
@@ -221,6 +234,9 @@ export async function ensureRegistration(
   if (!online.serverId) throw new SetupFailure("registration_failed");
 
   await confirmProviders(context, online.serverId, providers);
+  if (setup.integrations?.includes("paseo-tools")) {
+    await ensurePaseoTools(context, connection, providers);
+  }
   return { registration: online, changed };
 }
 
@@ -300,6 +316,84 @@ async function confirmProviders(
       signal: context.signal,
     }).catch(() => {});
   }
+}
+
+/**
+ * The `paseo-tools` integration is host-level: the child daemon is already
+ * routed online, so patch its provider tool policy and install the bundled
+ * orchestration skills through the same loopback endpoint the parent uses.
+ */
+async function ensurePaseoTools(
+  context: RegistrationContext,
+  connection: string,
+  providers: readonly string[],
+): Promise<void> {
+  const connect = context.paseoTools;
+  if (!connect) throw new SetupFailure("paseo_tools_failed");
+
+  const callTimeout = context.sdkCallTimeoutMs ?? Math.min(timeoutMs(context), 60_000);
+  const deadline = Date.now() + callTimeout;
+  const remaining = () => Math.max(1, deadline - Date.now());
+  let handle: PaseoToolsHandle | null = null;
+  let rawConnecting: Promise<PaseoToolsHandle> | null = null;
+
+  try {
+    rawConnecting = startPaseoToolsCall(context, () =>
+      connect(connection, { signal: context.signal, timeoutMs: remaining() }),
+    );
+    const active = await boundPaseoTools(context, rawConnecting, remaining());
+    handle = active;
+    await boundPaseoTools(
+      context,
+      startPaseoToolsCall(context, () => active.enableTools(providers)),
+      remaining(),
+    );
+    await boundPaseoTools(
+      context,
+      startPaseoToolsCall(context, () => active.installSkills()),
+      remaining(),
+    );
+  } finally {
+    const active = handle;
+    if (active) {
+      // Close unconditionally: an aborted lane must still release the socket.
+      await bounded(active.close(), { timeoutMs: remaining() }).catch(() => {});
+    } else if (rawConnecting) {
+      // A connect that resolves after the lane aborted or the call timed out
+      // must not leave its client and socket behind.
+      void rawConnecting.then((late) => late.close()).catch(() => {});
+    }
+  }
+}
+
+function startPaseoToolsCall<T>(
+  context: RegistrationContext,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (context.signal?.aborted) return Promise.reject(new LifecycleAbortedError());
+
+  try {
+    return operation();
+  } catch (error) {
+    return Promise.reject(toPaseoToolsFailure(error));
+  }
+}
+
+function boundPaseoTools<T>(
+  context: RegistrationContext,
+  pending: Promise<T>,
+  callTimeout: number,
+): Promise<T> {
+  return bounded(pending, {
+    timeoutMs: callTimeout,
+    signal: context.signal,
+    timeoutError: () => new SetupFailure("paseo_tools_failed"),
+  }).catch((error: unknown) => Promise.reject(toPaseoToolsFailure(error)));
+}
+
+function toPaseoToolsFailure(error: unknown): Error {
+  if (error instanceof LifecycleAbortedError || error instanceof SetupFailure) return error;
+  return new SetupFailure("paseo_tools_failed");
 }
 
 function metadataMatches(

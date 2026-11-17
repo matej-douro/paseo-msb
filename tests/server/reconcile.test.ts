@@ -6,7 +6,7 @@ import {
   SANDBOX_ID_LABEL,
 } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
-import { buildProvisionScript, legacyPiPlan } from "../../shared/provisioning";
+import { buildProvisionScript, legacyPiPlan, type CanonicalPlan } from "../../shared/provisioning";
 import { deleteVm } from "../../server/delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "../../server/lanes";
 import { createMutationRegistry } from "../../server/mutations";
@@ -18,6 +18,7 @@ import {
   fakeRuntime,
   fakeSandbox,
   FakePaseoHosts,
+  FakePaseoTools,
   FakeSandboxCreator,
   memorySecretsStore,
   PARENT_ID,
@@ -116,6 +117,89 @@ describe("reconcileVm", () => {
     expect(result).toEqual({ repaired: [], errors: [] });
     expect(hosts.added).toEqual([]);
     expect(hosts.removed).toEqual([]);
+  });
+
+  it("does not reapply Paseo tools to a ready child", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready", plan });
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
+    const paseoTools = new FakePaseoTools();
+
+    const result = await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox }), {
+        paseoTools: (connection, options) => paseoTools.connect(connection, options),
+      }),
+      INPUT,
+    );
+
+    expect(result).toEqual({ repaired: [], errors: [] });
+    expect(paseoTools.connections).toEqual([]);
+    expect(paseoTools.installCalls).toBe(0);
+  });
+
+  it("restores a ready child registration without reapplying Paseo tools", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+    const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready", plan });
+    const hosts = new FakePaseoHosts();
+    const paseoTools = new FakePaseoTools();
+
+    const result = await reconcileVm(
+      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox }), {
+        paseoTools: (connection, options) => paseoTools.connect(connection, options),
+      }),
+      INPUT,
+    );
+
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(hosts.added).toHaveLength(1);
+    expect(paseoTools.connections).toEqual([]);
+  });
+
+  it("applies Paseo tools while resuming a non-ready child", async () => {
+    const plan: CanonicalPlan = {
+      providers: [{ provider: "pi", llms: ["anthropic-api-key"] }],
+      integrations: ["paseo-tools"],
+    };
+    const provision = buildProvisionScript(plan);
+    const sandbox = fakeSandbox({
+      id: "sandbox_1",
+      name: NAME,
+      phase: "installing",
+      plan,
+      provisionStatus: {
+        planHash: provision.planHash,
+        ok: true,
+        steps: [{ id: "pi-install", status: "ok", exitCode: 0 }],
+        failedStep: null,
+        error: null,
+      },
+    });
+    const hosts = new FakePaseoHosts();
+    const paseoTools = new FakePaseoTools();
+
+    const result = await reconcileVm(
+      reconcileContext(
+        fakeRuntime([sandbox]),
+        hosts,
+        new FakeSandboxCreator({ existing: sandbox }),
+        { paseoTools: (connection, options) => paseoTools.connect(connection, options) },
+      ),
+      INPUT,
+    );
+
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(paseoTools.connections).toEqual(["127.0.0.1:41000"]);
+    expect(paseoTools.enabledProviders).toEqual([["pi"]]);
+    expect(paseoTools.installCalls).toBe(1);
+    expect(paseoTools.closes).toBe(1);
   });
 
   it("resumes an interrupted install from a successful provision status", async () => {

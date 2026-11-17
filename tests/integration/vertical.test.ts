@@ -37,6 +37,7 @@ import {
   PROVISIONING_STATE_DIR,
   buildProvisionScript,
   canonicalizePlan,
+  providerEntry,
   provisionStatusPath,
   requiredCredentialsForPlan,
   type CanonicalPlan,
@@ -159,6 +160,7 @@ function childPhase(child: VmChild | undefined): Phase | null {
 function planForCredentials(
   names: readonly CredentialName[],
   githubCli: boolean,
+  paseoTools: boolean,
 ): CanonicalPlan {
   const piLlms: LlmId[] = [];
   const providers: CanonicalPlan["providers"] = [];
@@ -188,7 +190,10 @@ function planForCredentials(
   if (piLlms.length > 0) providers.push({ provider: "pi", llms: piLlms });
   return canonicalizePlan({
     providers,
-    integrations: githubCli ? ["github-cli"] : [],
+    integrations: [
+      ...(githubCli ? (["github-cli"] as const) : []),
+      ...(paseoTools ? (["paseo-tools"] as const) : []),
+    ],
   });
 }
 
@@ -583,6 +588,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
     const envCredentialName = process.env.PASEO_MSB_RELEASE_ENV_CREDENTIAL?.trim() || null;
     const envCredentialValue = process.env.PASEO_MSB_RELEASE_ENV_VALUE ?? "";
     const githubCli = process.env.PASEO_MSB_RELEASE_GITHUB_CLI === "1";
+    const paseoTools = process.env.PASEO_MSB_RELEASE_PASEO_TOOLS === "1";
 
     const envCredential = envCredentialName
       ? (secrets.secrets.find((entry) => entry.name === envCredentialName)?.name ?? null)
@@ -623,7 +629,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       modelNames = [candidate.name];
     }
 
-    createdPlan = planForCredentials(modelNames, githubCli);
+    createdPlan = planForCredentials(modelNames, githubCli, paseoTools);
     const planCredentialNames = requiredCredentialsForPlan(createdPlan);
     if (envCredential && !planCredentialNames.includes(envCredential)) {
       throw new Error(
@@ -886,6 +892,38 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           `PATH=${GUEST_PATH} gh --version`,
         );
         expect(ghVersion).toContain(GH_VERSION);
+      }
+      if (plan.integrations.includes("paseo-tools")) {
+        const skill = await runGuest(
+          handles[0],
+          "test -f /home/paseo/.agents/skills/paseo/SKILL.md && echo present",
+        );
+        expect(skill).toBe("present");
+
+        const rawConfig = await runGuest(
+          handles[0],
+          "cat /home/paseo/.paseo/config.json",
+        );
+        let config: {
+          daemon?: { mcp?: { injectIntoAgents?: boolean } };
+          agents?: {
+            providers?: Record<string, { paseoTools?: { enabled?: boolean } }>;
+            skills?: { selection?: { mode?: string } };
+          };
+        };
+        try {
+          config = JSON.parse(rawConfig) as typeof config;
+        } catch {
+          throw new Error(`Paseo config was not valid JSON: ${rawConfig}`);
+        }
+        expect(config.daemon?.mcp?.injectIntoAgents).toBe(true);
+        for (const provider of plan.providers) {
+          expect(
+            config.agents?.providers?.[providerEntry(provider.provider).paseoProviderId]
+              ?.paseoTools?.enabled,
+          ).toBe(true);
+        }
+        expect(config.agents?.skills?.selection).toEqual({ mode: "all" });
       }
 
       // The content-addressed status file is the provisioning proof.

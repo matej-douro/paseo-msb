@@ -33,6 +33,7 @@ export const SAFE_ERROR_CODES = [
   "registration_failed",
   "registration_timeout",
   "provider_unavailable",
+  "paseo_tools_failed",
   "delete_failed",
   "secrets_unavailable",
 ] as const;
@@ -67,6 +68,7 @@ export const SAFE_ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   registration_failed: "The parent registration could not be updated.",
   registration_timeout: "The child did not become reachable.",
   provider_unavailable: "Pi is not ready in the child.",
+  paseo_tools_failed: "Paseo tools and orchestration skills could not be configured.",
   delete_failed: "The sandbox could not be destroyed.",
   secrets_unavailable: "The plugin credential store is unavailable.",
 };

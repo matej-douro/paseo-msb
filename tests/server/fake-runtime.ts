@@ -40,6 +40,7 @@ import type {
   RegistrationHostsLike,
   RoutedPaseoLike,
 } from "../../server/registration";
+import type { PaseoToolsHandle } from "../../server/paseo-tools";
 import type {
   HostDirectoryLike,
   HostRegistrationLike,
@@ -676,6 +677,54 @@ export class FakePaseoHosts implements RegistrationHostsLike {
         this.disposed += 1;
       },
     };
+  }
+}
+
+export interface FakePaseoToolsOptions {
+  connectError?: Error;
+  connectGate?: Promise<void>;
+  enableError?: Error;
+  skillsError?: Error;
+  skillsGate?: Promise<void>;
+}
+
+/** Recording stand-in for the post-registration child-daemon setup. */
+export class FakePaseoTools implements PaseoToolsHandle {
+  readonly connections: string[] = [];
+  readonly enabledProviders: string[][] = [];
+  installCalls = 0;
+  closes = 0;
+
+  private readonly options: FakePaseoToolsOptions;
+
+  constructor(options: FakePaseoToolsOptions = {}) {
+    this.options = options;
+  }
+
+  async connect(
+    connection: string,
+    options: { readonly signal?: AbortSignal } = {},
+  ): Promise<PaseoToolsHandle> {
+    this.connections.push(connection);
+    if (this.options.connectError) throw this.options.connectError;
+    if (this.options.connectGate) await this.options.connectGate;
+    if (options.signal?.aborted) throw new Error("connection aborted");
+    return this;
+  }
+
+  async enableTools(providers: readonly string[]): Promise<void> {
+    if (this.options.enableError) throw this.options.enableError;
+    this.enabledProviders.push([...providers]);
+  }
+
+  async installSkills(): Promise<void> {
+    this.installCalls += 1;
+    if (this.options.skillsGate) await this.options.skillsGate;
+    if (this.options.skillsError) throw this.options.skillsError;
+  }
+
+  async close(): Promise<void> {
+    this.closes += 1;
   }
 }
 
