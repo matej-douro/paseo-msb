@@ -1,42 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { REGISTRATION_PRODUCER_ID } from "../../shared/constants";
-import { createLifecycleLanes } from "../../server/lanes";
-import { createMutationRegistry } from "../../server/mutations";
+import { cleanupAll, cleanupName, type CleanupContext } from "../../server/cleanup";
 import { createRegistrationPruner } from "../../server/prune";
 import {
-  pruneRegistrationOnlyNames,
-  type ReconcileContext,
-} from "../../server/reconciler";
-import {
-  failingRuntime,
   fakeHostDirectory,
   fakeRegistration,
-  fakeRuntime,
   fakeSandbox,
   FakePaseoHosts,
   FakeSandboxCreator,
-  memorySecretsStore,
 } from "./fake-runtime";
-import type { HostDirectoryLike, HostRegistrationLike } from "../../server/status";
+import type { HostRegistrationLike } from "../../server/status";
 
 const NAME = "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
 
-function context(
-  hosts: FakePaseoHosts,
-  creator: FakeSandboxCreator,
-  runtime: ReconcileContext["runtime"] = fakeRuntime([]),
-): ReconcileContext {
-  return {
-    hosts,
-    runtime,
-    sandboxHost: creator,
-    mutations: createMutationRegistry(),
-    env: {},
-    secretsStore: memorySecretsStore(),
-    timeoutMs: 100,
-    pollMs: 1,
-    sdkCallTimeoutMs: 100,
-  };
+function context(hosts: FakePaseoHosts, creator: FakeSandboxCreator): CleanupContext {
+  return { hosts, sandboxHost: creator, timeoutMs: 100, sdkCallTimeoutMs: 100 };
 }
 
 function ownedRegistration(
@@ -75,22 +53,6 @@ class GatedHosts extends FakePaseoHosts {
   }
 }
 
-/** Directory whose reads switch to another directory after the first read. */
-class SwitchingHosts extends FakePaseoHosts {
-  listCount = 0;
-  after: HostDirectoryLike;
-
-  constructor(directory: HostDirectoryLike, after: HostDirectoryLike) {
-    super({ directory });
-    this.after = after;
-  }
-
-  override async list() {
-    this.listCount += 1;
-    return this.listCount > 1 ? this.after : super.list();
-  }
-}
-
 /** Parent whose removals fail while `failing` is true. */
 class FlakyRemoveHosts extends FakePaseoHosts {
   failing = true;
@@ -101,35 +63,27 @@ class FlakyRemoveHosts extends FakePaseoHosts {
   }
 }
 
-describe("pruneRegistrationOnlyNames", () => {
+describe("cleanupName", () => {
   it("removes a registration whose generation is gone", async () => {
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ existing: null });
-    const lanes = createLifecycleLanes();
+    const directory = await hosts.list();
 
-    const removed = await pruneRegistrationOnlyNames(
-      context(hosts, creator),
-      [NAME],
-      lanes,
-    );
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts);
 
-    expect(removed).toEqual([NAME]);
+    expect(outcome).toEqual({ found: 1, removed: 1, failed: 0 });
     expect(hosts.removed).toEqual(["reg_owned"]);
-    expect(creator.findCount).toBe(1);
   });
 
   it("keeps a registration whose exact generation is live", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME });
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ existing: sandbox });
+    const directory = await hosts.list();
 
-    const removed = await pruneRegistrationOnlyNames(
-      context(hosts, creator),
-      [NAME],
-      createLifecycleLanes(),
-    );
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts);
 
-    expect(removed).toEqual([]);
+    expect(outcome).toEqual({ found: 1, removed: 0, failed: 0 });
     expect(hosts.removed).toEqual([]);
   });
 
@@ -137,63 +91,70 @@ describe("pruneRegistrationOnlyNames", () => {
     const sandbox = fakeSandbox({ id: "sandbox_2", name: NAME });
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ existing: sandbox });
+    const directory = await hosts.list();
 
-    const removed = await pruneRegistrationOnlyNames(
-      context(hosts, creator),
-      [NAME],
-      createLifecycleLanes(),
-    );
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts);
 
-    expect(removed).toEqual([NAME]);
+    expect(outcome.removed).toBe(1);
+    expect(hosts.removed).toEqual(["reg_owned"]);
+  });
+
+  it("removes a confirmed-gone generation even while the runtime still reports it", async () => {
+    const dying = fakeSandbox({ id: "sandbox_1", name: NAME });
+    const hosts = hostsWith([ownedRegistration()]);
+    const creator = new FakeSandboxCreator({ existing: dying });
+    const directory = await hosts.list();
+
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts, {
+      confirmedGoneId: "sandbox_1",
+    });
+
+    expect(outcome.removed).toBe(1);
+    expect(hosts.removed).toEqual(["reg_owned"]);
+  });
+
+  it("keeps a replacement's own row while removing a confirmed-gone generation", async () => {
+    const replacement = fakeSandbox({ id: "sandbox_2", name: NAME });
+    const hosts = hostsWith([
+      ownedRegistration(),
+      ownedRegistration({
+        registrationId: "reg_replacement",
+        source: { id: REGISTRATION_PRODUCER_ID, key: "sandbox_2" },
+      }),
+    ]);
+    const creator = new FakeSandboxCreator({ existing: replacement });
+    const directory = await hosts.list();
+
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts, {
+      confirmedGoneId: "sandbox_1",
+    });
+
+    expect(outcome.removed).toBe(1);
     expect(hosts.removed).toEqual(["reg_owned"]);
   });
 
   it("keeps the row when the runtime lookup fails", async () => {
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ findError: new Error("runtime down") });
+    const directory = await hosts.list();
 
-    const removed = await pruneRegistrationOnlyNames(
-      context(hosts, creator),
-      [NAME],
-      createLifecycleLanes(),
-    );
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts);
 
-    expect(removed).toEqual([]);
+    expect(outcome).toEqual({ found: 1, removed: 0, failed: 1 });
     expect(hosts.removed).toEqual([]);
   });
 
-  it("does not look up a name with an unsettled native mutation", async () => {
+  it("removes only the confirmed generation when the lookup fails", async () => {
     const hosts = hostsWith([ownedRegistration()]);
-    const creator = new FakeSandboxCreator({ existing: null });
-    const reconcileContext = context(hosts, creator);
-    reconcileContext.mutations.track(NAME, new Promise(() => {}));
+    const creator = new FakeSandboxCreator({ findError: new Error("runtime down") });
+    const directory = await hosts.list();
 
-    const removed = await pruneRegistrationOnlyNames(
-      reconcileContext,
-      [NAME],
-      createLifecycleLanes(),
-    );
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts, {
+      confirmedGoneId: "sandbox_1",
+    });
 
-    expect(removed).toEqual([]);
-    expect(creator.findCount).toBe(0);
-    expect(hosts.removed).toEqual([]);
-  });
-
-  it("leaves duplicate owned rows for Repair", async () => {
-    const hosts = hostsWith([
-      ownedRegistration(),
-      ownedRegistration({ registrationId: "reg_duplicate" }),
-    ]);
-    const creator = new FakeSandboxCreator({ existing: null });
-
-    const removed = await pruneRegistrationOnlyNames(
-      context(hosts, creator),
-      [NAME],
-      createLifecycleLanes(),
-    );
-
-    expect(removed).toEqual([]);
-    expect(hosts.removed).toEqual([]);
+    expect(outcome.removed).toBe(1);
+    expect(hosts.removed).toEqual(["reg_owned"]);
   });
 
   it("ignores registrations this plugin does not own", async () => {
@@ -201,41 +162,50 @@ describe("pruneRegistrationOnlyNames", () => {
       ownedRegistration({ source: { id: "owner", key: "sandbox_1" } }),
     ]);
     const creator = new FakeSandboxCreator({ existing: null });
+    const directory = await hosts.list();
 
-    const removed = await pruneRegistrationOnlyNames(
-      context(hosts, creator),
-      [NAME],
-      createLifecycleLanes(),
-    );
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts);
 
-    expect(removed).toEqual([]);
+    expect(outcome).toEqual({ found: 0, removed: 0, failed: 0 });
     expect(creator.findCount).toBe(0);
     expect(hosts.removed).toEqual([]);
   });
 
-  it("stops when the lifecycle lanes are closed", async () => {
-    const hosts = hostsWith([ownedRegistration()]);
+  it("reports a failed removal for retry", async () => {
+    const hosts = new FlakyRemoveHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+    });
     const creator = new FakeSandboxCreator({ existing: null });
-    const lanes = createLifecycleLanes();
-    lanes.close();
+    const directory = await hosts.list();
 
-    const removed = await pruneRegistrationOnlyNames(
-      context(hosts, creator),
-      [NAME],
-      lanes,
+    const outcome = await cleanupName(context(hosts, creator), NAME, directory.hosts);
+
+    expect(outcome).toEqual({ found: 1, removed: 0, failed: 1 });
+    expect(hosts.removed).toEqual([]);
+  });
+});
+
+describe("cleanupAll", () => {
+  it("does nothing when the parent directory is unavailable", async () => {
+    const hosts = new FakePaseoHosts({
+      directory: fakeHostDirectory([ownedRegistration()]),
+      listError: new Error("parent unavailable"),
+    });
+    const creator = new FakeSandboxCreator({ existing: null });
+
+    await expect(cleanupAll(context(hosts, creator))).rejects.toThrow(
+      "registrations_unavailable",
     );
-
-    expect(removed).toEqual([]);
     expect(creator.findCount).toBe(0);
     expect(hosts.removed).toEqual([]);
   });
 });
 
 describe("createRegistrationPruner", () => {
-  it("derives candidates from authoritative state, not a caller list", async () => {
+  it("derives candidates from the parent directory", async () => {
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
+    const pruner = createRegistrationPruner();
 
     pruner.schedule(context(hosts, creator));
     await until(() => !pruner.running);
@@ -247,12 +217,11 @@ describe("createRegistrationPruner", () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME });
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ existing: sandbox });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
+    const pruner = createRegistrationPruner();
 
-    pruner.schedule(context(hosts, creator, fakeRuntime([sandbox])));
+    pruner.schedule(context(hosts, creator));
     await until(() => !pruner.running);
 
-    expect(creator.findCount).toBe(0);
     expect(hosts.removed).toEqual([]);
   });
 
@@ -266,9 +235,9 @@ describe("createRegistrationPruner", () => {
       }),
     ]);
     const creator = new FakeSandboxCreator({ existing: sandbox });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
+    const pruner = createRegistrationPruner();
 
-    pruner.schedule(context(hosts, creator, fakeRuntime([sandbox])));
+    pruner.schedule(context(hosts, creator));
     await until(() => !pruner.running);
 
     expect(hosts.removed).toEqual(["reg_old"]);
@@ -277,66 +246,10 @@ describe("createRegistrationPruner", () => {
     ]);
   });
 
-  it("does not remove anything when inventory is unavailable", async () => {
-    const hosts = hostsWith([ownedRegistration()]);
-    const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
-
-    pruner.schedule(context(hosts, creator, failingRuntime()));
-    await until(() => !pruner.running);
-
-    expect(creator.findCount).toBe(0);
-    expect(hosts.removed).toEqual([]);
-  });
-
-  it("does not remove anything when the parent directory is unavailable", async () => {
-    const hosts = new FakePaseoHosts({
-      directory: fakeHostDirectory([ownedRegistration()]),
-      listError: new Error("parent unavailable"),
-    });
-    const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
-
-    pruner.schedule(context(hosts, creator));
-    await until(() => !pruner.running);
-
-    expect(creator.findCount).toBe(0);
-    expect(hosts.removed).toEqual([]);
-  });
-
-  it("skips a name with an unsettled native mutation", async () => {
-    const hosts = hostsWith([ownedRegistration()]);
-    const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
-    const reconcileContext = context(hosts, creator);
-    reconcileContext.mutations.track(NAME, new Promise(() => {}));
-
-    pruner.schedule(reconcileContext);
-    await until(() => !pruner.running);
-
-    expect(creator.findCount).toBe(0);
-    expect(hosts.removed).toEqual([]);
-  });
-
-  it("re-reads the parent before removing", async () => {
-    const hosts = new SwitchingHosts(
-      fakeHostDirectory([ownedRegistration()]),
-      fakeHostDirectory([]),
-    );
-    const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
-
-    pruner.schedule(context(hosts, creator));
-    await until(() => !pruner.running);
-
-    expect(hosts.listCount).toBe(2);
-    expect(hosts.removed).toEqual([]);
-  });
-
   it("runs one sweep at a time", async () => {
     const hosts = new GatedHosts({ directory: fakeHostDirectory([ownedRegistration()]) });
     const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes());
+    const pruner = createRegistrationPruner();
 
     let release!: () => void;
     hosts.gate = new Promise<void>((resolve) => {
@@ -351,7 +264,7 @@ describe("createRegistrationPruner", () => {
 
     release();
     await until(() => !pruner.running);
-    expect(hosts.listCount).toBe(2);
+    expect(hosts.listCount).toBe(1);
     expect(hosts.removed).toEqual(["reg_owned"]);
   });
 
@@ -359,7 +272,7 @@ describe("createRegistrationPruner", () => {
     let clock = 1_000;
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ findError: new Error("runtime down") });
-    const pruner = createRegistrationPruner(createLifecycleLanes(), {
+    const pruner = createRegistrationPruner({
       retryAfterMs: 30_000,
       now: () => clock,
     });
@@ -385,7 +298,7 @@ describe("createRegistrationPruner", () => {
       directory: fakeHostDirectory([ownedRegistration()]),
     });
     const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes(), {
+    const pruner = createRegistrationPruner({
       retryAfterMs: 30_000,
       now: () => clock,
     });
@@ -410,7 +323,7 @@ describe("createRegistrationPruner", () => {
     let clock = 1_000;
     const hosts = hostsWith([ownedRegistration()]);
     const creator = new FakeSandboxCreator({ existing: null });
-    const pruner = createRegistrationPruner(createLifecycleLanes(), {
+    const pruner = createRegistrationPruner({
       retryAfterMs: 30_000,
       now: () => clock,
     });
@@ -438,7 +351,7 @@ describe("createRegistrationPruner", () => {
     const creator = new FakeSandboxCreator({ existing: null });
     const tasks: (() => void)[] = [];
     let cancelled = 0;
-    const pruner = createRegistrationPruner(createLifecycleLanes(), {
+    const pruner = createRegistrationPruner({
       scheduler: (task) => {
         tasks.push(task);
         return () => {
@@ -446,10 +359,10 @@ describe("createRegistrationPruner", () => {
         };
       },
     });
-    const reconcileContext = context(hosts, creator);
+    const cleanupContext = context(hosts, creator);
 
-    pruner.start(reconcileContext);
-    pruner.start(reconcileContext);
+    pruner.start(cleanupContext);
+    pruner.start(cleanupContext);
     expect(tasks).toHaveLength(1);
 
     pruner.stop();
@@ -457,7 +370,6 @@ describe("createRegistrationPruner", () => {
 
     tasks[0]();
     await until(() => !pruner.running);
-    expect(creator.findCount).toBe(0);
     expect(hosts.removed).toEqual([]);
   });
 
@@ -467,14 +379,14 @@ describe("createRegistrationPruner", () => {
     });
     const creator = new FakeSandboxCreator({ existing: null });
 
-    const before = createRegistrationPruner(createLifecycleLanes());
+    const before = createRegistrationPruner();
     before.schedule(context(hosts, creator));
     await until(() => !before.running);
     expect(hosts.removed).toEqual([]);
 
-    // Restart: a fresh pruner and lanes share no queue with the old instance.
+    // Restart: a fresh pruner shares no queue or cooldown with the old instance.
     hosts.failing = false;
-    const after = createRegistrationPruner(createLifecycleLanes());
+    const after = createRegistrationPruner();
     after.schedule(context(hosts, creator));
     await until(() => !after.running);
 

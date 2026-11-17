@@ -47,7 +47,7 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
   const mutations = createMutationRegistry();
   const parents = createParentIdCache();
   const metrics = createMetricsCoalescer();
-  const pruner = createRegistrationPruner(lanes);
+  const pruner = createRegistrationPruner();
   let recovery: Promise<void> | null = null;
   let recoveryDone = false;
 
@@ -81,10 +81,17 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
     };
   }
 
+  function cleanupContext(paseo: PluginHandlerContext["paseo"]) {
+    return {
+      hosts: paseo.hosts,
+      sandboxHost: createMicrosandboxHost(paseo),
+    };
+  }
+
   function ensureRecovery(paseo: PluginHandlerContext["paseo"]): void {
     // The cleanup schedule starts with the same first-use activation as
     // recovery. It is independent of the UI and of any single recovery attempt.
-    pruner.start(reconcileContext(paseo));
+    pruner.start(cleanupContext(paseo));
     if (recoveryDone || recovery) return;
 
     recovery = recoverManagedSandboxes(reconcileContext(paseo))
@@ -104,9 +111,9 @@ export function registerRpcHandlers(server: PluginServerContext): () => Promise<
     const result = await readVmList(await readContext(paseo));
 
     // The sweep derives its own candidates from the parent directory and
-    // runtime inventory, so this read projection is never its work queue. It is
+    // runtime, so this read projection is never its work queue. It is
     // fire-and-forget: polling never waits for a sweep.
-    pruner.schedule(reconcileContext(paseo));
+    pruner.schedule(cleanupContext(paseo));
 
     return result;
   });
