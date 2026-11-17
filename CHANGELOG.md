@@ -7,6 +7,13 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Added
 
+- Every plan installs a plugin-provided `paseo-msb-vm` skill into
+  `~/.agents/skills` and `~/.claude/skills` that describes the VM's guest user,
+  paths, tool pins, selected plan, and provisioning status. The step is
+  re-applied after the Paseo tools skill selection so it survives that
+  reconcile; a ready child keeps the copy from its last provisioning, though a
+  later daemon-side skill reconcile may remove it and recreating the child
+  restores it.
 - Create accepts explicit CPU, RAM, and root-disk selections within the
   documented bounds; the defaults are 2 CPUs, 4096 MiB RAM, and 10240 MiB root
   disk.

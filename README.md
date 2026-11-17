@@ -20,6 +20,8 @@ Docs: [DESIGN.md](./DESIGN.md) · [provisioning](./docs/provisioning.md) ·
 - When selected: Pi `1.5.2`, NeuralWatt Pi extension `0.19.3`, Claude Code
   `2.1.323`, GitHub CLI `2.104.0`. The Paseo tools integration uses the child
   daemon's bundled orchestration skills and adds no guest package or credential.
+  Every child also receives the plugin's `paseo-msb-vm` setup skill under
+  `~/.agents/skills` and `~/.claude/skills`.
 
 Install this checkout as a directory plugin from the parent daemon. Use an
 isolated `PASEO_HOME` while developing.

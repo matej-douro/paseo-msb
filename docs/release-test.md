@@ -85,7 +85,9 @@ survives store replacement and removal. `PASEO_MSB_RELEASE_GITHUB_CLI=1` adds
 the GitHub CLI integration and its `GH_TOKEN` canary.
 `PASEO_MSB_RELEASE_PASEO_TOOLS=1` adds the Paseo tools integration and asserts
 that the child config has `mcp.injectIntoAgents`, each selected provider has
-`paseoTools.enabled`, and `~/.agents/skills/paseo/SKILL.md` exists.
+`paseoTools.enabled`, and `~/.agents/skills/paseo/SKILL.md` exists. Every run
+also asserts the always-on `paseo-msb-vm` setup skill exists with the current
+content marker in both `~/.agents/skills` and `~/.claude/skills`.
 
 ## Failure injection
 

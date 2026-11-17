@@ -83,8 +83,16 @@ The exact argv is `/bin/sh <path> <planHash>`. The script verifies that its
 argument matches the hash baked into its content, so a stale path cannot run a
 different plan.
 
-- Steps are composed as: provider base steps, then selected LLM steps, then
-  integrations.
+- Steps are composed as: base steps, then provider base steps, then selected
+  LLM steps, then integrations.
+- Base steps run for every plan. `vm-setup-skill` writes a plugin-provided
+  `paseo-msb-vm` skill describing the VM's provisioning, paths, and status to
+  both `~/.agents/skills` and `~/.claude/skills`. The probe matches a marker
+  line derived from the skill payload, so any content edit rewrites the file
+  and unchanged content stays a no-op. The write goes through a same-directory
+  `SKILL.md.tmp` and `mv`, so an interrupted write cannot leave a file that
+  already contains the marker; files are `0600` and the step sets `umask 077`
+  because it also runs after registration outside the provision script.
 - The Paseo tools integration contributes no script step. It is applied after
   the child registers and its selected providers report ready, using the
   child’s published loopback port: set `mcp.injectIntoAgents = true` and
@@ -92,7 +100,8 @@ different plan.
   `agent.skills.save_selection` with `{ "mode": "all" }`. The daemon installs
   the bundled skills into `~/.agents/skills` and `~/.claude/skills`. A
   confirmation-required response is a failure; the plugin never auto-confirms
-  skill removals.
+  skill removals. Because that pass reconciles both skill roots, the reconciler
+  re-applies the base steps afterwards so `vm-setup-skill` survives it.
 - Each step has a **probe** and an **action**. A passing probe records
   `skipped`, which makes retries idempotent. A failing action records `failed`
   and aborts the script.
@@ -103,6 +112,7 @@ different plan.
   "planHash": "0123456789abcdef",
   "ok": true,
   "steps": [
+    { "id": "vm-setup-skill", "status": "ok", "exitCode": 0 },
     { "id": "pi-install", "status": "ok", "exitCode": 0 },
     { "id": "pi-neuralwatt-install", "status": "skipped", "exitCode": 0 }
   ],
@@ -122,12 +132,16 @@ different plan.
 - After `ready`, the plugin does not observe tool health, repair drift, or
   re-provision. User mutations through a terminal are out of scope. Repair does
   not reapply Paseo tools to an already-ready child, so a user can change the
-  child’s tool or skill selection without the plugin fighting it.
+  child’s tool or skill selection without the plugin fighting it. For the same
+  reason, a child that is already `ready` keeps the `vm-setup-skill` copy from
+  its last provisioning; a later daemon-side skill reconcile may remove it, and
+  recreating the child restores it.
 
 ## Step catalog
 
 | Step id | Probe | Action |
 | --- | --- | --- |
+| `vm-setup-skill` | `~/.agents/skills/paseo-msb-vm/SKILL.md` and `~/.claude/skills/paseo-msb-vm/SKILL.md` exist with the current content-derived marker | Write the skill from an embedded here-document to both skill roots |
 | `claude-install` | `claude --version` matches `2.1.323` | `curl -fsSL https://claude.ai/install.sh \| bash -s 2.1.323` |
 | `claude-settings` | `~/.claude/settings.json` has `env.DISABLE_AUTOUPDATER=1` | Merge that key into the existing settings file |
 | `pi-install` | `pi --version` matches `1.5.2` | `npm install -g --ignore-scripts --prefix ~/.local @earendil-works/pi-coding-agent@1.5.2` |
