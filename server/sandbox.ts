@@ -13,7 +13,6 @@ import {
   GUEST_PORT,
   MANAGED_LABEL,
   MAX_MEMORY_MIB,
-  MEMORY_MIB,
   MEMORY_MIB_MAX,
   MEMORY_MIB_MIN,
   METRICS_SAMPLE_INTERVAL_MS,
@@ -24,7 +23,6 @@ import {
   PLUGIN_VERSION,
   RESOURCES_ENV_VAR,
   RESOURCES_SPECIFIED_ENV_VAR,
-  ROOT_DISK_MIB,
   ROOT_DISK_MIB_MAX,
   ROOT_DISK_MIB_MIN,
   RUNTIME_STATUSES,
@@ -34,6 +32,7 @@ import {
   type RuntimeStatus,
 } from "../shared/constants";
 import {
+  defaultResources,
   VmResourcesSchema,
   type ManagedLabels,
   type VmObservedResources,
@@ -251,11 +250,7 @@ export interface SandboxHost extends SandboxCreator {
 }
 
 export function buildSandboxCreatePlan(request: SandboxCreateRequest): SandboxCreatePlan {
-  const resources: VmResources = request.resources ?? {
-    cpus: CPUS,
-    memoryMib: MEMORY_MIB,
-    diskMib: ROOT_DISK_MIB,
-  };
+  const resources: VmResources = request.resources ?? defaultResources();
 
   return {
     name: request.name,

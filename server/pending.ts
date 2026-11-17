@@ -1,9 +1,11 @@
-import { CPUS, MEMORY_MIB, ROOT_DISK_MIB, type Phase } from "../shared/constants";
-import type {
-  ResourceRequest,
-  VmCreateInput,
-  VmDismissResult,
-  VmResources,
+import type { Phase } from "../shared/constants";
+import {
+  defaultResources,
+  resourcesEqual,
+  type ResourceRequest,
+  type VmCreateInput,
+  type VmDismissResult,
+  type VmResources,
 } from "../shared/contracts";
 import type { CanonicalPlan } from "../shared/provisioning";
 import { canonicalizePlan, plansEqual } from "../shared/provisioning";
@@ -83,19 +85,12 @@ export interface PendingCreateStore {
 }
 
 function resourcesFor(request: ResourceRequest | undefined): VmResources {
+  const defaults = defaultResources();
   return {
-    cpus: request?.cpus ?? CPUS,
-    memoryMib: request?.memoryMib ?? MEMORY_MIB,
-    diskMib: request?.diskMib ?? ROOT_DISK_MIB,
+    cpus: request?.cpus ?? defaults.cpus,
+    memoryMib: request?.memoryMib ?? defaults.memoryMib,
+    diskMib: request?.diskMib ?? defaults.diskMib,
   };
-}
-
-function resourcesEqual(left: VmResources, right: VmResources): boolean {
-  return (
-    left.cpus === right.cpus &&
-    left.memoryMib === right.memoryMib &&
-    left.diskMib === right.diskMib
-  );
 }
 
 /** Every field of a repeated request must match the original attempt. */

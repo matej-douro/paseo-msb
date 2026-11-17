@@ -1,12 +1,14 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import {
+  CPUS,
   CPUS_MAX,
   CPUS_MIN,
   CREDENTIAL_NAMES,
   ERROR_LABEL,
   MANAGED_LABEL,
   MAX_ERROR_DETAIL_CHARS,
+  MEMORY_MIB,
   MEMORY_MIB_MAX,
   MEMORY_MIB_MIN,
   MEMORY_MIB_STEP,
@@ -15,6 +17,7 @@ import {
   PHASE_LABEL,
   PLUGIN_VERSION,
   REGISTRATION_STATUSES,
+  ROOT_DISK_MIB,
   ROOT_DISK_MIB_MAX,
   ROOT_DISK_MIB_MIN,
   ROOT_DISK_MIB_STEP,
@@ -527,3 +530,16 @@ export type Registration = z.infer<typeof RegistrationSchema>;
 export type ManagedLabels = z.infer<typeof ManagedLabelsSchema>;
 export type LogLine = z.infer<typeof LogLineSchema>;
 export type LogBundle = z.infer<typeof LogBundleSchema>;
+
+/** The desired resources used when a Create omits a resources object. */
+export function defaultResources(): VmResources {
+  return { cpus: CPUS, memoryMib: MEMORY_MIB, diskMib: ROOT_DISK_MIB };
+}
+
+export function resourcesEqual(left: VmResources, right: VmResources): boolean {
+  return (
+    left.cpus === right.cpus &&
+    left.memoryMib === right.memoryMib &&
+    left.diskMib === right.diskMib
+  );
+}

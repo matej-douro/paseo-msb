@@ -3,7 +3,7 @@ import {
   PHASE_LABEL,
   type Phase,
 } from "../shared/constants";
-import type { VmResources } from "../shared/contracts";
+import { resourcesEqual, type VmResources } from "../shared/contracts";
 import {
   legacyPiPlan,
   paseoProviderIds,
@@ -770,14 +770,6 @@ async function findSandbox(
     if (error instanceof LifecycleAbortedError) throw error;
     throw new SetupFailure("runtime_unavailable", failureDetail(error, redaction));
   }
-}
-
-function resourcesEqual(left: VmResources, right: VmResources): boolean {
-  return (
-    left.cpus === right.cpus &&
-    left.memoryMib === right.memoryMib &&
-    left.diskMib === right.diskMib
-  );
 }
 
 /**
