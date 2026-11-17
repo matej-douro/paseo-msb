@@ -26,8 +26,10 @@ as a directory plugin, then drives `vm.create`, `vm.dismiss`, `vm.list`,
 - Restores a missing registration, then removes an orphaned plugin-owned
   registration by creating a second child, destroying its sandbox behind the
   plugin, and confirming Repair removes only the registration.
-- Deletes the exact sandbox and registration, then repeats delete and Repair
-  safely.
+- Deletes the exact sandbox and every plugin-owned parent host registration for
+  its name, then repeats delete and Repair safely. Daemon-side removal is
+  asserted against `hosts.list`, not the desktop app's saved-host registry; see
+  [Known app-side limitation](#known-app-side-limitation).
 - Joins concurrent identical Create calls, rejects a conflicting plan for the
   same request, queues Repair without duplicating work, and repairs registration
   configuration drift without changing the registration ID.
@@ -45,6 +47,17 @@ stale handle rejects refresh, connect, job reads, and destroy after a same-name
 replacement, while the pinned SDK's stale `modify()` still reaches the
 replacement. This is the executable contract for the residual window described
 in [DESIGN](../DESIGN.md#24-generation-exact-mutations-and-the-pinned-sdk-limitation).
+
+## Known app-side limitation
+
+The Paseo desktop app maintains a saved-host registry separate from the parent
+daemon's `hosts.list`. When the app has used a plugin child, it persists a
+discovered `via:<parent>` routed profile in its client-side registry and current
+app versions do not remove that profile when the parent stops listing the child.
+After Delete, assert removal with `paseo host ls` (or `paseo.hosts.list`) and the
+plugin's `vm.list`; a deleted child may still appear in the app's host picker or
+settings as `Offline` until it is removed there. That entry is app state, not a
+plugin registration, and plugin client code has no API for it.
 
 ## Credential matrix
 

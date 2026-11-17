@@ -19,9 +19,8 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   default.
 - Failed pending Create attempts can be dismissed without a plugin reload.
 - The release suite covers concurrent Create/Repair, registration drift,
-  deletion-tombstone recovery, Create over a deleting tombstone, stale
-  generations, foreign-name conflicts, provision-job conflicts, and the raw-SDK
-  stale-handle identity contract.
+  legacy deletion-tombstone recovery, stale generations, foreign-name conflicts,
+  provision-job conflicts, and the raw-SDK stale-handle identity contract.
 
 ### Changed
 
@@ -36,6 +35,12 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   `PASEO_MSB_REQUEST` marker were removed.
 - New parent registrations use the canonical child name as `label` and
   `metadata.name`; Repair corrects display drift.
+- Delete and background cleanup share one rule: a plugin-owned host row survives
+  only while an exact lookup of its child name returns that row's generation id.
+  Delete no longer writes a durable `deleting` tombstone; it destroys the
+  confirmed generation and removes every plugin-owned host row for the name, and
+  the sweep converges any row left by an interrupted Delete. Legacy `deleting`
+  tombstones are still finished, never resumed.
 - Registration-only children are presented as transient cleanup states: while
   absence is unproven they show `VM state unknown`, not `Missing`, and Repair
   and Delete remain available.
@@ -51,8 +56,8 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Fixed
 
-- A Create that meets a Delete tombstone completes that cleanup and allocates a
-  fresh generation instead of reporting success for cleanup alone.
+- A Create that meets a legacy Delete tombstone completes that cleanup and
+  allocates a fresh generation instead of reporting success for cleanup alone.
 - A Create blocked by an existing attempt for the same name now suggests
   retrying, dismissing, or choosing another name instead of only saying the
   request is invalid.
@@ -60,9 +65,13 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   can be retried or dismissed. A post-allocation failure is not repeated as a
   second pending row.
 - A VM destroyed outside the plugin (for example with `msb`) no longer leaves
-  its host registration behind: a lightweight background sweep, also
-  triggerable by `vm.list`, removes a registration only after a fresh exact
-  lookup proves its generation is gone or replaced.
+  its parent-daemon host registration behind: a lightweight background sweep,
+  also triggerable by `vm.list`, removes every plugin-owned row whose child name
+  no longer resolves to that row's generation id.
+- A Delete interrupted after destroying the VM no longer leaves a permanent
+  parent-daemon host row: the next sweep, Repair, or Delete removes it by the
+  same rule. A registration-only child can also be deleted while a native
+  mutation is unsettled.
 - Repeated Create and recovery can join an existing VM after its current
   credentials were removed or the store became unavailable.
 - Delete accepts an owned exact-generation VM with an invalid historical plan,
@@ -81,6 +90,17 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   now lives in the integration suite.
 - Unused client helpers, test-only server helpers, dead constants, the unused
   React Query dependency, and documentation-only image digest constants.
+
+### Known limitations
+
+- The Paseo desktop app keeps its own saved-host registry. Once the app has used
+  a child, it stores a discovered `via:<parent>` routed profile there and does
+  not remove it when the parent daemon stops listing the child. A deleted child
+  can therefore remain in the app's host picker or settings as `Offline` after
+  `paseo host ls`, the parent `hosts.json`, and the plugin list are clean. Remove
+  it in the app's host settings. Plugin client code receives only `useHosts()`
+  and `getPaseoClient()`, so a plugin cannot edit the app's registry; pruning
+  routed profiles in the app's host discovery is the expected upstream fix.
 
 ## 2026-11-14
 

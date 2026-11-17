@@ -102,25 +102,37 @@ user-disabled registration is preserved, not re-enabled.
 
 ## Delete
 
-Delete requires the exact name and current generation id. It persists
-`deleting`, re-reads the exact handle, destroys that generation, and removes
-only the matching `(plugin:paseo-msb, id)` registration. A stale id cannot
-destroy a newer generation. An unwritable tombstone prevents destruction except
-for microsandbox's specific interrupted-create state, which cannot be refreshed
-or labelled and is destroyed through its generation-checked handle instead.
+Delete requires the exact name and current generation id. It destroys that
+generation and then removes every plugin-owned host row for the name. A
+replacement VM that happens to reuse the name keeps its own row, and a stale id
+cannot destroy it. An unsettled native resize blocks destruction with
+`mutation_pending`.
 
-Already-missing resources count as success, and failed or incomplete children
-need no CLI cleanup. Reload during deletion resumes cleanup, never setup; a
-failed registration removal leaves a registration-only child for Repair or Delete.
+The plugin keeps no deletion tombstone. If it is interrupted between destroying
+the VM and removing the host row, the sweep described below removes the leftover
+row. Already-missing resources count as success, and failed or incomplete
+children need no CLI cleanup.
 
 A VM destroyed outside the plugin (for example with `msb`) leaves a
 registration-only child, which is a transient cleanup state. A lightweight
-background sweep, also triggerable by `vm.list`, removes such a registration
-only after a fresh exact lookup shows the generation gone or replaced. While
-absence is unproven the row says `VM state unknown`, not `Missing`, and Repair
+background sweep, also triggerable by `vm.list`, removes any plugin-owned row
+whose child name no longer resolves to that row's generation id. While the
+lookup is unavailable the row says `VM state unknown`, not `Missing`, and Repair
 and Delete remain available. The sweep never blocks the list response, at most
-one sweep runs at a time, and a name that could not be verified is retried after
+one pass runs at a time, and a name that could not be verified is retried after
 a short cooldown.
+
+### Desktop app host entries
+
+Delete removes the child's registration from the parent daemon; the plugin list
+and the parent directory are the source of truth for that. The Paseo desktop app
+also keeps its own saved-host registry. Once the app has used a child, it stores
+a discovered `via:<parent>` route there and does not remove that entry when the
+parent stops listing it. A deleted child can therefore remain in the app's host
+picker or settings as **Offline** even though `paseo host ls`, the parent
+`hosts.json`, and the plugin list are clean. Remove that entry in the app's host
+settings; a plugin has no API to edit the app's client-side registry. This is a
+known Paseo app limitation, not residual plugin state.
 
 ## Failure diagnostics
 
@@ -162,7 +174,7 @@ automatically.
 
 Detached sandboxes, jobs, and registrations survive restarts; recovery
 reconciles them without creating, starting, or adopting a VM and only completes
-an explicit `deleting` tombstone. The pinned SDK's `modify()` is not
+an explicit legacy `deleting` tombstone. The pinned SDK's `modify()` is not
 generation-bound, so label writes are best-effort hints; [DESIGN.md](./DESIGN.md)
 documents the residual window.
 

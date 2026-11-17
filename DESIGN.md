@@ -259,13 +259,15 @@ The detail distinguishes observed resources from requested resources until the r
 
 Repair does not create a sandbox, start a stopped VM, adopt an unlabelled sandbox, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It never initiates deletion. A user-disabled registration remains disabled.
 
-Registration-only children are transient convergence states, not a second kind of owned VM. Confirmed-stale registrations disappear after automatic cleanup. If runtime inventory or an exact lookup is unavailable, the row says `VM state unknown`, never `Missing`; it remains visible with working Repair and Delete actions. Failed and incomplete children must be recoverable without the `msb` CLI.
+Registration-only children are transient convergence states, not a second kind of owned VM. Confirmed-stale registrations disappear after automatic cleanup. If an exact runtime lookup is unavailable, the row says `VM state unknown`, never `Missing`; it remains visible with working Repair and Delete actions. Failed and incomplete children must be recoverable without the `msb` CLI.
 
 ### 1.10 Delete a child
 
-Delete requires confirmation of the exact child name. The plugin then destroys the exact sandbox generation captured by that detail and removes only its matching plugin-owned registration. A stale Delete action cannot destroy a newer VM that happens to reuse the name.
+Delete requires confirmation of the exact child name. The plugin destroys the exact sandbox generation captured by that detail, then removes every plugin-owned host row for that name. A different live VM that happens to reuse the name keeps its own row, and a stale Delete action cannot destroy it.
 
-If destruction succeeds but registration cleanup fails, the child remains visible as registration-only so the user can retry Delete or Repair. If no sandbox remains, Delete can still remove an exactly matching registration. An already-missing sandbox and registration is successful cleanup.
+If destruction succeeds but host-row cleanup fails, the child remains visible as registration-only so the user can retry Delete or Repair; the background sweep also retries it. If no sandbox remains, Delete still removes the name's stale rows. An already-missing sandbox and registration is successful cleanup.
+
+The parent daemon and the plugin's child list are not the desktop app's saved-host registry. A child the app has used is stored in the app's client-side registry as a discovered `via:<parent>` route, and current Paseo app versions do not drop it when the parent stops listing it. A deleted child can therefore remain in the app's host picker or settings as `Offline` after `paseo host ls` and the plugin list are clean. That entry is removed in the app's host settings; a plugin has no API to edit the app's registry.
 
 ### 1.11 Deliberate V1.1 limits
 
@@ -387,9 +389,8 @@ The pinned `microsandbox@0.7.14` `modify()` does not bind a captured generation.
 
 - refreshes and compares `handle.id` before every label, environment, or resource write;
 - does not treat a `bounded()` timeout or lifecycle abort as settlement, because the native call may continue after the wrapper rejects;
-- registers every native `modify()` promise in a per-name mutation registry—including phase, error, environment, resource, and `deleting` tombstone labels—and holds the lifecycle lane until it settles or a short settlement bound expires;
-- makes Delete and same-name allocation consult that registry and return `mutation_pending` instead of destroying or allocating while a mutation remains registered;
-- registers the Delete tombstone itself and waits for its settlement before destruction; if it cannot settle within the bound, Delete does not destroy;
+- registers every native `modify()` promise in a per-name mutation registry—including phase, error, environment, and resource labels—and holds the lifecycle lane until it settles or a short settlement bound expires;
+- makes Delete and same-name allocation consult that registry and return `mutation_pending` instead of destroying or allocating a sandbox while a mutation remains registered;
 - treats phase, error, and resource values as best-effort configuration hints, never authorization for destruction; and
 - destroys only through `destroy()` on the exact handle after refresh/compare, which the SDK rejects for a replaced generation.
 
@@ -399,11 +400,11 @@ A residual race remains: an external actor can replace the generation between re
 
 `vm.create({ name, plan, resources? })` validates the request, records a pending attempt under that name with the canonical resource shape, starts host-side work, and returns `{ name }` immediately.
 
-`resources` is either omitted for defaults or contains `cpus`, `memoryMib`, and `diskMib`; `cpus` may be omitted and defaults to 2, while explicit RAM and disk are required when a resources object is supplied. The plan contains provider and LLM identifiers plus integrations, never values. Background Create, startup recovery, and manual Repair all invoke the same idempotent reconciler. Plugin cleanup aborts further side effects promptly, and runners revalidate their generation and tombstone after uncertain awaits.
+`resources` is either omitted for defaults or contains `cpus`, `memoryMib`, and `diskMib`; `cpus` may be omitted and defaults to 2, while explicit RAM and disk are required when a resources object is supplied. The plan contains provider and LLM identifiers plus integrations, never values. Background Create, startup recovery, and manual Repair all invoke the same idempotent reconciler. Plugin cleanup aborts further side effects promptly, and runners revalidate their generation after uncertain awaits.
 
 The reconciler observes actual resources and advances only unambiguous steps:
 
-1. **Resolve the attempt.** Reject an unsettled native mutation with `mutation_pending`. Look the sandbox up by name and apply the shape and name-conflict rules in section 2.3. A Create whose shape checks pass over the name's Delete tombstone completes that exact cleanup first, then allocates a fresh generation; if another tombstone appears behind the first, the attempt fails with `delete_failed` instead of chasing cleanup. The manifest declares the parent floor, the package pins the SDK, and the release suite verifies the supported parent/SDK/runtime combination. Only when initial creation is needed, resolve required credential values from the store and then the parent environment. Recovery of an existing sandbox needs its persisted plan, never old credential values.
+1. **Resolve the attempt.** Reject an unsettled native mutation with `mutation_pending`. Look the sandbox up by name and apply the shape and name-conflict rules in section 2.3. A legacy `deleting` tombstone is finished, never resumed: its generation is destroyed and its host rows are cleaned, and a Create may then allocate a fresh generation. The manifest declares the parent floor, the package pins the SDK, and the release suite verifies the supported parent/SDK/runtime combination. Only when initial creation is needed, resolve required credential values from the store and then the parent environment. Recovery of an existing sandbox needs its persisted plan, never old credential values.
 2. **Allocate if absent.** Strictly create the pinned image, detached, with requested CPU and RAM, `maxMemory` set to the allowed maximum for later live hotplug where supported, the requested managed root disk, a 2-second metrics interval, managed labels and plan/resource variables, only selected header-only secrets, and a loopback-only published port for guest 6767. The verified image requires explicit `/usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint`. Host port `0` is unsupported, so the plugin probes and retries internally. If Create fails but the named managed sandbox appeared, continue through that exact handle.
 3. **Provision once.** Materialize content-addressed `/home/paseo/.paseo-msb/provision-<planHash>.sh` and run it as one detached job. The status file is the success proof. Each step probes first so retries skip completed work. Await one active matching job; never start another because inventory or inspection failed, and preserve uncertain `JobError.jobId` values when available.
 4. **Advance after proof.** After a successful status, move to `registering`.
@@ -505,44 +506,39 @@ A fixed unavailable reason covers no sandbox, a non-running VM, disabled metrics
 
 A registration-only child is not a third durable child record. `buildVmList()` in `server/status.ts` derives it by joining authoritative parent registrations against authoritative microsandbox inventory. The residual desync is between those two systems: Delete has an unavoidable destroy-then-unregister window, and an out-of-band runtime deletion can leave the parent registration behind. Parent `offline` state is not deletion proof because stopped and crashed VMs are valid children.
 
-V1.1 uses one convergence mechanism: the existing registration pruner, extended to derive its own candidates and run on a lightweight background schedule. It adds no durable state and depends on no new parent or microsandbox API.
+One rule governs host-row cleanup: **a plugin-owned registration survives only while an exact `Sandbox.get(metadata.name)` returns that row's `source.key`.** A row for a different generation under the same name, and a row whose sandbox no longer exists, is stale. `server/cleanup.ts` implements this rule once; Delete, Repair/recovery, and the background sweep all call it, so there is no second ownership or staleness model. It adds no durable state and depends on no new parent or microsandbox API.
 
 ```mermaid
 flowchart TD
-    Sources[Parent registrations and runtime inventory] --> Candidates[Derive all unmatched plugin registrations]
-    Candidates --> Match{Exact managed generation present}
-    Match -->|Yes| Attached[Attach registration to sandbox child]
-    Match -->|No or undecoded| Proof{Fresh exact-generation proof}
-    Proof -->|Lookup or inventory inconclusive| Unknown[Retain with VM state unknown]
-    Proof -->|Generation absent or replaced| Remove[Remove exact registration]
-    Remove -->|Confirmed removed| Gone[No registration-only row]
-    Remove -->|Removal failed or uncertain| Actionable[Retain and retry actionable cleanup]
+    Rows[Parent registrations with source.id = plugin:paseo-msb] --> Lookup{Exact lookup by child name}
+    Lookup -->|Same generation| Keep[Keep the row]
+    Lookup -->|Different generation or absent| Remove[Remove the row]
+    Lookup -->|Lookup failed| Retry[Keep the row and retry later]
+    Remove -->|Removed| Gone[No registration-only row]
+    Remove -->|Removal failed| Retry
 ```
 
-The first RPC initialization that starts recovery also starts the cleanup schedule. The schedule stops during plugin cleanup. First-use recovery, `vm.list`, and the timer merely trigger the same pruner; Repair and Delete use the same per-name lifecycle lanes. Closing the UI therefore does not stop cleanup, but the design does not claim always-on cleanup before the parent has activated the plugin or while its subprocess is stopped. The next activation rebuilds candidates from authoritative state and resumes. No queue needs to survive restart.
+The first RPC initialization that starts recovery also starts the cleanup schedule. The schedule stops during plugin cleanup. First-use recovery, `vm.list`, and the timer merely trigger the same sweep. Closing the UI therefore does not stop cleanup, but the design does not claim always-on cleanup before the parent has activated the plugin or while its subprocess is stopped. The next activation rebuilds candidates from the parent directory and resumes. No queue needs to survive restart.
 
-Each sweep considers **all** registrations with `source.id = plugin:paseo-msb`, not only registration-only DTOs. An exact producer-and-generation match attaches to its sandbox. Every unmatched registration is a verification candidate, including an older registration hidden behind a same-name live sandbox. A read projection is never the cleanup work queue.
+Each sweep considers **all** registrations with `source.id = plugin:paseo-msb`, not only registration-only DTOs, and performs one exact lookup per child name. It needs no managed-inventory read, no lifecycle lane, and no mutation check: the rule is idempotent, so it cannot race a Create or Repair into removing a live row. A read projection is never the sweep work queue.
 
-The pruner uses the existing per-name lanes, skips names with unsettled native mutations, re-reads the parent directory before removal, and runs at most one sweep at a time. `vm.list` never waits for it. An unverifiable name is retained and retried after a short cooldown; removal failure is also retryable. Confirmed removal makes the registration-only row disappear. While proof is unavailable, the client presents `VM state unknown`, not `Missing`. Completely hiding these rows would be unsafe because ambiguous or failed cleanup still needs a visible recovery path.
+The sweep runs at most one pass at a time, `vm.list` never waits for it, and a name whose lookup or removal fails is retried after a short cooldown. Confirmed removal makes the registration-only row disappear. While a lookup is unavailable, the row is retained and the client presents `VM state unknown`, not `Missing`. Completely hiding these rows would be unsafe because unresolved cleanup still needs a visible recovery path.
 
-`vm.reconcile` is the single Repair mutation and uses the reconciler from section 2.5. It resumes unambiguous provisioning or registration work, restores missing registrations, repairs display drift, and removes confirmed stale plugin-owned registrations. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It never initiates deletion; completing an existing `deleting` tombstone is Delete cleanup, not a new Repair deletion. A ready child’s Paseo tools and orchestration-skill selection is user-owned and is not reapplied.
+`vm.reconcile` is the single Repair mutation and uses the reconciler from section 2.5. It resumes unambiguous provisioning or registration work, restores missing registrations, repairs display drift, and cleans stale plugin-owned rows for the names it handles. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It never initiates deletion; finishing a legacy `deleting` tombstone is cleanup, not a new Repair deletion. A ready child’s Paseo tools and orchestration-skill selection is user-owned and is not reapplied.
 
-Absence from managed, decoded, label-filtered inventory is not proof of deletion. Stale-registration removal requires either:
-
-- exact `Sandbox.get(metadata.name)` plus comparison of `handle.id` with `registration.source.key`; or
-- a complete, unfiltered runtime ID inventory with checked pagination.
-
-A different live ID proves only that the old generation is stale. Lookup, decode, or pagination errors block destructive cleanup. Runtime absence is revalidated at the moment of removal so a generation created after an earlier observation retains its live registration.
+Lookup errors for the named child block destructive cleanup, and the row is retried later. A live different generation proves the older generation is stale, so the older row is removed and the live row is kept.
 
 `vm.delete({ name, id, confirmName })` requires the exact logical name, confirmation, and current generation token. In the same per-name lifecycle lane it:
 
-1. Returns `mutation_pending` without destroying if the mutation registry contains an unsettled native `modify()`. Otherwise it persists `deleting` as a registered mutation, waits for settlement before destruction, and invalidates active work. An unsettled tombstone also returns `mutation_pending` without destroying. The only exception is the SDK's explicit incomplete-create state, which cannot be refreshed or labelled and is destroyed through the exact generation-checked handle.
-2. Re-reads and validates the exact handle, then destroys through that handle.
-3. After old work settles, re-reads runtime and registrations and removes only the exact `(plugin:paseo-msb, id)` registration.
+1. Reads the parent directory first, so an unavailable daemon never leaves an unmanaged running VM behind.
+2. Looks the sandbox up by name. If one exists, its id must equal `id`, its ownership must be this parent, and the mutation registry must have no unsettled native `modify()`; then Delete destroys through that exact generation-checked handle. The pinned SDK rejects a same-name replacement.
+3. Removes every plugin-owned host row for the confirmed name, treating the destroyed generation as gone. A different live generation keeps its own row.
 
-If no sandbox exists, Delete skips tombstoning and destruction. It removes a registration only when its authenticated producer, `source.key = id`, and `metadata.name = name` all match; otherwise it leaves the registration untouched. No matching sandbox or registration is already-missing success.
+There is no durable deletion tombstone. If the plugin is interrupted between destroy and unregister, the row is a confirmed-stale registration that the same rule removes on the next sweep, Delete, or Repair.
 
-Failure after destruction leaves a visible, actionable registration-only child. Reload during deletion resumes cleanup, never setup. A Create under the same name whose shape matches completes that exact cleanup, then allocates a fresh generation; a second tombstone makes the attempt fail rather than racing cleanup. An old Delete ID cannot destroy a newer same-name generation.
+If no sandbox exists, Delete skips destruction and removes the name’s stale rows. No matching sandbox or registration is already-missing success. Failure before destruction leaves the row actionable. A Create for the same name runs after the Delete lane, so it cannot race destruction, and an old Delete ID cannot destroy a newer same-name generation.
+
+The desktop app is a separate observer, not a second host registry this plugin owns. It discovers every host in a connected daemon’s directory and persists a `via:<origin>` routed profile in its own client-side registry. Current app versions upsert discovered hosts on `hosts.changed` but do not remove a profile when the origin stops listing it, so a deleted child can remain in the app’s saved-host list as offline even though the parent directory and `vm.list` are clean. Plugin client code receives only `useHosts()` and `getPaseoClient()`; it cannot call the app’s `HostRuntime.removeHost` or `removeConnection`. The expected upstream behavior is to prune routed profiles the origin no longer lists; until that ships, the entry is removed in the app’s host settings. See section 1.10.
 
 ### 2.10 RPC surface
 
@@ -562,19 +558,19 @@ Failure after destruction leaves a visible, actionable registration-only child. 
 
 ### 2.11 Required verification and release bar
 
-The release test must drive all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and after a deletion tombstone, Repair, Dismiss, and Delete. It must also cover:
+The release test must drive all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and after a legacy deletion tombstone, Repair, Dismiss, and Delete. It must also cover:
 
 - generated and custom names, duplicate-name rejection, repeat-create joining and shape rejection, and legacy name-based recovery without adoption;
 - repeated Creates after readiness, including rejection of a different plan, resources, or resources-specified flag instead of creating a second VM, plus legacy rejection of explicit resources;
 - registration label and metadata presenting the chosen name in the parent host directory;
-- background stale-registration convergence without UI polling, including older registrations hidden behind same-name live VMs, retry after removal failure, `VM state unknown` rather than `Missing` when proof is unavailable, and candidate reconstruction after plugin restart;
+- background stale-registration convergence without UI polling, including every stale row for a child name, older registrations hidden behind same-name live VMs, retry after removal failure, `VM state unknown` rather than `Missing` when the lookup is unavailable, and candidate reconstruction after plugin restart;
 - create-time RAM and root-disk values and resource decoding for new and legacy V1 sandboxes, including nullable legacy fields;
-- RAM growth and shrink, legacy `maxMemory` growth, live or restart-required convergence, mixed converging-plus-restart-required severity, root-disk growth, root-disk-shrink rejection, legacy-null disk rejection, stopped/created/crashed/paused restart rejection, exact-generation resize, and Delete waiting on an unsettled native mutation or tombstone;
-- a Create over a `deleting` tombstone: a shape-matched request completes that exact cleanup and reaches ready with a new generation;
+- RAM growth and shrink, legacy `maxMemory` growth, live or restart-required convergence, mixed converging-plus-restart-required severity, root-disk growth, root-disk-shrink rejection, legacy-null disk rejection, stopped/created/crashed/paused restart rejection, exact-generation resize, and Delete waiting on an unsettled native mutation;
+- a Create over a legacy `deleting` tombstone: a shape-matched request completes that exact cleanup and reaches ready with a new generation;
 - the routed host returning online after a confirmed restart; and
 - live metrics values through `vm.metrics`, server-side coalescing of unresolved native reads, the 3-second single-flight poll, stale/future/duplicate handling, and unavailable reasons for stopped, disabled, and failed metrics reads.
 
-Deterministic barriers and fault cases cover foreign-name Create conflicts, conflicting active provision jobs, registration configuration drift, stale-generation destroy, stale-handle label/environment/resource writes, conflicting resize, an unsettled label write or tombstone blocking Delete, metrics-read coalescing under repeated timeouts, and concurrent Create/recovery/Repair/Resize/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active provision job, and one current registration per logical attempt. Unit suites cover transport-level call failures, malformed config, malformed metrics, the bounded chart buffer and its discontinuity handling, tooltip point selection, the root-disk usage ratio, invalid resource bounds, and pagination failures; none of these conditions may delete registrations.
+Deterministic barriers and fault cases cover foreign-name Create conflicts, conflicting active provision jobs, registration configuration drift, stale-generation destroy, stale-handle label/environment/resource writes, conflicting resize, an unsettled native mutation blocking Delete, metrics-read coalescing under repeated timeouts, and concurrent Create/recovery/Repair/Resize/Delete. Every interruption has a UI recovery path and produces at most one current VM, one active provision job, and one current registration per logical attempt. Unit suites cover transport-level call failures, malformed config, malformed metrics, the bounded chart buffer and its discontinuity handling, tooltip point selection, the root-disk usage ratio, invalid resource bounds, and pagination failures; none of these conditions may delete registrations.
 
 The credential store uses only the six fixed names, writes its file `0600`, and creates or tightens the plugin-owned default directory to `0700` without changing an existing override parent. Canary credentials—including removed or replaced creation-time values and injected upstream errors—never appear in RPC output, plugin logs, raw microsandbox sandbox/job/system logs, pending state, labels, or test artifacts outside approved secret config and intended upstream substitution. Store and environment paths are both covered.
 
