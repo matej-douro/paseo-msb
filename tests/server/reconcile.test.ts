@@ -44,7 +44,7 @@ function reconcileContext(
     mutations: createMutationRegistry(),
     timeoutMs: 100,
     pollMs: 1,
-    installTimeoutMs: 100,
+    jobTimeoutMs: 100,
     ...overrides,
   };
 }

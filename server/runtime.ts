@@ -151,7 +151,7 @@ export function createMicrosandboxHost(paseo: PaseoApi): SandboxHost {
       return wrapConnectHandle(handle.id, sandbox as unknown as SdkSandboxLike);
     },
 
-    async startInstall(handle, spec) {
+    async startJob(handle, spec) {
       const sandbox = (await handle.connect()) as unknown as SdkSandboxLike;
       return sandbox.execDetachedWith(spec.command, (builder) => applyExecSpec(builder, spec));
     },
@@ -225,7 +225,7 @@ interface ExecOptionsBuilderLike {
   stdinNull(): ExecOptionsBuilderLike;
 }
 
-/** The subset of `connect()`'s sandbox used for guest execution and installs. */
+/** The subset of `connect()`'s sandbox used for guest execution and provisioning. */
 interface SdkSandboxLike {
   readonly id: string;
   readonly name: string;

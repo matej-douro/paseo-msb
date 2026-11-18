@@ -863,7 +863,7 @@ export class FakeSandboxCreator implements SandboxHost {
     return handle.connect();
   }
 
-  async startInstall(
+  async startJob(
     handle: SandboxHandleLike,
     spec: ExecSpec,
   ): Promise<SandboxJobHandleLike> {

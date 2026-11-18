@@ -41,7 +41,7 @@ import type { SecretsStore } from "./secrets-store";
 import type { HostDirectoryLike, HostRegistrationLike } from "./status";
 
 const MAX_CREATE_ATTEMPTS = 3;
-const DEFAULT_INSTALL_TIMEOUT_MS = 600_000;
+const DEFAULT_JOB_TIMEOUT_MS = 600_000;
 /** Bound for one non-job SDK or parent call (lookup, connect, exec, create). */
 const DEFAULT_SDK_CALL_TIMEOUT_MS = 60_000;
 
@@ -54,7 +54,7 @@ export interface ReconcileContext extends RegistrationContext {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly secretsStore: SecretsStore;
   /** Bounded wait for one detached provision job; tests shorten it. */
-  readonly installTimeoutMs?: number;
+  readonly jobTimeoutMs?: number;
   /** Bounded wait for one non-job SDK call; tests shorten it. */
   readonly sdkCallTimeoutMs?: number;
   /** Settlement bound for native mutations; tests shorten it. */
@@ -513,7 +513,7 @@ function assertCreateShape(request: ReconcileRequest, decoded: DecodedSandbox): 
 }
 
 function timeoutMs(context: ReconcileContext): number {
-  return context.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
+  return context.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
 }
 
 function sdkTimeoutMs(context: ReconcileContext): number {

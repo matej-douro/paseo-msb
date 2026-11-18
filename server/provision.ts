@@ -15,8 +15,8 @@ import { failureDetail } from "./diagnostics";
 import {
   classifyJob,
   listAllJobs,
-  waitForInstallJob,
-  type InstallJobOutcome,
+  waitForJob,
+  type JobOutcome,
 } from "./jobs";
 import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
 import type { ReconcileContext } from "./reconciler";
@@ -29,7 +29,7 @@ import {
   type SandboxJobInfoLike,
 } from "./sandbox";
 
-const DEFAULT_INSTALL_TIMEOUT_MS = 600_000;
+const DEFAULT_JOB_TIMEOUT_MS = 600_000;
 const DEFAULT_SDK_CALL_TIMEOUT_MS = 60_000;
 
 interface ProvisionJobInventory {
@@ -75,7 +75,7 @@ export async function ensureProvisioned(
 
   let jobId: string;
   try {
-    const job = await bounded(context.sandboxHost.startInstall(handle, provisionExecSpec(provision)), {
+    const job = await bounded(context.sandboxHost.startJob(handle, provisionExecSpec(provision)), {
       timeoutMs: sdkTimeoutMs(context),
       signal: token.signal,
     });
@@ -128,10 +128,10 @@ async function awaitProvisionJob(
   redaction: readonly string[],
   token: LaneToken,
 ): Promise<boolean> {
-  const outcome = await waitForInstallJob(
+  const outcome = await waitForJob(
     handle,
     jobId,
-    installTimeoutMs(context),
+    jobTimeoutMs(context),
     token.signal,
   );
 
@@ -298,7 +298,7 @@ async function listProvisionJobs(
   return { active };
 }
 
-function interpretProvisionOutcome(outcome: InstallJobOutcome): void {
+function interpretProvisionOutcome(outcome: JobOutcome): void {
   switch (outcome.status) {
     case "succeeded":
       return;
@@ -398,6 +398,6 @@ function sdkTimeoutMs(context: ReconcileContext): number {
   return context.sdkCallTimeoutMs ?? DEFAULT_SDK_CALL_TIMEOUT_MS;
 }
 
-function installTimeoutMs(context: ReconcileContext): number {
-  return context.installTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
+function jobTimeoutMs(context: ReconcileContext): number {
+  return context.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
 }

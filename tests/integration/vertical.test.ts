@@ -512,7 +512,7 @@ async function managedRegistrations(sandboxId: string): Promise<HostSummary[]> {
   );
 }
 
-async function installJobs(name: string) {
+async function provisionJobs(name: string) {
   const handles = await sandboxesNamed(name);
   if (handles.length !== 1) return [];
 
@@ -848,7 +848,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         "the pinned guest image was not applied",
       ).toBe(GUEST_IMAGE);
 
-      const jobs = await installJobs(name);
+      const jobs = await provisionJobs(name);
       expect(jobs, "exactly one provision job for this attempt").toHaveLength(1);
       expect(
         jobs.every((job) => job.state === "exited" && job.exitCode === 0),
@@ -1350,7 +1350,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(handles).toHaveLength(1);
       expect(handles[0].id).toBe(sandboxId);
 
-      const jobs = await installJobs(name);
+      const jobs = await provisionJobs(name);
       expect(jobs, "exactly one provision job for the concurrent attempt").toHaveLength(1);
       expect(
         jobs.every((job) => job.state === "exited" && job.exitCode === 0),
@@ -1540,7 +1540,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(survivors).toHaveLength(1);
       expect(survivors[0].id).toBe(newId);
 
-      const jobs = await installJobs(name);
+      const jobs = await provisionJobs(name);
       expect(jobs, "exactly one provision job for the replacement").toHaveLength(1);
       expect(
         jobs.every((job) => job.state === "exited" && job.exitCode === 0),
@@ -1768,7 +1768,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
         const active = await waitFor(
           "two matching provision jobs to become active",
           async () => {
-            const jobs = await installJobs(name);
+            const jobs = await provisionJobs(name);
             const runningJobs = jobs.filter(
               (job) => job.state === "starting" || job.state === "running",
             );
@@ -1784,7 +1784,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
           { name, error: safeError("provision_conflict") },
         ]);
 
-        const after = await installJobs(name);
+        const after = await provisionJobs(name);
         expect(after, "the reconciler must not launch a third job").toHaveLength(2);
         expect(new Set(after.map((job) => job.id))).toEqual(new Set(jobIds));
 

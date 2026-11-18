@@ -71,7 +71,7 @@ export async function listAllJobs(
   throw new JobInventoryError("pagination exceeded the page budget");
 }
 
-export type InstallJobOutcome =
+export type JobOutcome =
   | { readonly status: "succeeded"; readonly id: string }
   | { readonly status: "failed"; readonly id: string; readonly exitCode: number | null }
   | { readonly status: "running"; readonly id: string }
@@ -80,15 +80,15 @@ export type InstallJobOutcome =
 /**
  * Bounds a wait for one active job. Every SDK call is inside the race, so a
  * hung `getJob`, `wait`, or `inspect` cannot block Delete or shutdown. A
- * timeout means the job is still running, not that the install failed; the
+ * timeout means the job is still running, not that provisioning failed; the
  * reconciler must not start another job.
  */
-export async function waitForInstallJob(
+export async function waitForJob(
   handle: SandboxHandleLike,
   id: string,
   timeoutMs: number,
   signal?: AbortSignal,
-): Promise<InstallJobOutcome> {
+): Promise<JobOutcome> {
   let job: SandboxJobLike;
   try {
     job = await bounded(handle.getJob(id), { timeoutMs, signal });
@@ -137,7 +137,7 @@ export async function waitForInstallJob(
   }
 }
 
-export function classifyJob(info: SandboxJobInfoLike): InstallJobOutcome {
+export function classifyJob(info: SandboxJobInfoLike): JobOutcome {
   if (info.state === "exited" && info.exitCode === 0) {
     return { status: "succeeded", id: info.id };
   }

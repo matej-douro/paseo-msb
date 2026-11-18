@@ -88,7 +88,7 @@ function createContext(
     secretsStore: memorySecretsStore(),
     lanes: createLifecycleLanes(),
     mutations: createMutationRegistry(),
-    installTimeoutMs: 250,
+    jobTimeoutMs: 250,
     timeoutMs: 250,
     pollMs: 1,
     ...overrides,

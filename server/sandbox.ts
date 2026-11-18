@@ -236,11 +236,11 @@ export interface SandboxCreator {
 
 /**
  * Host-side sandbox operations. `connect` and `destroy` use the exact captured
- * handle; `startInstall` launches the single pinned detached Pi install.
+ * handle; `startJob` launches one detached provision job.
  */
 export interface SandboxHost extends SandboxCreator {
   connect(handle: SandboxHandleLike): Promise<SandboxConnectHandleLike>;
-  startInstall(
+  startJob(
     handle: SandboxHandleLike,
     spec: ExecSpec,
   ): Promise<SandboxJobHandleLike>;

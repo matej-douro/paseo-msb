@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   JobInventoryError,
   listAllJobs,
-  waitForInstallJob,
+  waitForJob,
 } from "../../server/jobs";
 import { LifecycleAbortedError } from "../../server/lanes";
 import { findLatestProvisionJob } from "../../server/provision";
@@ -54,7 +54,7 @@ describe("job inventory", () => {
     await expect(listAllJobs(handle, 1)).rejects.toBeInstanceOf(JobInventoryError);
   });
 
-  it("reports a still-running job instead of failing the install", async () => {
+  it("reports a still-running job instead of failing provisioning", async () => {
     const handle = fakeSandbox({
       id: "sandbox_1",
       name: "paseo-1",
@@ -62,7 +62,7 @@ describe("job inventory", () => {
       jobStateAfterWait: "running",
     });
 
-    await expect(waitForInstallJob(handle, "job_1", 10)).resolves.toEqual({
+    await expect(waitForJob(handle, "job_1", 10)).resolves.toEqual({
       status: "running",
       id: "job_1",
     });
@@ -78,7 +78,7 @@ describe("job inventory", () => {
     } as unknown as SandboxHandleLike;
 
     const controller = new AbortController();
-    const pending = waitForInstallJob(handle, "job_1", 60_000, controller.signal);
+    const pending = waitForJob(handle, "job_1", 60_000, controller.signal);
     controller.abort();
 
     await expect(pending).rejects.toBeInstanceOf(LifecycleAbortedError);
@@ -91,7 +91,7 @@ describe("job inventory", () => {
       jobs: [{ id: "job_1", command: INSTALL_ARGV, state: "exited", exitCode: 1 }],
     });
 
-    await expect(waitForInstallJob(handle, "job_1", 100)).resolves.toEqual({
+    await expect(waitForJob(handle, "job_1", 100)).resolves.toEqual({
       status: "failed",
       id: "job_1",
       exitCode: 1,
