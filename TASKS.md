@@ -728,14 +728,14 @@ background registration convergence, and the remaining limits.
 
 Acceptance:
 
-- [ ] README describes optional names, the 2-CPU/4096-MiB/10240-MiB defaults,
+- [x] README describes optional names, the 2-CPU/4096-MiB/10240-MiB defaults,
       the resource bounds, disk grow-only behavior, and live metrics.
-- [ ] README states that only a confirmed resize of a running VM may restart it
+- [x] README states that only a confirmed resize of a running VM may restart it
       and that there are still no general lifecycle controls, CPU resize,
       rename, disk shrink, or metrics history.
 - [x] README explains that registration-only rows are transient cleanup states
       and that unproven VM absence is shown as `VM state unknown`.
-- [ ] CHANGELOG has an Unreleased V1.1 entry covering names, resources, resize,
+- [x] CHANGELOG has an Unreleased V1.1 entry covering names, resources, resize,
       live metrics, registration display migration, and background cleanup of
       confirmed-stale registrations.
 - [x] `docs/release-test.md` no longer links to the old

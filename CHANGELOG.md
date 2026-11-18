@@ -17,6 +17,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 - Create accepts explicit CPU, RAM, and root-disk selections within the
   documented bounds; the defaults are 2 CPUs, 4096 MiB RAM, and 10240 MiB root
   disk.
+- A child's detail can edit RAM and grow its root disk without recreating it.
+  A resize reports `applied`, `unchanged`, `converging`, `restart_required`, or
+  `resize_failed`; only a confirmed resize of a running VM may restart it, and
+  a resize never writes the `maxMemory` hotplug cap or creates a second VM.
 - A running child's detail shows a bounded live resource chart for CPU, memory,
   disk I/O, network, and root-disk usage. Samples are polled from `vm.metrics`
   every 3 seconds, kept only for the open detail, and never persisted.

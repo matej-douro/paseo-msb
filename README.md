@@ -173,12 +173,14 @@ directly to apply its daemon config and orchestration skills. Credential
 substitution is header-only and limited to the fixed hosts above; TLS
 interception and guest CA setup are microsandbox responsibilities.
 
-The image is fixed; CPU, RAM, and root disk are chosen at Create within the
-documented bounds (2 CPUs, 4096 MiB RAM, and 10240 MiB root disk by default).
-**Edit resources** changes RAM and grows the root disk, but never the CPU.
-There are no general start/stop/restart controls: the only restart is the
-explicit confirmation after a resize needs one, and it is offered only for a
-running VM. There is no image selection, volumes, snapshots, unlabelled-sandbox
+The image is fixed; CPU, RAM, and root disk are chosen at Create. CPU is 1–16
+(default 2), RAM is 1024–32768 MiB in 256 MiB steps (default 4096 MiB), and
+root disk is 1024–262144 MiB in 1024 MiB steps (default 10240 MiB). **Edit
+resources** changes RAM and grows the root disk; it never changes the CPU,
+shrinks the disk, or renames a child. There are no general start/stop/restart
+controls: the only restart is the explicit confirmation after a resize needs
+one, and it is offered only for a running VM. There is no image selection,
+rename, disk shrink, metrics history, volumes, snapshots, unlabelled-sandbox
 adoption, operation history, or plugin-specific shell. After `ready`, the plugin
 does not monitor tool health, repair drift, or re-provision; stopped VMs are not
 started automatically.
