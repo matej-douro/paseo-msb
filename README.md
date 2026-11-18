@@ -24,7 +24,14 @@ Docs: [DESIGN.md](./DESIGN.md) · [provisioning](./docs/provisioning.md) ·
   `~/.agents/skills` and `~/.claude/skills`.
 
 Install this checkout as a directory plugin from the parent daemon. Use an
-isolated `PASEO_HOME` while developing.
+isolated `PASEO_HOME` while developing. A directory install does not run the
+manifest's preparation step, so run `npm install` in the checkout first.
+
+Git and registry installs stage a bare checkout instead, so `paseo-plugin.json`
+runs `npm ci --omit=dev --ignore-scripts` to install the runtime dependencies
+(`microsandbox`, `zod`, `@getpaseo/client`) that the plugin compiler resolves and
+the runtime loader imports. Keep `package-lock.json` in sync with
+`package.json`; `npm ci` fails when they disagree.
 
 ## Credentials
 

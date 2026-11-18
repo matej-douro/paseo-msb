@@ -66,6 +66,12 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Fixed
 
+- Git and registry installs no longer fail with
+  `Could not resolve type dependency "microsandbox"`: those installs stage a
+  bare checkout, so `paseo-plugin.json` now runs
+  `npm ci --omit=dev --ignore-scripts` before the compiler resolves imports.
+  `zod` moved to `dependencies` because the bundled server and client code
+  import it at runtime, so a production-only install must include it.
 - A Create blocked by an existing attempt for the same name now suggests
   retrying, dismissing, or choosing another name instead of only saying the
   request is invalid.
