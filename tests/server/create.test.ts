@@ -381,57 +381,23 @@ describe("createVm", () => {
     expect(await creator.find("shared-vm")).toBe(sandbox);
   });
 
-  it("completes a Delete tombstone and then allocates a fresh generation", async () => {
-    const tombstone = fakeSandbox({ id: "sandbox_old", name: NAME, phase: "deleting" });
-    const creator = new FakeSandboxCreator({ existing: tombstone });
-    const context = createContext(creator);
-
-    const attempt = await startCreate(context, INPUT);
-    await attempt.started;
-
-    expect(creator.destroyed).toEqual(["sandbox_old"]);
-    expect(creator.createCount).toBe(1);
-    expect(context.pending.find(NAME)).toBeNull();
-    expect((await creator.find(NAME))?.id).toBe("sandbox_1");
-  });
-
-  it("allocates after cleanup when a shaped tombstone matches the request", async () => {
+  it("fails rather than resurrecting a tombstoned generation", async () => {
     const tombstone = fakeSandbox({
       id: "sandbox_old",
       name: NAME,
-      phase: "deleting",
-      requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10240 },
-      resourcesSpecified: true,
+      labels: { [PHASE_LABEL]: "deleting" },
     });
     const creator = new FakeSandboxCreator({ existing: tombstone });
-    const context = createContext(creator);
-
-    const attempt = await startCreate(context, {
-      ...INPUT,
-      resources: { memoryMib: 4096, diskMib: 10240 },
-    });
-    await attempt.started;
-
-    expect(creator.destroyed).toEqual(["sandbox_old"]);
-    expect(creator.createCount).toBe(1);
-    expect(context.pending.find(NAME)).toBeNull();
-    expect((await creator.find(NAME))?.id).toBe("sandbox_1");
-  });
-
-  it("fails rather than chasing a second tombstone", async () => {
-    const first = fakeSandbox({ id: "sandbox_old", name: NAME, phase: "deleting" });
-    const second = fakeSandbox({ id: "sandbox_second", name: NAME, phase: "deleting" });
-    const creator = new FakeSandboxCreator({ findSequence: [first, second] });
     const context = createContext(creator);
 
     const attempt = await startCreate(context, INPUT);
     await attempt.started;
 
-    expect(creator.destroyed).toEqual(["sandbox_old", "sandbox_second"]);
+    expect(creator.destroyed).toEqual([]);
     expect(creator.createCount).toBe(0);
     expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
-      errorCode: "delete_failed",
+      errorCode: "invalid_config",
     });
   });
 
@@ -455,8 +421,15 @@ describe("createVm", () => {
     expect(creator.createCount).toBe(0);
   });
 
-  it("rejects an explicit resource selection against a legacy sandbox", async () => {
-    const sandbox = fakeSandbox({ id: "sandbox_legacy", name: NAME, phase: "ready" });
+  it("fails a Create that meets an undecodable same-name sandbox", async () => {
+    // A pre-V1.1 child has no plan or resource variables. It is never adopted,
+    // joined, or destroyed by Create.
+    const sandbox = fakeSandbox({
+      id: "sandbox_legacy",
+      name: NAME,
+      phase: "ready",
+      rawConfig: { env: [] },
+    });
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
 
@@ -468,37 +441,19 @@ describe("createVm", () => {
 
     expect(context.pending.find(NAME)).toMatchObject({
       phase: "failed",
-      errorCode: "invalid_request",
+      errorCode: "invalid_config",
     });
     expect(creator.createCount).toBe(0);
-  });
-
-  it("joins a legacy sandbox under the same name when resources are omitted", async () => {
-    const sandbox = fakeSandbox({ id: "sandbox_legacy", name: NAME, phase: "ready" });
-    const creator = new FakeSandboxCreator({ existing: sandbox });
-    const context = createContext(creator);
-
-    const attempt = await startCreate(context, INPUT);
-    await attempt.started;
-
-    expect(context.pending.find(NAME)).toBeNull();
-    expect(creator.createCount).toBe(0);
-  });
-
-  it("joins a legacy sandbox under a chosen name when resources are omitted", async () => {
-    const sandbox = fakeSandbox({ id: "sandbox_legacy", name: "my-vm", phase: "ready" });
-    const creator = new FakeSandboxCreator({ existing: sandbox });
-    const context = createContext(creator);
-
-    const attempt = await startCreate(context, { ...INPUT, name: "my-vm" });
-    await attempt.started;
-
-    expect(context.pending.find("my-vm")).toBeNull();
-    expect(creator.createCount).toBe(0);
+    expect(creator.destroyed).toEqual([]);
   });
 
   it("joins an owned sandbox from an earlier attempt without creating another", async () => {
-    const sandbox = fakeSandbox({ id: "sandbox_existing", name: NAME, phase: "ready" });
+    const sandbox = fakeSandbox({
+      id: "sandbox_existing",
+      name: NAME,
+      phase: "ready",
+      plan: INPUT.plan,
+    });
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator);
 
@@ -547,7 +502,12 @@ describe("createVm", () => {
   });
 
   it("joins an existing sandbox when the credential store is unavailable", async () => {
-    const sandbox = fakeSandbox({ id: "sandbox_existing", name: NAME, phase: "ready" });
+    const sandbox = fakeSandbox({
+      id: "sandbox_existing",
+      name: NAME,
+      phase: "ready",
+      plan: INPUT.plan,
+    });
     const creator = new FakeSandboxCreator({ existing: sandbox });
     const context = createContext(creator, {
       env: {},
@@ -574,27 +534,6 @@ describe("createVm", () => {
 
     gate.resolve();
     await first.started;
-  });
-
-  it("rejects different credential names for an existing sandbox", async () => {
-    const sandbox = fakeSandbox({
-      id: "sandbox_existing",
-      name: NAME,
-      phase: "ready",
-      configExtras: {
-        env: [{ name: "ANTHROPIC_API_KEY", value: SECRET_VALUE }],
-      },
-    });
-    const creator = new FakeSandboxCreator({ existing: sandbox });
-    const context = createContext(creator);
-
-    const attempt = startCreate(context, { ...INPUT, plan: OTHER_PLAN });
-    await attempt.started;
-
-    expect(context.pending.find(NAME)).toMatchObject({
-      phase: "failed",
-      errorCode: "invalid_request",
-    });
   });
 
   it("reports a pre-create failure and retries it under the same name", async () => {

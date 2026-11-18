@@ -58,7 +58,6 @@ export async function deleteVm(
     if (handle.id !== input.id) throw new Error(safeError("id_mismatch").message);
 
     const ownership = ownershipOf(handle, parentId);
-    if (ownership === "quarantine") throw new Error(safeError("id_mismatch").message);
     if (ownership !== "owned") throw new Error(safeError("invalid_config").message);
 
     // An unsettled native write (a resize) may still reach this name. Do not

@@ -12,10 +12,9 @@ export const PLUGIN_VERSION = "v1";
 export const PARENT_DAEMON_VERSION = "0.15.4";
 export const MICROSANDBOX_VERSION = "0.7.14";
 
-/** Verified guest image tag and Pi package pins. */
+/** Verified guest image tag and Pi package pin. */
 export const GUEST_IMAGE = "ghcr.io/getpaseo/paseo:0.15.4";
 export const PI_PACKAGE = "@earendil-works/pi-coding-agent";
-export const PI_VERSION = "1.1.0";
 
 /** Default CPU count and default child shape. */
 export const CPUS = 2;
@@ -62,12 +61,6 @@ export const PARENT_LABEL = "paseo-msb-parent";
 export const PHASE_LABEL = "paseo-msb-phase";
 export const ERROR_LABEL = "paseo-msb-error";
 
-/**
- * Legacy labels from the initial implementation. They are read only to migrate
- * existing children; new sandboxes never write them. A present legacy ID that
- * does not match the live handle quarantines the sandbox instead of adopting it.
- */
-export const SANDBOX_ID_LABEL = "paseo-msb-id";
 /** Bounded, redacted diagnostic text. Never contains a credential value. */
 export const ERROR_DETAIL_LABEL = "paseo-msb-error-detail";
 
@@ -86,16 +79,15 @@ export const RESOURCES_SPECIFIED_ENV_VAR = "PASEO_MSB_RESOURCES_SPECIFIED";
 export const MAX_ERROR_DETAIL_CHARS = 1_000;
 
 /**
- * Phase is a progress hint, not proof of an external side effect. `deleting` is
- * cleanup-only. `failed` is legacy-only; new failures keep the actionable phase
- * and carry an error code.
+ * Phase is a progress hint, not proof of an external side effect. New failures
+ * keep the actionable phase and carry an error code; `failed` is the projection
+ * for pending attempts and for a config that cannot be decoded.
  */
 export const PHASES = [
   "creating",
   "installing",
   "registering",
   "ready",
-  "deleting",
   "failed",
 ] as const;
 export type Phase = (typeof PHASES)[number];

@@ -424,7 +424,7 @@ async function createFixtureSandbox(options: {
   readonly managed: boolean;
   readonly plan?: CanonicalPlan;
   readonly phase?: Phase;
-  /** Managed fixtures may persist the desired resource shape for joining. */
+  /** Managed fixtures persist the desired resource shape for joining. */
   readonly requestedResources?: VmResources;
   readonly resourcesSpecified?: boolean;
 }): Promise<SandboxHandle> {
@@ -437,6 +437,13 @@ async function createFixtureSandbox(options: {
 
   if (options.managed) {
     if (!options.plan) throw new Error("a managed fixture needs a plan");
+    // The plan and resource variables are what make a fixture decodable, so
+    // every managed fixture writes both.
+    const resources = options.requestedResources ?? {
+      cpus: 2,
+      memoryMib: 4096,
+      diskMib: 10_240,
+    };
     builder = builder
       .labels({
         [MANAGED_LABEL]: PLUGIN_VERSION,
@@ -444,13 +451,9 @@ async function createFixtureSandbox(options: {
         [PHASE_LABEL]: options.phase ?? "installing",
       })
       .env("PATH", GUEST_PATH)
-      .env(PLAN_ENV_VAR, JSON.stringify(options.plan));
-
-    if (options.requestedResources) {
-      builder = builder
-        .env(RESOURCES_ENV_VAR, JSON.stringify(options.requestedResources))
-        .env(RESOURCES_SPECIFIED_ENV_VAR, options.resourcesSpecified ? "1" : "0");
-    }
+      .env(PLAN_ENV_VAR, JSON.stringify(options.plan))
+      .env(RESOURCES_ENV_VAR, JSON.stringify(resources))
+      .env(RESOURCES_SPECIFIED_ENV_VAR, (options.resourcesSpecified ?? false) ? "1" : "0");
   } else {
     builder = builder.labels({ "paseo-msb-fixture": "foreign" });
   }
@@ -1302,7 +1305,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
   );
 
   it(
-    "serializes concurrent Create and Repair, repairs registration drift, and reloads after a deleting tombstone",
+    "serializes concurrent Create and Repair, repairs registration drift, and refuses a deleting tombstone",
     async () => {
       const start = observations.length;
       const plan = createdPlan;
@@ -1391,8 +1394,9 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       expect(restored[0].status).toBe("online");
       expect(await sandboxesNamed(name)).toHaveLength(1);
 
-      // Interrupt after the Delete tombstone but before destruction. A reload
-      // must complete this exact generation's cleanup and never resume setup.
+      // Interrupt after the Delete tombstone but before destruction. This build
+      // does not write or understand the tombstone phase: reload must neither
+      // resume nor destroy the generation. Only Delete removes it.
       const tombstoned = await msb.Sandbox.get(name);
       expect(tombstoned.id).toBe(sandboxId);
       await tombstoned.modify({ labels: { [PHASE_LABEL]: "deleting" } });
@@ -1413,20 +1417,38 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       await waitForPlugin(daemon, PLUGIN_ID);
       await rpc<VmListResult>(vmListRpc.name, {});
 
+      // Give background work a grace period, then prove the generation and its
+      // registration were left untouched.
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      expect(await sandboxesNamed(name)).toHaveLength(1);
+      expect(await managedRegistrations(sandboxId)).toHaveLength(1);
+
+      const refused = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+      expect(refused.repaired).toEqual([]);
+      expect(refused.errors).toEqual([{ name, error: safeError("invalid_config") }]);
+      expect(await sandboxesNamed(name)).toHaveLength(1);
+
+      const after = await rpc<VmListResult>(vmListRpc.name, {});
+      const row = after.children.find((entry) => entry.name === name);
+      expect(row?.kind === "sandbox" && row.labels[ERROR_LABEL]).toBe("invalid_config");
+
+      // Delete is the only removal path and still works on the tombstoned row.
+      const deleted = await rpc<VmDeleteResult>(vmDeleteRpc.name, {
+        name,
+        id: sandboxId,
+        confirmName: name,
+      });
+      expect(deleted).toEqual({ name, removed: true });
       await waitFor(
-        "the tombstoned sandbox to be destroyed after reload",
+        "the tombstoned sandbox to be destroyed",
         async () => ((await sandboxesNamed(name)).length === 0 ? true : null),
-        { timeoutMs: 180_000, secrets: credentialValues() },
+        { timeoutMs: 120_000, secrets: credentialValues() },
       );
       await waitFor(
-        "the exact generation registration to be removed after reload",
+        "the exact generation registration to be removed",
         async () => ((await managedRegistrations(sandboxId)).length === 0 ? true : null),
         { timeoutMs: 60_000, secrets: credentialValues() },
       );
-
-      const after = await rpc<VmListResult>(vmListRpc.name, {});
-      expect(after.children.find((entry) => entry.name === name)).toBeUndefined();
-      expect(await sandboxesNamed(name)).toHaveLength(0);
 
       // Repair after deletion reports not_found and never recreates the child.
       const afterRepair = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
@@ -1574,7 +1596,7 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
   );
 
   it(
-    "completes a Delete tombstone and allocates a fresh generation",
+    "never resumes or resurrects a Delete tombstone and removes it only with Delete",
     async () => {
       const start = observations.length;
       const plan = createdPlan;
@@ -1584,21 +1606,18 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       const name = newGeneratedChildName();
       trackSandbox(name);
 
-      // A Delete that could not finish leaves the managed generation labelled
-      // `deleting`. Its recorded shape matches, so Create completes that exact
-      // cleanup and then allocates a replacement instead of reporting success
-      // for cleanup alone.
-      // The full suite has already let one-time plugin recovery settle, so this
-      // Create is what drives the tombstone cleanup. A second tombstone is
-      // covered by the unit suite instead of this release path.
+      // A Delete that could not finish once left the managed generation labelled
+      // `deleting`. This build does not write or understand that label: Create,
+      // Repair, and recovery refuse the child instead of resuming it, and only
+      // Delete removes it.
       const tombstone = await createFixtureSandbox({
         name,
         managed: true,
         plan,
-        phase: "deleting",
         requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 10_240 },
         resourcesSpecified: true,
       });
+      await tombstone.modify({ labels: { [PHASE_LABEL]: "deleting" } });
       const oldId = tombstone.id;
       trackSandbox(name, oldId);
 
@@ -1609,13 +1628,41 @@ describe.skipIf(!RELEASE_ENABLED)("vertical release test", () => {
       });
       expect(created).toEqual({ name });
 
-      const ready = await waitForReadySandbox(name, CREATE_TIMEOUT_MS);
-      expect(ready.child.id).not.toBe(oldId);
-      trackSandbox(name, ready.child.id);
+      // The attempt must fail onto the pending row instead of settling success,
+      // and the tombstone is never replaced or destroyed behind it.
+      const dismissed = await waitFor(
+        "the failed Create attempt on the tombstone",
+        async () => {
+          try {
+            return await rpc(vmDismissRpc.name, { name });
+          } catch {
+            return null;
+          }
+        },
+        { timeoutMs: 120_000, secrets: credentialValues() },
+      );
+      expect(dismissed).toEqual({ name, dismissed: true });
+      const survivors = await sandboxesNamed(name);
+      expect(survivors).toHaveLength(1);
+      expect(survivors[0]?.id).toBe(oldId);
 
-      const handles = await sandboxesNamed(name);
-      expect(handles).toHaveLength(1);
-      expect(handles[0]?.id).toBe(ready.child.id);
+      const repair = await rpc<VmReconcileResult>(vmReconcileRpc.name, { name });
+      expect(repair.repaired).toEqual([]);
+      expect(repair.errors).toEqual([{ name, error: safeError("invalid_config") }]);
+      expect(await sandboxesNamed(name)).toHaveLength(1);
+
+      const deleted = await rpc<VmDeleteResult>(vmDeleteRpc.name, {
+        name,
+        id: oldId,
+        confirmName: name,
+      });
+      expect(deleted).toEqual({ name, removed: true });
+
+      await waitFor(
+        "the tombstoned generation to be removed",
+        async () => ((await sandboxesNamed(name)).length === 0 ? true : null),
+        { timeoutMs: 120_000, secrets: credentialValues() },
+      );
       expect(await managedRegistrations(oldId)).toHaveLength(0);
 
       await assertNoCanarySince(start);

@@ -1,4 +1,4 @@
-import { MAX_MEMORY_MIB, RESOURCES_ENV_VAR } from "../shared/constants";
+import { RESOURCES_ENV_VAR } from "../shared/constants";
 import type {
   ResizeOutcome,
   VmResizeInput,
@@ -100,21 +100,19 @@ export async function resizeVm(
   // A target that matches the observation but not the persisted desired value
   // only clears the pending desired value; resources stay as they are.
   const memoryStale =
-    memoryTarget !== undefined && requested !== null && requested.memoryMib !== memoryTarget;
+    memoryTarget !== undefined && requested.memoryMib !== memoryTarget;
   const diskStale =
-    diskTarget !== undefined && requested !== null && requested.diskMib !== diskTarget;
+    diskTarget !== undefined && requested.diskMib !== diskTarget;
   const restart = input.restart === true;
 
   if (!memoryChanges && !diskChanges && !memoryStale && !diskStale) {
     return result(input, "unchanged", observed, requested);
   }
 
-  const desired = decoded.requestedResources !== null
-    ? desiredResources(observed, memoryTarget, diskTarget)
-    : null;
+  const desired = desiredResources(observed, memoryTarget, diskTarget);
 
-  // Legacy or unknown memory caps cannot grow live. Preflight before modify()
-  // and never include maxMemory in a no_restart call.
+  // An unreported memory cap gives no safe live-growth bound. Preflight before
+  // modify() and never include maxMemory in a modify call.
   const maxMemory = readSandboxMaxMemoryMib(refreshed);
   const growthAboveCap =
     memoryChanges &&
@@ -127,10 +125,11 @@ export async function resizeVm(
   const options: SandboxModifyOptionsLike = {
     ...(memoryChanges ? { memory: memoryTarget } : {}),
     ...(diskChanges ? { rootDiskSize: diskTarget } : {}),
-    ...(restart && growthAboveCap ? { maxMemory: MAX_MEMORY_MIB } : {}),
     policy: restart ? "restart" : "no_restart",
     // A restart call can persist the desired value atomically. A no_restart
-    // call cannot: the runtime rejects env changes without a restart.
+    // call cannot: the runtime rejects env changes without a restart. When an
+    // untargeted observation is unreported there is no complete desired value
+    // to record, so the env write is skipped rather than persisting `null`.
     ...(restart && desired
       ? { env: { [RESOURCES_ENV_VAR]: JSON.stringify(desired) } }
       : {}),
@@ -200,13 +199,12 @@ function result(
   input: VmResizeInput,
   outcome: ResizeOutcome,
   observed: { readonly cpus: number; readonly memoryMib: number | null; readonly diskMib: number | null },
-  requested: VmResources | null,
+  requested: VmResources,
 ): VmResizeResult {
   const pending =
-    requested !== null &&
-    (requested.cpus !== observed.cpus ||
-      requested.memoryMib !== observed.memoryMib ||
-      requested.diskMib !== observed.diskMib)
+    requested.cpus !== observed.cpus ||
+    requested.memoryMib !== observed.memoryMib ||
+    requested.diskMib !== observed.diskMib
       ? requested
       : null;
 
@@ -225,7 +223,7 @@ async function handleMutationFailure(
   error: unknown,
   parentId: string,
   observed: DecodedSandbox["resources"],
-  requested: VmResources | null,
+  requested: VmResources,
   token: LaneToken,
 ): Promise<VmResizeResult> {
   if (error instanceof LifecycleAbortedError) throw error;

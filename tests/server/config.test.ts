@@ -8,7 +8,6 @@ import {
   PLUGIN_VERSION,
   RESOURCES_ENV_VAR,
   RESOURCES_SPECIFIED_ENV_VAR,
-  SANDBOX_ID_LABEL,
 } from "../../shared/constants";
 import {
   decodeManagedSandbox,
@@ -16,8 +15,10 @@ import {
   SandboxDecodeError,
 } from "../../server/sandbox";
 import {
+  DEFAULT_PLAN,
   fakeRuntime,
   fakeSandbox,
+  managedEnv,
   PARENT_ID,
   SECRET_VALUE,
 } from "./fake-runtime";
@@ -60,7 +61,7 @@ describe("decodeManagedSandbox", () => {
       id: "sbx_1",
       name: "paseo-1",
       rawConfig: {
-        env: [{ key: PLAN_ENV_VAR, value: JSON.stringify(plan) }],
+        env: managedEnv([{ key: PLAN_ENV_VAR, value: JSON.stringify(plan) }]),
       },
     });
 
@@ -85,19 +86,19 @@ describe("decodeManagedSandbox", () => {
       id: "sbx_1",
       name: "paseo-1",
       rawConfig: {
-        env: [
+        env: managedEnv([
           {
             name: RESOURCES_ENV_VAR,
             value: JSON.stringify({ cpus: 4, memoryMib: 8192, diskMib: 20480 }),
           },
           { name: RESOURCES_SPECIFIED_ENV_VAR, value: "1" },
-        ],
+        ]),
       },
     });
 
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
 
-    expect(decoded!.plan).toBeNull();
+    expect(decoded!.plan).toEqual(DEFAULT_PLAN);
     expect(decoded!.requestedResources).toEqual({
       cpus: 4,
       memoryMib: 8192,
@@ -113,8 +114,23 @@ describe("decodeManagedSandbox", () => {
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
 
     expect(decoded!.resources).toEqual({ cpus: 2, memoryMib: 4096, diskMib: 10240 });
-    expect(decoded!.requestedResources).toBeNull();
-    expect(decoded!.resourcesSpecified).toBeNull();
+    expect(decoded!.requestedResources).toEqual({
+      cpus: 2,
+      memoryMib: 4096,
+      diskMib: 10240,
+    });
+    expect(decoded!.resourcesSpecified).toBe(false);
+  });
+
+  it("requires the plan and both resource variables", () => {
+    for (const env of [
+      [],
+      [{ name: RESOURCES_ENV_VAR, value: "{}" }],
+      [{ name: RESOURCES_SPECIFIED_ENV_VAR, value: "0" }],
+    ]) {
+      const handle = fakeSandbox({ id: "sbx_1", name: "paseo-1", rawConfig: { env } });
+      expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
+    }
   });
 
   it("accepts snake_case resource keys", () => {
@@ -122,6 +138,7 @@ describe("decodeManagedSandbox", () => {
       id: "sbx_1",
       name: "paseo-1",
       rawConfig: {
+        env: managedEnv(),
         resources: { cpus: 2, memory_mib: 6144 },
         image: { oci: { root_disk: { size_mib: 12288 } } },
       },
@@ -135,7 +152,7 @@ describe("decodeManagedSandbox", () => {
     const handle = fakeSandbox({
       id: "sbx_1",
       name: "paseo-1",
-      rawConfig: { resources: { cpus: 2 } },
+      rawConfig: { env: managedEnv(), resources: { cpus: 2 } },
     });
 
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
@@ -146,7 +163,7 @@ describe("decodeManagedSandbox", () => {
     const handle = fakeSandbox({
       id: "sbx_1",
       name: "paseo-1",
-      rawConfig: { resources: { cpus: 4 } },
+      rawConfig: { env: managedEnv(), resources: { cpus: 4 } },
     });
 
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
@@ -158,7 +175,7 @@ describe("decodeManagedSandbox", () => {
       const handle = fakeSandbox({
         id: "sbx_1",
         name: "paseo-1",
-        rawConfig: { resources: { cpus } },
+        rawConfig: { env: managedEnv(), resources: { cpus } },
       });
 
       expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
@@ -167,8 +184,13 @@ describe("decodeManagedSandbox", () => {
 
   it("rejects malformed resources and specified-flag values", () => {
     const resources = JSON.stringify({ cpus: 2, memoryMib: 4096, diskMib: 10240 });
+    const plan = [{ name: PLAN_ENV_VAR, value: JSON.stringify(DEFAULT_PLAN) }];
     const handleWith = (env: { name: string; value: string }[]) =>
-      fakeSandbox({ id: "sbx_1", name: "paseo-1", rawConfig: { env } });
+      fakeSandbox({
+        id: "sbx_1",
+        name: "paseo-1",
+        rawConfig: { env: [...plan, ...env] },
+      });
 
     // The two variables are written together; either alone is a partial write.
     expect(() =>
@@ -239,25 +261,28 @@ describe("decodeManagedSandbox", () => {
     expect(decoded!.labels[ERROR_LABEL]).toBe("invalid_config");
   });
 
-  it("quarantines a mismatched legacy stable-id label", () => {
-    const handle = fakeSandbox({
-      id: "sbx_replacement",
-      name: "paseo-1",
-      labels: { [SANDBOX_ID_LABEL]: "sbx_original" },
-    });
-
-    expect(() => decodeManagedSandbox(handle, PARENT_ID)).toThrow(SandboxDecodeError);
-  });
-
-  it("accepts matching legacy labels without projecting them", () => {
+  it("projects a persisted failed phase as an undecodable config", () => {
     const handle = fakeSandbox({
       id: "sbx_1",
       name: "paseo-1",
-      extraLabels: { [SANDBOX_ID_LABEL]: "sbx_1", "paseo-msb-job": "job_7" },
+      phase: "failed",
+      error: "provision_failed",
     });
     const decoded = decodeManagedSandbox(handle, PARENT_ID);
 
-    expect(decoded!.labels).not.toHaveProperty(SANDBOX_ID_LABEL);
+    expect(decoded!.labels[PHASE_LABEL]).toBe("failed");
+    expect(decoded!.labels[ERROR_LABEL]).toBe("invalid_config");
+  });
+
+  it("does not project legacy or unknown sandbox labels", () => {
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      extraLabels: { "paseo-msb-id": "sbx_1", "paseo-msb-job": "job_7" },
+    });
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+
+    expect(decoded!.labels).not.toHaveProperty("paseo-msb-id");
     expect(decoded!.labels).not.toHaveProperty("paseo-msb-job");
     expect(decoded).not.toHaveProperty("legacyId");
     expect(decoded).not.toHaveProperty("legacyJobId");
@@ -304,7 +329,7 @@ describe("loadManagedSandboxes", () => {
     }
   });
 
-  it("keeps a partial V1.1 environment visible as invalid_config", async () => {
+  it("keeps a partial resource environment visible as invalid_config", async () => {
     const handle = fakeSandbox({
       id: "sbx_2",
       name: "paseo-2",

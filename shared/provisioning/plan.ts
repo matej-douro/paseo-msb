@@ -143,24 +143,8 @@ export function parseProvisionPlan(input: unknown): ParsePlanResult {
   return { ok: true, plan: canonicalizePlan(parsed.data) };
 }
 
-/** Legacy sandboxes have no persisted plan and are upgraded as Pi-only. */
-export function legacyPiPlan(): CanonicalPlan {
-  return { providers: [{ provider: "pi", llms: [] }], integrations: [] };
-}
-
 export function plansEqual(left: CanonicalPlan, right: CanonicalPlan): boolean {
   return JSON.stringify(canonicalizePlan(left)) === JSON.stringify(canonicalizePlan(right));
-}
-
-/** True when a plan needs exactly the credentials a legacy VM already has. */
-export function planMatchesCredentialNames(
-  plan: CanonicalPlan,
-  names: readonly ProvisioningCredential[],
-): boolean {
-  const required = requiredCredentialsForPlan(plan);
-  if (required.length !== names.length) return false;
-  const expected = new Set(required);
-  return names.every((name) => expected.has(name));
 }
 
 function invalid(message: string): PlanResolution {

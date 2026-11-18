@@ -3,16 +3,16 @@ import {
   ERROR_LABEL,
   PHASE_LABEL,
   REGISTRATION_PRODUCER_ID,
-  SANDBOX_ID_LABEL,
 } from "../../shared/constants";
 import { safeError } from "../../shared/errors";
-import { buildProvisionScript, legacyPiPlan, type CanonicalPlan } from "../../shared/provisioning";
+import { buildProvisionScript, type CanonicalPlan } from "../../shared/provisioning";
 import { deleteVm } from "../../server/delete";
 import { createLifecycleLanes, LifecycleAbortedError } from "../../server/lanes";
 import { createMutationRegistry } from "../../server/mutations";
 import { reconcileVm, type ReconcileVmContext } from "../../server/reconcile";
 import type { ExecSpec } from "../../server/sandbox";
 import {
+  DEFAULT_PLAN,
   failingRuntime,
   fakeHostDirectory,
   fakeRegistration,
@@ -362,7 +362,7 @@ describe("reconcileVm", () => {
 
   it("resumes an interrupted install from a successful provision status", async () => {
     const labels: Record<string, string>[] = [];
-    const provision = buildProvisionScript(legacyPiPlan());
+    const provision = buildProvisionScript(DEFAULT_PLAN);
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
@@ -431,8 +431,8 @@ describe("reconcileVm", () => {
     expect(creator.execSpecs[0].args[0]).toContain("/provision-");
   });
 
-  it("rejects multiple active pinned installs", async () => {
-    const provision = buildProvisionScript(legacyPiPlan());
+  it("rejects multiple active provision jobs", async () => {
+    const provision = buildProvisionScript(DEFAULT_PLAN);
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
@@ -545,7 +545,7 @@ describe("reconcileVm", () => {
     expect(hosts.updated).toEqual([]);
   });
 
-  it("repairs a V1 registration label to the canonical name", async () => {
+  it("repairs a non-canonical registration label to the canonical name", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
     const hosts = new FakePaseoHosts({
       directory: fakeHostDirectory([
@@ -635,67 +635,13 @@ describe("reconcileVm", () => {
     expect(hosts.removed).toEqual([]);
   });
 
-  it("rediscovers an active job behind a legacy failed label", async () => {
+  it("refuses to advance a persisted failed phase without writing", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "failed",
-      error: "install_failed",
-      labelUpdates: labels,
-      jobState: "running",
-      jobStateAfterWait: "exited",
-      jobWaitCode: 0,
-    });
-    const hosts = new FakePaseoHosts();
-
-    const result = await reconcileVm(
-      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox })),
-      INPUT,
-    );
-
-    expect(result).toEqual({ repaired: [NAME], errors: [] });
-    expect(labels.filter((entry) => entry[PHASE_LABEL] === "ready")).toHaveLength(1);
-    expect(hosts.added).toHaveLength(1);
-  });
-
-  it("does not treat a failed legacy install job as terminal", async () => {
-    const labels: Record<string, string>[] = [];
-    const provision = buildProvisionScript(legacyPiPlan());
-    const sandbox = fakeSandbox({
-      id: "sandbox_1",
-      name: NAME,
-      phase: "failed",
-      error: "install_failed",
-      labelUpdates: labels,
-      jobState: "exited",
-      jobExitCode: 7,
-      provisionStatus: {
-        planHash: provision.planHash,
-        ok: true,
-        steps: [{ id: "pi-install", status: "ok", exitCode: 0 }],
-        failedStep: null,
-        error: null,
-      },
-    });
-    const hosts = new FakePaseoHosts();
-
-    const result = await reconcileVm(
-      reconcileContext(fakeRuntime([sandbox]), hosts, new FakeSandboxCreator({ existing: sandbox })),
-      INPUT,
-    );
-
-    expect(result).toEqual({ repaired: [NAME], errors: [] });
-    expect(hosts.added).toHaveLength(1);
-  });
-
-  it("starts one install when a legacy failed label has no job history", async () => {
-    const labels: Record<string, string>[] = [];
-    const sandbox = fakeSandbox({
-      id: "sandbox_1",
-      name: NAME,
-      phase: "failed",
-      error: "install_failed",
+      error: "provision_failed",
       labelUpdates: labels,
     });
     const hosts = new FakePaseoHosts();
@@ -703,19 +649,22 @@ describe("reconcileVm", () => {
 
     const result = await reconcileVm(reconcileContext(fakeRuntime([sandbox]), hosts, creator), INPUT);
 
-    expect(result).toEqual({ repaired: [NAME], errors: [] });
-    expect(creator.execSpecs).toHaveLength(1);
+    expect(result).toEqual({
+      repaired: [],
+      errors: [{ name: NAME, error: safeError("invalid_config") }],
+    });
+    expect(creator.execSpecs).toEqual([]);
     expect(creator.createCount).toBe(0);
+    expect(labels).toEqual([]);
+    expect(hosts.added).toEqual([]);
   });
 
-  it("quarantines a mismatched legacy identity without writing", async () => {
-    const labels: Record<string, string>[] = [];
+  it("ignores stale legacy identity labels", async () => {
     const sandbox = fakeSandbox({
-      id: "sandbox_replacement",
+      id: "sandbox_1",
       name: NAME,
       phase: "ready",
-      labels: { [SANDBOX_ID_LABEL]: "sandbox_original" },
-      labelUpdates: labels,
+      extraLabels: { "paseo-msb-id": "sandbox_original" },
     });
     const hosts = new FakePaseoHosts();
 
@@ -724,18 +673,16 @@ describe("reconcileVm", () => {
       INPUT,
     );
 
-    expect(result.errors).toEqual([{ name: NAME, error: safeError("id_mismatch") }]);
-    expect(hosts.added).toEqual([]);
-    expect(hosts.removed).toEqual([]);
-    expect(labels).toEqual([]);
+    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(hosts.added).toHaveLength(1);
   });
 
-  it("completes a deleting tombstone without resuming setup", async () => {
+  it("never resumes or destroys a tombstoned generation", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
-      phase: "deleting",
+      labels: { [PHASE_LABEL]: "deleting" },
       labelUpdates: labels,
     });
     const creator = new FakeSandboxCreator({ existing: sandbox });
@@ -748,11 +695,14 @@ describe("reconcileVm", () => {
       INPUT,
     );
 
-    expect(result).toEqual({ repaired: [NAME], errors: [] });
+    expect(result).toEqual({
+      repaired: [],
+      errors: [{ name: NAME, error: safeError("invalid_config") }],
+    });
+    expect(creator.destroyed).toEqual([]);
     expect(hosts.added).toEqual([]);
-    expect(hosts.removed).toEqual(["reg_owned"]);
-    expect(creator.destroyed).toEqual(["sandbox_1"]);
-    expect(labels.filter((entry) => entry[PHASE_LABEL] === "ready")).toEqual([]);
+    expect(hosts.removed).toEqual([]);
+    expect(labels).toEqual([]);
   });
 
   it("targets one name and reports a missing child", async () => {
@@ -850,7 +800,7 @@ describe("reconcileVm", () => {
       id: "sandbox_1",
       name: NAME,
       phase: "ready",
-      labels: { [ERROR_LABEL]: "install_failed" },
+      labels: { [ERROR_LABEL]: "provision_failed" },
     });
     const hosts = new FakePaseoHosts({
       directory: fakeHostDirectory([ownedRegistration()]),

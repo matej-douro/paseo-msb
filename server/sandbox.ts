@@ -3,7 +3,6 @@ import {
   CPUS,
   CPUS_MAX,
   CPUS_MIN,
-  CREDENTIAL_NAMES,
   ERROR_DETAIL_LABEL,
   ERROR_LABEL,
   GUEST_IMAGE,
@@ -26,7 +25,6 @@ import {
   ROOT_DISK_MIB_MAX,
   ROOT_DISK_MIB_MIN,
   RUNTIME_STATUSES,
-  SANDBOX_ID_LABEL,
   type CredentialName,
   type Phase,
   type RuntimeStatus,
@@ -332,16 +330,16 @@ export interface DecodedSandbox {
   readonly name: string;
   readonly runtimeStatus: RuntimeStatus;
   readonly labels: ManagedLabels;
-  /** Persisted plan; null for pre-provisioning legacy Pi-only children. */
-  readonly plan: CanonicalPlan | null;
+  /** Persisted plan. */
+  readonly plan: CanonicalPlan;
   /** Bounded, redacted diagnostic for a failed or retrying sandbox. */
   readonly errorDetail: string | null;
   /** Observed from the sandbox config; unreported fields are null. */
   readonly resources: VmObservedResources;
-  /** Desired resources from the managed environment; null for legacy VMs. */
-  readonly requestedResources: VmResources | null;
+  /** Desired resources from the managed environment. */
+  readonly requestedResources: VmResources;
   /** Internal resources-specified flag. Never projected into a public DTO. */
-  readonly resourcesSpecified: boolean | null;
+  readonly resourcesSpecified: boolean;
 }
 
 export interface LoadedSandbox {
@@ -353,7 +351,7 @@ export interface SandboxDecodeFailure {
   readonly id: string;
   readonly name: string;
   readonly runtimeStatus: RuntimeStatus;
-  readonly code: Extract<SafeErrorCode, "invalid_config" | "id_mismatch">;
+  readonly code: "invalid_config";
 }
 
 export type SandboxInventory =
@@ -368,7 +366,7 @@ export type SandboxInventory =
     };
 
 export class SandboxDecodeError extends Error {
-  constructor(readonly code: "invalid_config" | "id_mismatch") {
+  constructor(readonly code: "invalid_config") {
     super(code);
     this.name = "SandboxDecodeError";
   }
@@ -402,7 +400,6 @@ const RawConfigSchema = z.looseObject({
 
 const PhaseSchema = z.enum(PHASES);
 const RuntimeStatusSchema = z.enum(RUNTIME_STATUSES);
-const CREDENTIAL_SET: ReadonlySet<string> = new Set(CREDENTIAL_NAMES);
 
 /** Bound for one complete sandbox inventory read. */
 const SANDBOX_LIST_TIMEOUT_MS = 60_000;
@@ -430,10 +427,12 @@ function decodeLabels(
     rawError && isSafeErrorCode(rawError) ? rawError : undefined;
 
   if (!phaseParsed.success) error = "invalid_config";
-  if (phase === "failed" && !error) error = "invalid_config";
+  // A persisted `failed` phase is never written by current code. It is projected
+  // as an undecodable config instead of a resumable failure.
+  if (phase === "failed") error = "invalid_config";
 
-  // Persisted detail and legacy labels go through the same redaction boundary
-  // as live errors before they can appear in a DTO.
+  // Persisted detail goes through the same redaction boundary as live errors
+  // before it can appear in a DTO.
   const detail = error ? failureDetail(labels[ERROR_DETAIL_LABEL], redaction) : null;
 
   const projected: ManagedLabels = {
@@ -454,8 +453,6 @@ function decodeLabels(
 
 /**
  * Returns null for a sandbox that is not managed by this plugin and parent.
- * A legacy ID label that does not match the live handle quarantines the sandbox
- * as `id_mismatch` instead of adopting or silently ignoring it.
  */
 export function decodeManagedSandbox(
   handle: SandboxHandleLike,
@@ -475,11 +472,6 @@ export function decodeManagedSandbox(
   const labels = parsedConfig.data.labels ?? {};
   if (labels[MANAGED_LABEL] !== PLUGIN_VERSION) return null;
   if (labels[PARENT_LABEL] !== parentId) return null;
-
-  const legacyId = labels[SANDBOX_ID_LABEL];
-  if (legacyId !== undefined && legacyId !== handle.id) {
-    throw new SandboxDecodeError("id_mismatch");
-  }
 
   return {
     ...decodeLabels(labels, handle, redaction),
@@ -510,23 +502,20 @@ export async function loadManagedSandboxes(
   const failures: SandboxDecodeFailure[] = [];
 
   // Inventory-wide decoding uses every managed VM's persisted credential values
-  // in addition to the current environment/store values, so a legacy label or
-  // malformed config cannot echo a creation-time secret.
+  // in addition to the current environment/store values, so malformed config
+  // cannot echo a creation-time secret.
   const mergedRedaction = mergePersistedRedaction(redaction, handles);
 
   for (const handle of handles) {
     try {
       const decoded = decodeManagedSandbox(handle, parentId, mergedRedaction);
       if (decoded) sandboxes.push({ sandbox: decoded, handle });
-    } catch (error) {
+    } catch {
       failures.push({
         id: handle.id,
         name: handle.name,
         runtimeStatus: normalizeRuntimeStatus(handle.status),
-        code:
-          error instanceof SandboxDecodeError && error.code === "id_mismatch"
-            ? "id_mismatch"
-            : "invalid_config",
+        code: "invalid_config",
       });
     }
   }
@@ -559,21 +548,17 @@ function rawLabels(handle: SandboxHandleLike): Record<string, string> | null {
   }
 }
 
-export type SandboxOwnership = "owned" | "foreign" | "quarantine" | "unknown";
+export type SandboxOwnership = "owned" | "foreign" | "unknown";
 
 /**
- * Ownership requires the managed and parent labels. A present legacy ID that
- * differs from the live handle is quarantined. Absence of a legacy ID is valid
- * for new sandboxes; the name owns the current generation.
+ * Ownership requires the managed and parent labels; the name owns the current
+ * generation. An unreadable config reports `unknown` and is never adopted.
  */
 export function ownershipOf(handle: SandboxHandleLike, parentId: string): SandboxOwnership {
   const labels = rawLabels(handle);
   if (labels === null) return "unknown";
   if (labels[MANAGED_LABEL] !== PLUGIN_VERSION) return "foreign";
   if (labels[PARENT_LABEL] !== parentId) return "foreign";
-
-  const legacyId = labels[SANDBOX_ID_LABEL];
-  if (legacyId !== undefined && legacyId !== handle.id) return "quarantine";
   return "owned";
 }
 
@@ -608,9 +593,9 @@ function readEnvRecord(env: unknown): Readonly<Record<string, string>> {
   return result;
 }
 
-function readPlanFromEnv(env: unknown): CanonicalPlan | null {
+function readPlanFromEnv(env: unknown): CanonicalPlan {
   const value = readEnvRecord(env)[PLAN_ENV_VAR];
-  if (value === undefined) return null;
+  if (value === undefined) throw new SandboxDecodeError("invalid_config");
 
   let parsed: unknown;
   try {
@@ -654,7 +639,7 @@ function decodeObservedResources(
   const rawCpus = firstValue(resources, ["cpus"]);
   const reportedCpus = readBoundedInteger(rawCpus, CPUS_MIN, CPUS_MAX);
   // A present but out-of-range CPU count is malformed, not unreported. An
-  // absent value keeps the legacy fixed shape, which was always the default.
+  // absent value keeps the fixed default shape.
   if (rawCpus !== undefined && reportedCpus === null) {
     throw new SandboxDecodeError("invalid_config");
   }
@@ -680,17 +665,12 @@ function decodeObservedResources(
 
 /** Desired resources and the internal resources-specified flag from the environment. */
 function readResourcesEnv(env: unknown): {
-  readonly requestedResources: VmResources | null;
-  readonly resourcesSpecified: boolean | null;
+  readonly requestedResources: VmResources;
+  readonly resourcesSpecified: boolean;
 } {
   const record = readEnvRecord(env);
   const rawResources = record[RESOURCES_ENV_VAR];
   const rawSpecified = record[RESOURCES_SPECIFIED_ENV_VAR];
-
-  if (rawResources === undefined && rawSpecified === undefined) {
-    // A V1 child has neither variable, so it has no recorded resource selection.
-    return { requestedResources: null, resourcesSpecified: null };
-  }
 
   if (rawResources === undefined || rawSpecified === undefined) {
     throw new SandboxDecodeError("invalid_config");
@@ -712,40 +692,6 @@ function readResourcesEnv(env: unknown): {
     requestedResources: resources.data,
     resourcesSpecified: rawSpecified === "1",
   };
-}
-
-/**
- * Reads the credential names a sandbox was created with. Values are ignored so
- * this is safe to use for repeated-create validation and redaction.
- */
-export function sandboxCredentialNames(handle: SandboxHandleLike): CredentialName[] {
-  let raw: unknown;
-  try {
-    raw = handle.config();
-  } catch {
-    return [];
-  }
-
-  const parsed = RawConfigSchema.safeParse(raw);
-  if (!parsed.success) return [];
-
-  const names = new Set<CredentialName>();
-
-  for (const name of Object.keys(readEnvRecord(parsed.data.env))) {
-    if (CREDENTIAL_SET.has(name)) names.add(name as CredentialName);
-  }
-
-  const entries = asRecord(asRecord(parsed.data.network)?.secrets)?.secrets;
-  if (Array.isArray(entries)) {
-    for (const entry of entries) {
-      const envVar = asRecord(entry)?.envVar;
-      if (typeof envVar === "string" && CREDENTIAL_SET.has(envVar)) {
-        names.add(envVar as CredentialName);
-      }
-    }
-  }
-
-  return CREDENTIAL_NAMES.filter((name) => names.has(name));
 }
 
 /**
@@ -866,7 +812,7 @@ export async function markSandboxPhase(
 
 /**
  * Persists a retryable or terminal setup error while keeping the actionable
- * phase. A legacy `failed` phase is never written by new code.
+ * phase.
  */
 export async function markSandboxError(
   handle: SandboxHandleLike,
@@ -875,7 +821,7 @@ export async function markSandboxError(
   detail: string | null = null,
   tracking?: MutationTracking,
 ): Promise<void> {
-  await markSandboxPhase(handle, phase === "failed" ? "installing" : phase, {
+  await markSandboxPhase(handle, phase, {
     code,
     detail,
     tracking,

@@ -17,15 +17,6 @@ import {
 } from "./fake-runtime";
 
 const NAME = "paseo-2f8f4c2e-8e52-4d0e-9db1-1a2b3c4d5e6f";
-const PI_ARGV = [
-  "npm",
-  "install",
-  "-g",
-  "--ignore-scripts",
-  "--prefix",
-  "/home/paseo/.local",
-  "@earendil-works/pi-coding-agent@1.1.0",
-] as const;
 
 function recoveryContext(
   runtime: RecoveryContext["runtime"],
@@ -86,16 +77,15 @@ describe("recoverManagedSandboxes", () => {
     expect(sandbox.config()).toMatchObject({ labels: { [PHASE_LABEL]: "ready" } });
   });
 
-  it("waits for an active legacy install, then runs the generic provisioner", async () => {
+  it("starts provisioning beside a foreign running job", async () => {
     const labels: Record<string, string>[] = [];
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
-      piInstalled: "from-jobs",
-      jobs: [{ id: "job_7", command: PI_ARGV, state: "running" }],
-      jobStateAfterWait: "exited",
-      jobWaitCode: 0,
+      jobs: [
+        { id: "job_7", command: ["npm", "install", "-g", "some-package"], state: "running" },
+      ],
       labelUpdates: labels,
     });
     const creator = new FakeSandboxCreator({ existing: sandbox });
@@ -118,7 +108,6 @@ describe("recoverManagedSandboxes", () => {
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
-      piInstalled: "from-jobs",
       labelUpdates: labels,
     });
     const creator = new FakeSandboxCreator({ existing: sandbox });
@@ -256,7 +245,6 @@ describe("recoverManagedSandboxes", () => {
       id: "sandbox_1",
       name: NAME,
       phase: "creating",
-      piInstalled: "from-jobs",
       labelUpdates: labels,
     });
     const hosts = new FakePaseoHosts();
@@ -292,7 +280,7 @@ describe("recoverManagedSandboxes", () => {
     expect(hosts.added).toEqual([]);
   });
 
-  it("repairs a V1 registration label during recovery", async () => {
+  it("repairs a non-canonical registration label during recovery", async () => {
     const sandbox = fakeSandbox({ id: "sandbox_1", name: NAME, phase: "ready" });
     const hosts = new FakePaseoHosts({
       directory: fakeHostDirectory([
@@ -374,6 +362,6 @@ describe("recoverManagedSandboxes", () => {
     );
 
     expect(JSON.stringify(labels)).not.toContain("raw secret token leaked");
-    expect(JSON.stringify(labels)).not.toContain(safeError("install_failed").message);
+    expect(JSON.stringify(labels)).not.toContain(safeError("job_inventory_unavailable").message);
   });
 });

@@ -214,7 +214,7 @@ describe("resizeVm", () => {
     });
   });
 
-  it("requires a restart for legacy RAM growth beyond the observed cap", async () => {
+  it("requires a restart for RAM growth beyond an unreported cap", async () => {
     const { calls, context } = setup({ configExtras: { resources: { cpus: 2, memoryMib: 4096 } } });
 
     const result = await resizeVm(
@@ -227,7 +227,7 @@ describe("resizeVm", () => {
     expect(calls).toEqual([]);
   });
 
-  it("includes maxMemory only on a legacy restart", async () => {
+  it("restarts without writing maxMemory for RAM growth beyond an unreported cap", async () => {
     const { calls, context } = setup({ configExtras: { resources: { cpus: 2, memoryMib: 4096 } } });
 
     const result = await resizeVm(
@@ -239,13 +239,38 @@ describe("resizeVm", () => {
     expect(result.result).toBe("applied");
     expect(result.resources).toEqual({ cpus: 2, memoryMib: 8192, diskMib: 10240 });
     expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty("maxMemory");
     expect(calls[0]).toMatchObject({
       memory: 8192,
-      maxMemory: MAX_MEMORY_MIB,
       policy: "restart",
     });
-    // A markerless legacy sandbox has no resource variables to update.
+    // A restart persists the desired resources atomically with the change.
+    expect(calls[0].env).toEqual({
+      [RESOURCES_ENV_VAR]: JSON.stringify({ cpus: 2, memoryMib: 8192, diskMib: 10240 }),
+    });
+  });
+
+  it("never persists a null desired value when an observation is unreported", async () => {
+    // A memory-only resize on a child with no reported disk has no complete
+    // desired value to record. The env write is skipped instead of persisting
+    // `null`, which would make the child undecodable.
+    const { handle, calls, context } = setup(
+      v11Options({ configExtras: { resources: CAP_CONFIG().resources, image: {} } }),
+    );
+
+    const result = await resizeVm(
+      context,
+      { name: NAME, id: ID, memoryMib: 8192 },
+      token(),
+    );
+
+    expect(result.result).toBe("applied");
+    expect(result.resources).toEqual({ cpus: 2, memoryMib: 8192, diskMib: null });
+    expect(calls).toEqual([{ memory: 8192, policy: "no_restart" }]);
     expect(calls[0].env).toBeUndefined();
+    expect(envValue(handle, RESOURCES_ENV_VAR)).toBe(
+      JSON.stringify({ cpus: 2, memoryMib: 4096, diskMib: 10240 }),
+    );
   });
 
   it("rejects a disk shrink and a null disk baseline", async () => {

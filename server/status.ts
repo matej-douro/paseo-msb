@@ -150,7 +150,6 @@ function sandboxChild(sandbox: LoadedSandbox, registrations: RegistrationsView):
 /** Desired resources are only exposed while they differ from the observation. */
 function pendingRestartFor(sandbox: DecodedSandbox): VmResources | null {
   const requested = sandbox.requestedResources;
-  if (!requested) return null;
   return sandbox.resources.cpus === requested.cpus &&
     sandbox.resources.memoryMib === requested.memoryMib &&
     sandbox.resources.diskMib === requested.diskMib

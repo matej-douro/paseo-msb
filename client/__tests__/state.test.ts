@@ -93,7 +93,7 @@ const REGISTRATION: Extract<VmChild, { kind: "registration" }> = {
 describe("plan presentation", () => {
   it("summarizes providers, LLM options, and integrations", () => {
     expect(planSummary(PLAN)).toBe("Pi (NeuralWatt)");
-    expect(planSummary(null)).toBe("Legacy Pi-only");
+    expect(planSummary(null)).toBe("Unknown");
     expect(
       planSummary({
         providers: [{ provider: "claude", llms: ["anthropic-oauth"] }],
@@ -233,7 +233,7 @@ describe("selection", () => {
 describe("child presentation", () => {
   it("labels phases, runtime, and registration", () => {
     expect(phaseText("installing")).toBe("Provisioning");
-    expect(phaseText("deleting")).toBe("Deleting");
+    expect(phaseText("failed")).toBe("Failed");
     expect(phaseText("ready")).toBe("Ready");
     expect(runtimeText("running")).toBe("Running");
     expect(
@@ -264,22 +264,22 @@ describe("child presentation", () => {
           labels: {
             ...SANDBOX.labels,
             [PHASE_LABEL]: "installing",
-            [ERROR_LABEL]: "install_pending",
+            [ERROR_LABEL]: "provision_pending",
           },
         }),
       ),
-    ).toEqual({ label: "Install pending", tone: "warning" });
+    ).toEqual({ label: "Provisioning pending", tone: "warning" });
     expect(
       setupPill(
         sandbox({
           labels: {
             ...SANDBOX.labels,
             [PHASE_LABEL]: "installing",
-            [ERROR_LABEL]: "install_failed",
+            [ERROR_LABEL]: "provision_failed",
           },
         }),
       ),
-    ).toEqual({ label: "Install failed", tone: "danger" });
+    ).toEqual({ label: "Provisioning failed", tone: "danger" });
     expect(setupPill({ ...PENDING, phase: "failed", error: safeError("create_failed") })).toEqual({
       label: "Create failed",
       tone: "danger",
@@ -338,10 +338,10 @@ describe("child presentation", () => {
     expect(
       childErrorText({
         ...SANDBOX,
-        labels: { ...SANDBOX.labels, [PHASE_LABEL]: "failed", [ERROR_LABEL]: "install_failed" },
+        labels: { ...SANDBOX.labels, [PHASE_LABEL]: "failed", [ERROR_LABEL]: "provision_failed" },
         errorDetail: "npm exited 1",
       }),
-    ).toBe(`${safeError("install_failed").message} npm exited 1`);
+    ).toBe(`${safeError("provision_failed").message} npm exited 1`);
     expect(childErrorText(REGISTRATION)).toBeNull();
     expect(
       childErrorText({ ...REGISTRATION, error: safeError("registration_failed") }),
@@ -469,15 +469,15 @@ describe("repair and delete text", () => {
     expect(
       reconcileFailureMessage({
         repaired: [],
-        errors: [{ name: "paseo-a", error: safeError("install_failed", "npm exited 1") }],
+        errors: [{ name: "paseo-a", error: safeError("provision_failed", "npm exited 1") }],
       }),
-    ).toBe(`paseo-a: ${safeError("install_failed").message} npm exited 1`);
+    ).toBe(`paseo-a: ${safeError("provision_failed").message} npm exited 1`);
     expect(
       reconcileFailureMessage({
         repaired: [],
         errors: [
           { name: "paseo-a", error: safeError("registration_conflict") },
-          { name: "paseo-b", error: safeError("install_failed") },
+          { name: "paseo-b", error: safeError("provision_failed") },
         ],
       }),
     ).toContain("(1 more)");

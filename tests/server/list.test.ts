@@ -62,12 +62,12 @@ describe("buildVmList", () => {
     expect(VmListOutputSchema.parse(result)).toEqual(result);
   });
 
-  it("redacts persisted values from a legacy error detail label", async () => {
+  it("redacts persisted values from an error detail label", async () => {
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: "paseo-1",
-      phase: "failed",
-      error: "install_failed",
+      phase: "installing",
+      error: "provision_failed",
       extraLabels: { "paseo-msb-error-detail": `leaked ${SECRET_VALUE}` },
     });
 

@@ -40,7 +40,7 @@ export type IntegrationId = (typeof INTEGRATION_IDS)[number];
 /** Bump when the catalog shape changes in a way the planner must reject. */
 export const PROVISIONING_VERSION = 1;
 
-/** Current provisioning pins; legacy Pi recovery retains its historical pin. */
+/** Current provisioning pins. */
 export const PROVISIONING_PI_VERSION = "1.5.2";
 export const PI_NEURALWATT_SOURCE = "npm:@aliou/pi-neuralwatt";
 export const PI_NEURALWATT_VERSION = "0.19.3";

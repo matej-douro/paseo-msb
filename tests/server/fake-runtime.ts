@@ -6,7 +6,6 @@ import {
   PARENT_LABEL,
   PHASE_LABEL,
   PI_PREFIX,
-  PI_VERSION,
   PLAN_ENV_VAR,
   PLUGIN_VERSION,
   REGISTRATION_PRODUCER_ID,
@@ -158,12 +157,11 @@ export interface FakeSandboxOptions {
   skillActionCode?: number;
   /** Records every exec made over the connect handle. */
   connectExecs?: ExecSpec[];
-  /** Defaults to "from-jobs": a successful Pi job or a ready phase. */
-  piInstalled?: boolean | "from-jobs";
+  /** Whether the guest answers the Pi readiness probe. Defaults to a ready
+   * or registering phase. */
+  piInstalled?: boolean;
   jobs?: FakeJobOptions[];
   listJobsError?: Error;
-  jobState?: string;
-  jobExitCode?: number;
   jobStateAfterWait?: string;
   jobWaitCode?: number;
   jobWaitError?: Error;
@@ -178,7 +176,31 @@ export interface FakeSandboxOptions {
   provisionStatus?: ProvisionStatus | null;
 }
 
-const PI_COMMAND = ["npm", "install", "-g", "--ignore-scripts", "--prefix", PI_PREFIX, `@earendil-works/pi-coding-agent@${PI_VERSION}`];
+/** Canonical plan recorded when a test does not supply one. */
+export const DEFAULT_PLAN: CanonicalPlan = {
+  providers: [{ provider: "pi", llms: ["neuralwatt"] }],
+  integrations: [],
+};
+
+/**
+ * Complete managed env entries for `rawConfig` tests. Later entries override
+ * the defaults, and a test that models a partial write passes its own array
+ * instead.
+ */
+export function managedEnv(
+  entries: readonly { name?: string; key?: string; value: string }[] = [],
+): { name?: string; key?: string; value: string }[] {
+  return [
+    { name: "PATH", value: "/home/paseo/.local/bin:/usr/local/bin:/usr/bin:/bin" },
+    { name: PLAN_ENV_VAR, value: JSON.stringify(DEFAULT_PLAN) },
+    {
+      name: RESOURCES_ENV_VAR,
+      value: JSON.stringify({ cpus: CPUS, memoryMib: MEMORY_MIB, diskMib: ROOT_DISK_MIB }),
+    },
+    { name: RESOURCES_SPECIFIED_ENV_VAR, value: "0" },
+    ...entries,
+  ];
+}
 
 const DEFAULT_METRICS: SandboxMetricsLike = {
   cpuPercent: 0,
@@ -201,20 +223,7 @@ const provisionStatusSetters = new WeakMap<
 >();
 
 function jobList(options: FakeSandboxOptions): FakeJobOptions[] {
-  const jobs = options.jobs ?? [];
-  if ((options.jobState || options.jobExitCode !== undefined) && jobs.length === 0) {
-    jobs.push({
-      id: "job_1",
-      command: PI_COMMAND,
-      state: options.jobState ?? "exited",
-      exitCode: options.jobExitCode ?? 0,
-    });
-  }
-  return jobs;
-}
-
-function isPiCommand(command: readonly string[]): boolean {
-  return command.join(" ") === PI_COMMAND.join(" ");
+  return options.jobs ?? [];
 }
 
 /** Applies a modify call to the fake config so a refresh observes it. */
@@ -295,20 +304,24 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
     resources: { cpus: 2, memoryMib: 4_096 },
     env: [
       { name: "PATH", value: "/home/paseo/.local/bin:/usr/local/bin:/usr/bin:/bin" },
-      ...(options.plan
-        ? [{ name: PLAN_ENV_VAR, value: JSON.stringify(options.plan) }]
-        : []),
-      ...(options.requestedResources !== undefined
-        ? [{ name: RESOURCES_ENV_VAR, value: JSON.stringify(options.requestedResources) }]
-        : []),
-      ...(options.resourcesSpecified !== undefined
-        ? [
-            {
-              name: RESOURCES_SPECIFIED_ENV_VAR,
-              value: options.resourcesSpecified ? "1" : "0",
-            },
-          ]
-        : []),
+      {
+        name: PLAN_ENV_VAR,
+        value: JSON.stringify(options.plan ?? DEFAULT_PLAN),
+      },
+      {
+        name: RESOURCES_ENV_VAR,
+        value: JSON.stringify(
+          options.requestedResources ?? {
+            cpus: CPUS,
+            memoryMib: MEMORY_MIB,
+            diskMib: ROOT_DISK_MIB,
+          },
+        ),
+      },
+      {
+        name: RESOURCES_SPECIFIED_ENV_VAR,
+        value: (options.resourcesSpecified ?? false) ? "1" : "0",
+      },
       { name: "ANTHROPIC_API_KEY", value: SECRET_VALUE },
     ],
     network: {
@@ -349,9 +362,6 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
 
   function piInstalled(): boolean {
     if (typeof options.piInstalled === "boolean") return options.piInstalled;
-    if (jobInfos().some((job) => isPiCommand(job.command) && job.state === "exited" && job.exitCode === 0)) {
-      return true;
-    }
     return labels[PHASE_LABEL] === "ready" || labels[PHASE_LABEL] === "registering";
   }
 
@@ -386,7 +396,7 @@ export function fakeSandbox(options: FakeSandboxOptions): SandboxHandleLike {
         if (!piInstalled()) return { code: 1, stdout: "" };
         return {
           code: options.execCode ?? 0,
-          stdout: options.execOutput ?? `${PI_PREFIX}/bin/pi\n${PI_VERSION}\n`,
+          stdout: options.execOutput ?? `${PI_PREFIX}/bin/pi\n`,
         };
       }
       return { code: options.execCode ?? 0, stdout: options.execOutput ?? "" };

@@ -240,8 +240,6 @@ export function phaseText(phase: Phase): string {
       return "Registering";
     case "ready":
       return "Ready";
-    case "deleting":
-      return "Deleting";
     case "failed":
       return "Failed";
   }
@@ -438,7 +436,7 @@ export function resizeRequestInput(
 
 /** Human-readable provider, LLM, and integration labels. */
 export function planSummary(plan: CanonicalPlan | null): string {
-  if (!plan) return "Legacy Pi-only";
+  if (!plan) return "Unknown";
 
   const parts: string[] = [];
   for (const selection of plan.providers) {
@@ -471,19 +469,15 @@ export interface Pill {
  */
 const SETUP_ERROR_PILLS: Partial<Record<SafeErrorCode, Pill>> = {
   invalid_config: { label: "Quarantined", tone: "danger" },
-  id_mismatch: { label: "Quarantined", tone: "danger" },
+  id_mismatch: { label: "Generation mismatch", tone: "danger" },
   not_found: { label: "Missing", tone: "danger" },
   name_conflict: { label: "Name conflict", tone: "danger" },
   create_failed: { label: "Create failed", tone: "danger" },
   port_unavailable: { label: "No loopback port", tone: "danger" },
-  install_failed: { label: "Install failed", tone: "danger" },
-  install_pending: { label: "Install pending", tone: "warning" },
-  install_conflict: { label: "Install conflict", tone: "warning" },
   provision_failed: { label: "Provisioning failed", tone: "danger" },
   provision_pending: { label: "Provisioning pending", tone: "warning" },
   provision_conflict: { label: "Provisioning conflict", tone: "warning" },
   job_inventory_unavailable: { label: "Install unconfirmed", tone: "warning" },
-  path_unverified: { label: "Pi missing on PATH", tone: "danger" },
   provider_unavailable: { label: "Provider not ready", tone: "warning" },
   paseo_tools_failed: { label: "Paseo tools failed", tone: "danger" },
   registration_failed: { label: "Registration failed", tone: "warning" },
@@ -519,8 +513,6 @@ export function setupPill(child: VmChild): Pill {
   switch (phase) {
     case "ready":
       return { label: "Ready", tone: "success" };
-    case "deleting":
-      return { label: "Deleting", tone: "warning" };
     case "failed":
       return { label: "Failed", tone: "danger" };
     default:

@@ -5,9 +5,7 @@ import {
 } from "../shared/constants";
 import { resourcesEqual, type VmResources } from "../shared/contracts";
 import {
-  legacyPiPlan,
   paseoProviderIds,
-  planMatchesCredentialNames,
   plansEqual,
   type CanonicalPlan,
 } from "../shared/provisioning";
@@ -30,7 +28,6 @@ import {
   markSandboxPhase,
   ownershipOf,
   readSandboxHostPort,
-  sandboxCredentialNames,
   SandboxGenerationError,
   type DecodedSandbox,
   type SandboxCreateHandleLike,
@@ -56,7 +53,7 @@ export interface ReconcileContext extends RegistrationContext {
   readonly mutations: MutationRegistry;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly secretsStore: SecretsStore;
-  /** Bounded wait for one detached Pi install; tests shorten it. */
+  /** Bounded wait for one detached provision job; tests shorten it. */
   readonly installTimeoutMs?: number;
   /** Bounded wait for one non-job SDK call; tests shorten it. */
   readonly sdkCallTimeoutMs?: number;
@@ -108,19 +105,10 @@ export async function reconcileName(
   const parentId = directory.self.serverId;
   if (!parentId) throw new SetupFailure("runtime_unavailable");
 
-  // A Create whose shape checks pass over the name's Delete tombstone completes
-  // that exact cleanup first and may then allocate a fresh generation. A second
-  // tombstone appearing behind the first is not chased; the attempt fails instead
-  // of racing cleanup. Recovery and Repair only ever complete the cleanup.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const handle = await findSandbox(context, request.name, request.redactionValues, token);
-    const outcome = handle
-      ? await advanceSandbox(context, request, parentId, handle, token)
-      : await reconcileAbsent(context, request, parentId, token);
-    if (!request.allowCreate || outcome.phase !== "deleting") return outcome;
-  }
-
-  throw new SetupFailure("delete_failed", "cleanup did not settle");
+  const handle = await findSandbox(context, request.name, request.redactionValues, token);
+  return handle
+    ? await advanceSandbox(context, request, parentId, handle, token)
+    : await reconcileAbsent(context, request, parentId, token);
 }
 
 async function reconcileAbsent(
@@ -208,7 +196,6 @@ async function reconcileAbsent(
   }
 
   const ownership = ownershipOf(handle, parentId);
-  if (ownership === "quarantine") throw new SetupFailure("id_mismatch");
   if (ownership !== "owned") throw new SetupFailure("name_conflict");
 
   token.throwIfAborted();
@@ -224,7 +211,6 @@ async function advanceSandbox(
   token: LaneToken,
 ): Promise<ReconcileOutcome> {
   const ownership = ownershipOf(handle, parentId);
-  if (ownership === "quarantine") throw new SetupFailure("id_mismatch");
   if (ownership === "foreign") throw new SetupFailure("name_conflict");
   if (ownership === "unknown") throw new SetupFailure("invalid_config");
 
@@ -233,50 +219,23 @@ async function advanceSandbox(
   let decoded: DecodedSandbox | null;
   try {
     decoded = decodeManagedSandbox(handle, parentId, redaction);
-  } catch (error) {
-    throw new SetupFailure(isSandboxDecodeError(error) ? error.code : "invalid_config");
+  } catch {
+    throw new SetupFailure("invalid_config");
   }
   if (!decoded) throw new SetupFailure("name_conflict");
 
-  assertCreateShape(request, decoded);
-
-  if (decoded.labels[PHASE_LABEL] === "deleting") {
-    // A legacy Delete tombstone: never resume setup. Destroy the generation if it
-    // is still present and remove its host rows; a replaced generation keeps its
-    // own row because cleanup only removes confirmed-stale entries.
-    token.throwIfAborted();
-    try {
-      await bounded(context.sandboxHost.destroy(handle), {
-        timeoutMs: sdkTimeoutMs(context),
-        signal: token.signal,
-      });
-    } catch (error) {
-      if (error instanceof LifecycleAbortedError) throw error;
-      throw new SetupFailure("delete_failed");
-    }
-
-    const directory = await readDirectory(context, redaction, token);
-    const cleanup = await cleanupName(context, request.name, directory.hosts, {
-      signal: token.signal,
-      confirmedGoneId: handle.id,
-    });
-    if (cleanup.failed > 0) throw new SetupFailure("registration_failed");
-    return {
-      name: request.name,
-      phase: "deleting",
-      registration: null,
-      repaired: cleanup.removed > 0,
-    };
-  }
-
+  // An undecodable child (for example a `deleting` tombstone left by an older
+  // build) is refused before any shape comparison, so the refusal reason never
+  // depends on the request shape.
   if (decoded.labels[ERROR_LABEL] === "invalid_config") {
     throw new SetupFailure("invalid_config");
   }
 
+  assertCreateShape(request, decoded);
+
   // A repeated attempt must keep the plan recorded for this generation. The
-  // check runs here, once, before any side effect. Legacy children compare the
-  // requested plan's credentials against the credentials they were created with.
-  const plan = resolvePlanForSandbox(request, decoded, handle);
+  // check runs here, once, before any side effect.
+  const plan = resolvePlanForSandbox(request, decoded);
   const providers = paseoProviderIds(plan);
 
   let phase = decoded.labels[PHASE_LABEL];
@@ -350,22 +309,11 @@ async function advanceSandbox(
 function resolvePlanForSandbox(
   request: ReconcileRequest,
   decoded: DecodedSandbox,
-  handle: SandboxHandleLike,
 ): CanonicalPlan {
-  if (request.plan) {
-    if (decoded.plan) {
-      if (!plansEqual(request.plan, decoded.plan)) throw new SetupFailure("invalid_request");
-      return decoded.plan;
-    }
-    // A legacy child has no persisted plan. A retry may only replay the plan
-    // whose required credentials match what this generation already has.
-    if (!planMatchesCredentialNames(request.plan, sandboxCredentialNames(handle))) {
-      throw new SetupFailure("invalid_request");
-    }
-    return request.plan;
+  if (request.plan && !plansEqual(request.plan, decoded.plan)) {
+    throw new SetupFailure("invalid_request");
   }
-
-  return decoded.plan ?? legacyPiPlan();
+  return decoded.plan;
 }
 
 async function createWithPortRetry(
@@ -548,21 +496,12 @@ async function findSandbox(
 
 /**
  * A Create request may only advance an existing generation whose recorded shape
- * matches the request: plan and credential names (checked by
- * `resolvePlanForSandbox`), plus resources and the resources-specified flag.
- * Legacy V1 children have no resource variables, so an explicit resource
- * selection is rejected rather than silently ignored. Recovery and Repair
- * carry no plan and advance whatever shape is present.
+ * matches the request: the persisted plan (checked by `resolvePlanForSandbox`),
+ * plus resources and the resources-specified flag. Recovery and Repair carry no
+ * plan and advance whatever shape is present.
  */
 function assertCreateShape(request: ReconcileRequest, decoded: DecodedSandbox): void {
   if (!request.plan) return;
-
-  if (decoded.requestedResources === null) {
-    if (request.resourcesSpecified) {
-      throw new SetupFailure("invalid_request", "the legacy sandbox has no resource selection");
-    }
-    return;
-  }
 
   const owned = `the name already belongs to ${decoded.id}`;
   if (request.resourcesSpecified !== decoded.resourcesSpecified) {
@@ -571,16 +510,6 @@ function assertCreateShape(request: ReconcileRequest, decoded: DecodedSandbox): 
   if (!request.resources || !resourcesEqual(request.resources, decoded.requestedResources)) {
     throw new SetupFailure("invalid_request", owned);
   }
-}
-
-function isSandboxDecodeError(
-  error: unknown,
-): error is { code: "invalid_config" | "id_mismatch" } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { name?: unknown }).name === "SandboxDecodeError"
-  );
 }
 
 function timeoutMs(context: ReconcileContext): number {

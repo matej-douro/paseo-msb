@@ -16,7 +16,7 @@ describe("failureDetail", () => {
   });
 
   it("prefers explicit detail on a setup failure and strips control characters", () => {
-    const detail = failureDetail({ code: "install_failed", detail: "npm\nfailed\there" });
+    const detail = failureDetail({ code: "provision_failed", detail: "npm\nfailed\there" });
     expect(detail).toBe("npm failed here");
   });
 

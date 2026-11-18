@@ -109,7 +109,6 @@ export async function readVmMetrics(
   if (handle.id !== input.id) throw new Error(safeError("id_mismatch").message);
 
   const ownership = ownershipOf(handle, parentId);
-  if (ownership === "quarantine") throw new Error(safeError("id_mismatch").message);
   if (ownership !== "owned") return unavailable("unavailable");
 
   if (handle.status !== "running") return unavailable("not_running");

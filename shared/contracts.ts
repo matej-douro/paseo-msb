@@ -86,8 +86,8 @@ export const VmResourcesSchema = z
 
 /**
  * Observed resources. `memoryMib` and `diskMib` are null when the pinned
- * runtime does not report that field for a legacy sandbox; the plugin never
- * invents a missing observation.
+ * runtime does not report that field; the plugin never invents a missing
+ * observation.
  */
 export const VmObservedResourcesSchema = z
   .object({
@@ -195,7 +195,7 @@ const SandboxChildSchema = z
     id: z.string().min(1),
     labels: ManagedLabelsSchema,
     runtimeStatus: RuntimeStatusSchema,
-    /** Persisted plan; null for pre-provisioning legacy Pi-only children. */
+    /** Persisted plan; null when the sandbox config could not be decoded. */
     plan: ProvisionPlanSchema.nullable(),
     registration: RegistrationSchema.nullable(),
     /** Bounded, redacted reason when the child failed. */
