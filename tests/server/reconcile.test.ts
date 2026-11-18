@@ -432,14 +432,15 @@ describe("reconcileVm", () => {
   });
 
   it("rejects multiple active pinned installs", async () => {
+    const provision = buildProvisionScript(legacyPiPlan());
     const sandbox = fakeSandbox({
       id: "sandbox_1",
       name: NAME,
       phase: "installing",
       piInstalled: false,
       jobs: [
-        { id: "job_a", command: ["npm", "install", "-g", "--ignore-scripts", "--prefix", "/home/paseo/.local", "@earendil-works/pi-coding-agent@1.1.0"], state: "running" },
-        { id: "job_b", command: ["npm", "install", "-g", "--ignore-scripts", "--prefix", "/home/paseo/.local", "@earendil-works/pi-coding-agent@1.1.0"], state: "starting" },
+        { id: "job_a", command: provision.argv, state: "running" },
+        { id: "job_b", command: provision.argv, state: "starting" },
       ],
     });
     const creator = new FakeSandboxCreator({ existing: sandbox });

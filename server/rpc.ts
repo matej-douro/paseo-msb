@@ -7,7 +7,6 @@ import type { CredentialName } from "../shared/constants";
 import { selectVmChild } from "../shared/selection";
 import { safeError, type SafeError } from "../shared/errors";
 import { persistedCredentialValues } from "./diagnostics";
-import { findLatestInstallJob } from "./jobs";
 import { bounded } from "./lanes";
 import {
   credentialValues,
@@ -127,9 +126,7 @@ export async function readVmDetail(
         ...credentialValues(context.env, context.storedSecrets),
         ...persistedCredentialValues(sandbox.handle.config()),
       ];
-      const job =
-        (await findLatestProvisionJob(sandbox.handle).catch(() => null)) ??
-        (await findLatestInstallJob(sandbox.handle).catch(() => null));
+      const job = await findLatestProvisionJob(sandbox.handle).catch(() => null);
       logs = {
         sandbox: await readSandboxLogs(sandbox.handle, secrets),
         job: job

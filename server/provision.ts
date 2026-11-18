@@ -14,7 +14,6 @@ import {
 import { failureDetail } from "./diagnostics";
 import {
   classifyJob,
-  isPiInstallJob,
   listAllJobs,
   waitForInstallJob,
   type InstallJobOutcome,
@@ -57,10 +56,6 @@ export async function ensureProvisioned(
   if (existingStatus && isProvisionSuccess(existingStatus, provision.planHash)) {
     return false;
   }
-
-  // A legacy child may still have the old Pi-only npm job running. Wait for it
-  // before launching the generic script so two package installs cannot race.
-  await awaitActiveLegacyPiJob(context, handle, token);
 
   const inventory = await listProvisionJobs(context, handle, provision.argv, token);
   if (inventory.active.length > 1) throw new SetupFailure("provision_conflict");
@@ -301,43 +296,6 @@ async function listProvisionJobs(
   });
 
   return { active };
-}
-
-async function awaitActiveLegacyPiJob(
-  context: ReconcileContext,
-  handle: SandboxHandleLike,
-  token: LaneToken,
-): Promise<void> {
-  let jobs: readonly SandboxJobInfoLike[];
-  try {
-    jobs = await listAllJobs(handle, undefined, {
-      timeoutMs: sdkTimeoutMs(context),
-      signal: token.signal,
-    });
-  } catch (error) {
-    if (error instanceof LifecycleAbortedError) throw error;
-    throw new SetupFailure("job_inventory_unavailable");
-  }
-
-  const active = jobs.filter((job) => {
-    if (!isPiInstallJob(job)) return false;
-    const outcome = classifyJob(job);
-    return outcome.status === "running" || outcome.status === "unknown";
-  });
-  if (active.length === 0) return;
-  if (active.length > 1) throw new SetupFailure("provision_conflict");
-
-  const activeJob = active[0];
-  if (!activeJob) return;
-  const outcome = await waitForInstallJob(
-    handle,
-    activeJob.id,
-    installTimeoutMs(context),
-    token.signal,
-  );
-  if (outcome.status === "running" || outcome.status === "unknown") {
-    throw new SetupFailure("provision_pending", "the legacy Pi install is still running");
-  }
 }
 
 function interpretProvisionOutcome(outcome: InstallJobOutcome): void {

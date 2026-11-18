@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  isPiInstallJob,
   JobInventoryError,
   listAllJobs,
   waitForInstallJob,
 } from "../../server/jobs";
 import { LifecycleAbortedError } from "../../server/lanes";
-import { piInstallArgv } from "../../server/pi-install";
 import { findLatestProvisionJob } from "../../server/provision";
 import { PROVISIONING_STATE_DIR } from "../../shared/provisioning";
 import type {
@@ -15,10 +13,12 @@ import type {
 } from "../../server/sandbox";
 import { fakeSandbox } from "./fake-runtime";
 
+const INSTALL_ARGV = ["npm", "install", "-g", "some-package"];
+
 function job(overrides: Partial<SandboxJobInfoLike> = {}): SandboxJobInfoLike {
   return {
     id: "job_1",
-    command: piInstallArgv(),
+    command: INSTALL_ARGV,
     state: "exited",
     exitCode: 0,
     timedOut: false,
@@ -33,8 +33,8 @@ describe("job inventory", () => {
       id: "sandbox_1",
       name: "paseo-1",
       jobs: [
-        { id: "a", command: piInstallArgv(), state: "exited", exitCode: 0 },
-        { id: "b", command: piInstallArgv(), state: "exited", exitCode: 1 },
+        { id: "a", command: INSTALL_ARGV, state: "exited", exitCode: 0 },
+        { id: "b", command: INSTALL_ARGV, state: "exited", exitCode: 1 },
         { id: "c", command: ["echo"], state: "running" },
       ],
     });
@@ -54,19 +54,11 @@ describe("job inventory", () => {
     await expect(listAllJobs(handle, 1)).rejects.toBeInstanceOf(JobInventoryError);
   });
 
-  it("matches only the exact pinned install argv", () => {
-    expect(isPiInstallJob(job())).toBe(true);
-    expect(isPiInstallJob(job({ command: ["npm", "install"] }))).toBe(false);
-    expect(
-      isPiInstallJob(job({ command: [...piInstallArgv(), "--extra"] })),
-    ).toBe(false);
-  });
-
   it("reports a still-running job instead of failing the install", async () => {
     const handle = fakeSandbox({
       id: "sandbox_1",
       name: "paseo-1",
-      jobs: [{ id: "job_1", command: piInstallArgv(), state: "running" }],
+      jobs: [{ id: "job_1", command: INSTALL_ARGV, state: "running" }],
       jobStateAfterWait: "running",
     });
 
@@ -96,7 +88,7 @@ describe("job inventory", () => {
     const handle = fakeSandbox({
       id: "sandbox_1",
       name: "paseo-1",
-      jobs: [{ id: "job_1", command: piInstallArgv(), state: "exited", exitCode: 1 }],
+      jobs: [{ id: "job_1", command: INSTALL_ARGV, state: "exited", exitCode: 1 }],
     });
 
     await expect(waitForInstallJob(handle, "job_1", 100)).resolves.toEqual({
@@ -134,7 +126,7 @@ describe("provision job lookup", () => {
       id: "sandbox_1",
       name: "paseo-1",
       jobs: [
-        { id: "pi", command: piInstallArgv(), state: "exited", exitCode: 0 },
+        { id: "pi", command: INSTALL_ARGV, state: "exited", exitCode: 0 },
         { id: "echo", command: ["echo"], state: "exited", exitCode: 0 },
       ],
     });

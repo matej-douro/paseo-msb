@@ -5,7 +5,10 @@ import {
   MAX_LOG_LINE_BYTES,
 } from "../../shared/constants";
 import { VmDetailOutputSchema } from "../../shared/contracts";
-import type { CanonicalPlan } from "../../shared/provisioning";
+import {
+  PROVISIONING_STATE_DIR,
+  type CanonicalPlan,
+} from "../../shared/provisioning";
 import { boundLogLines } from "../../server/logs";
 import { readVmDetail } from "../../server/rpc";
 import type { ReadContext } from "../../server/rpc";
@@ -71,13 +74,9 @@ describe("readVmDetail", () => {
         {
           id: "job_1",
           command: [
-            "npm",
-            "install",
-            "-g",
-            "--ignore-scripts",
-            "--prefix",
-            "/home/paseo/.local",
-            "@earendil-works/pi-coding-agent@1.1.0",
+            "/bin/sh",
+            `${PROVISIONING_STATE_DIR}/provision-0123456789abcdef.sh`,
+            "0123456789abcdef",
           ],
           state: "exited",
           exitCode: 0,

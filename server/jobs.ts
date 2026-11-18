@@ -1,6 +1,5 @@
 import { MAX_JOB_PAGES, MAX_JOB_PAGE_SIZE } from "../shared/constants";
 import { bounded, LifecycleAbortedError, LifecycleTimeoutError } from "./lanes";
-import { piInstallArgv } from "./pi-install";
 import type {
   SandboxHandleLike,
   SandboxJobInfoLike,
@@ -71,14 +70,6 @@ export async function listAllJobs(
 
   throw new JobInventoryError("pagination exceeded the page budget");
 }
-
-/** Exact argv match; `JobInfo.command` includes the executable and arguments. */
-export function isPiInstallJob(job: SandboxJobInfoLike): boolean {
-  const argv = piInstallArgv();
-  if (job.command.length !== argv.length) return false;
-  return job.command.every((value, index) => value === argv[index]);
-}
-
 
 export type InstallJobOutcome =
   | { readonly status: "succeeded"; readonly id: string }
@@ -158,18 +149,4 @@ export function classifyJob(info: SandboxJobInfoLike): InstallJobOutcome {
   }
   if (ACTIVE_STATES.has(info.state)) return { status: "running", id: info.id };
   return { status: "unknown", id: info.id };
-}
-
-/** The newest pinned install job, used to show bounded job logs. */
-export async function findLatestInstallJob(
-  handle: SandboxHandleLike,
-  options?: JobCallOptions,
-): Promise<SandboxJobInfoLike | null> {
-  const jobs = (await listAllJobs(handle, MAX_JOB_PAGE_SIZE, options)).filter(isPiInstallJob);
-  if (jobs.length === 0) return null;
-
-  const sorted = [...jobs].sort(
-    (left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0),
-  );
-  return sorted[sorted.length - 1] ?? null;
 }
