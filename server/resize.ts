@@ -104,8 +104,10 @@ export async function resizeVm(
   const diskStale =
     diskTarget !== undefined && requested.diskMib !== diskTarget;
   const restart = input.restart === true;
+  const resourceChanges = memoryChanges || diskChanges;
+  const desiredStale = memoryStale || diskStale;
 
-  if (!memoryChanges && !diskChanges && !memoryStale && !diskStale) {
+  if (!resourceChanges && !desiredStale) {
     return result(input, "unchanged", observed, requested);
   }
 
@@ -136,7 +138,7 @@ export async function resizeVm(
   };
 
   let plan: unknown = null;
-  if (memoryChanges || diskChanges) {
+  if (resourceChanges) {
     try {
       plan = await runMutation(
         context.mutations,
@@ -151,7 +153,12 @@ export async function resizeVm(
   }
 
   // Persist the desired value for a no_restart change or a clear-only request.
-  if (desired && !restart && (memoryChanges || diskChanges || memoryStale || diskStale)) {
+  // A restart is only meaningful for an actual resource change: a clear-only
+  // request always records the cleared value with a next_start env update, even
+  // when `restart: true` is supplied, because restarting cannot clear a marker
+  // and DESIGN §1.11 allows a restart only as a confirmed resize. The
+  // `desired !== null` guard still applies when an observation is unreported.
+  if (desired && (!restart || !resourceChanges)) {
     try {
       await runMutation(
         context.mutations,

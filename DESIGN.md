@@ -471,6 +471,8 @@ Resize shares the per-name lifecycle lane with Create, Repair, and Delete:
 
 A request mixing one converging resource with one restart-required resource returns `restart_required`, not `converging`. Restart-required state surviving `restart: true` is `resize_failed`. `applied` is never claimed when an effective field is unreported or still differs.
 
+A clear-only request—one whose target already matches the observation but differs from the persisted desired value—never restarts the VM, even when `restart: true` is supplied: it records the cleared desired value with a `next_start` env update and, for a running VM whose targets stay confirmed, reports `applied`. When an untargeted observation is unreported there is no complete desired value, so the env write is skipped and the previous desired value stays visible as pending.
+
 A stopped VM is not started by resize. A `no_restart` config or disk update may take effect on its next start; if the pinned runtime refuses that path, the result is `resize_failed`. Delete aborts the logical resize and checks the mutation registry before tombstoning or destroying; an unsettled native call blocks destruction with `mutation_pending`.
 
 ### 2.8 Live metrics pipeline

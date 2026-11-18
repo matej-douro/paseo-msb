@@ -66,6 +66,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Fixed
 
+- A clear-only resize sent with `restart: true`—a target that already matches
+  the observed resources but differs from the persisted desired value—now
+  records the cleared value instead of reporting `applied` while the stale
+  pending value stayed visible. Such a request never restarts the VM.
 - Git and registry installs no longer fail with
   `Could not resolve type dependency "microsandbox"`: those installs stage a
   bare checkout, so `paseo-plugin.json` now runs

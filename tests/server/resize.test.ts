@@ -125,6 +125,117 @@ describe("resizeVm", () => {
     );
   });
 
+  it("clears a stale desired value without restarting when restart is requested", async () => {
+    // A clear-only request has no resource change, so a restart cannot help:
+    // the cleared value is always recorded with a next_start env update.
+    const { handle, calls, context } = setup(
+      v11Options({
+        requestedResources: { cpus: 2, memoryMib: 8192, diskMib: 10240 },
+      }),
+    );
+
+    const result = await resizeVm(
+      context,
+      { name: NAME, id: ID, memoryMib: 4096, restart: true },
+      token(),
+    );
+
+    expect(result.result).toBe("applied");
+    expect(result.resources).toEqual({ cpus: 2, memoryMib: 4096, diskMib: 10240 });
+    expect(result.requestedResources).toBeNull();
+    expect(calls).toEqual([
+      {
+        env: {
+          [RESOURCES_ENV_VAR]: JSON.stringify({ cpus: 2, memoryMib: 4096, diskMib: 10240 }),
+        },
+        policy: "next_start",
+      },
+    ]);
+    expect(calls.some((call) => call.policy === "restart")).toBe(false);
+    expect(envValue(handle, RESOURCES_ENV_VAR)).toBe(
+      JSON.stringify({ cpus: 2, memoryMib: 4096, diskMib: 10240 }),
+    );
+  });
+
+  it("never persists a clear when the observation is incomplete", async () => {
+    // A clear-only request on a child with an unreported memory value has no
+    // complete desired value to record. The env write is skipped rather than
+    // persisting `null`, even when a restart is requested.
+    const { handle, calls, context } = setup(
+      v11Options({
+        requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 20480 },
+        configExtras: { resources: { cpus: 2 } },
+      }),
+    );
+
+    const result = await resizeVm(
+      context,
+      { name: NAME, id: ID, diskMib: 10240, restart: true },
+      token(),
+    );
+
+    expect(result.result).toBe("applied");
+    expect(result.resources).toEqual({ cpus: 2, memoryMib: null, diskMib: 10240 });
+    expect(calls).toEqual([]);
+    expect(envValue(handle, RESOURCES_ENV_VAR)).toBe(
+      JSON.stringify({ cpus: 2, memoryMib: 4096, diskMib: 20480 }),
+    );
+  });
+
+  it("applies a change and a stale clear atomically on restart", async () => {
+    const { calls, context } = setup(
+      v11Options({
+        requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 20480 },
+      }),
+    );
+
+    const result = await resizeVm(
+      context,
+      { name: NAME, id: ID, memoryMib: 8192, diskMib: 10240, restart: true },
+      token(),
+    );
+
+    expect(result.result).toBe("applied");
+    expect(result.resources).toEqual({ cpus: 2, memoryMib: 8192, diskMib: 10240 });
+    expect(result.requestedResources).toBeNull();
+    expect(calls).toEqual([
+      {
+        memory: 8192,
+        policy: "restart",
+        env: {
+          [RESOURCES_ENV_VAR]: JSON.stringify({ cpus: 2, memoryMib: 8192, diskMib: 10240 }),
+        },
+      },
+    ]);
+  });
+
+  it("applies a change and a stale clear with one next_start write when not restarting", async () => {
+    const { calls, context } = setup(
+      v11Options({
+        requestedResources: { cpus: 2, memoryMib: 4096, diskMib: 20480 },
+      }),
+    );
+
+    const result = await resizeVm(
+      context,
+      { name: NAME, id: ID, memoryMib: 8192, diskMib: 10240 },
+      token(),
+    );
+
+    expect(result.result).toBe("applied");
+    expect(result.resources).toEqual({ cpus: 2, memoryMib: 8192, diskMib: 10240 });
+    expect(result.requestedResources).toBeNull();
+    expect(calls).toEqual([
+      { memory: 8192, policy: "no_restart" },
+      {
+        env: {
+          [RESOURCES_ENV_VAR]: JSON.stringify({ cpus: 2, memoryMib: 8192, diskMib: 10240 }),
+        },
+        policy: "next_start",
+      },
+    ]);
+  });
+
   it("applies live RAM growth on a V1.1 sandbox and persists the desired value", async () => {
     const { handle, calls, context } = setup(v11Options());
 
