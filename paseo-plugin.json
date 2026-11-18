@@ -4,5 +4,6 @@
   "description": "Create microsandbox microVMs and use them as Paseo hosts.",
   "requirements": {
     "paseo": ">=0.15.4"
-  }
+  },
+  "build": [["npm", "ci", "--omit=dev", "--ignore-scripts"]]
 }
