@@ -33,8 +33,10 @@ as a directory plugin, then drives `vm.create`, `vm.dismiss`, `vm.list`,
 - Joins concurrent identical Create calls, rejects a conflicting plan for the
   same request, queues Repair without duplicating work, and repairs registration
   configuration drift without changing the registration ID.
-- Reloads after an injected `deleting` tombstone and verifies recovery destroys
-  the tombstoned generation and removes its registration without resuming setup.
+- Reloads after an injected `deleting` tombstone and verifies recovery neither
+  resumes nor destroys the tombstoned generation: Repair reports
+  `invalid_config`, the row lists as undecodable, and only Delete destroys the
+  generation and removes its registration.
 - Aborts an in-flight Create with Delete, recovers a replacement generation,
   rejects the stale generation token, and preserves the replacement.
 - Rejects a foreign same-name sandbox without relabelling or destroying it, then

@@ -146,9 +146,9 @@ Acceptance:
 - [x] `vm.resize` requires `name`, `id`, and at least one of `memoryMib` or
       `diskMib`; `restart` is optional.
 - [x] Resource bounds match DESIGN §2.7. Observed `memoryMib`/`diskMib` may be
-      null for legacy VMs; pending resources are non-null. Create accepts any
-      valid disk, while resize rejects a shrink, a null disk baseline, and a
-      memory target with a null baseline.
+      null when the runtime does not report them; pending resources are
+      non-null. Create accepts any valid disk, while resize rejects a shrink, a
+      null disk baseline, and a memory target with a null baseline.
 - [x] `vm.detail` accepts an optional `id` to select an exact sandbox or
       registration-only row; omitting it follows the name's pending attempt
       first, and detail does not include metrics.
@@ -223,7 +223,7 @@ substitute desired values for observations.
 Acceptance:
 
 - [x] New sandboxes report CPU, memory, and root-disk size from config.
-- [x] Legacy fields are `null` when not reported; an unreported root disk is
+- [x] Unreported fields are `null` when not reported; an unreported root disk is
       never invented.
 - [x] `requestedResources` and the resources-specified flag are decoded from
       environment; malformed resources or specified-flag values are
@@ -237,8 +237,8 @@ Acceptance:
       resources.
 - [x] The decoder never leaks raw config, env, or credential values through
       public DTOs.
-- [x] List/detail tests cover new, legacy, malformed, partially reported, and
-      same-name pending/sandbox merges.
+- [x] List/detail tests cover new, undecodable, malformed, partially reported,
+      and same-name pending/sandbox merges.
 
 Files: `server/sandbox.ts`, `server/status.ts`, `server/rpc.ts`,
 `tests/server/list.test.ts`, `tests/server/detail.test.ts`,
@@ -248,8 +248,8 @@ Files: `server/sandbox.ts`, `server/status.ts`, `server/rpc.ts`,
 
 Scan managed inventory by name before allocation. A Create that already owns a
 generation must use the same plan, resources, and resources-specified flag. A
-markerless legacy generation rejects explicit resources. Update registration
-label/metadata to the canonical name and repair drift.
+generation without plan or resource markers is undecodable and refused. Update
+registration label/metadata to the canonical name and repair drift.
 
 Acceptance:
 
@@ -261,10 +261,9 @@ Acceptance:
 - [x] A Create under a name owned by another plugin or parent fails with
       `name_conflict` and never relabels, adopts, or destroys the existing
       sandbox.
-- [x] A legacy sandbox without resource markers is joinable only when its name
-      matches the requested name and the request did not explicitly supply
-      resources. An explicit resource selection against a markerless legacy
-      sandbox is `invalid_request`.
+- [x] A sandbox without plan or resource markers is never joined or adopted:
+      Create and Repair refuse it with `invalid_config`, and only Delete removes
+      it.
 - [x] New registrations use `label = <name>` and
       `metadata = { source: "paseo-msb", name }`.
 - [x] Recovery/Repair update an enabled V1 registration from
@@ -272,7 +271,7 @@ Acceptance:
 - [x] Recovery, Repair, and Create still produce at most one registration per
       generation.
 - [x] Tests cover same-name join, different-shape conflict, post-ready reuse,
-      legacy omitted-vs-explicit resources, foreign-name conflict, failed-attempt
+      undecodable same-name refusal, foreign-name conflict, failed-attempt
       visibility, and registration drift.
 
 Files: `server/reconciler.ts`, `server/registration.ts`,
@@ -285,28 +284,28 @@ Files: `server/reconciler.ts`, `server/registration.ts`,
 ### 3.1 Add native mutation settlement
 
 Track every exact native `modify()` promise per name, including phase, error,
-environment, resource, and `deleting` tombstone labels. A `bounded()` timeout or
-lifecycle abort is not settlement. Delete and same-name allocation must not
-proceed while a mutation remains unsettled.
+environment, and resource labels. A `bounded()` timeout or lifecycle abort is
+not settlement. Delete and same-name allocation must not proceed while a
+mutation remains unsettled.
 
 Acceptance:
 
 - [x] A per-name mutation registry records every raw native `modify()` promise,
-      including phase/error labels and the `deleting` tombstone, and clears it
-      only when that promise settles.
+      including phase/error labels and resource/env writes, and clears it only
+      when that promise settles.
 - [x] The resize lane is held until the native call settles or the short
       settlement bound expires; an RPC timeout does not free the lane.
 - [x] Delete aborts the logical resize, then checks the registry. An unsettled
       mutation returns `mutation_pending` without tombstoning or destroying.
-- [x] The `deleting` tombstone is registered and awaited. If it does not settle,
-      Delete returns `mutation_pending` and does not destroy.
+- [x] Delete checks the registry before destroying and returns
+      `mutation_pending` without destroying while a mutation is unsettled.
 - [x] Same-name Create/Repair checks the registry and returns
       `mutation_pending` instead of allocating or advancing.
 - [x] `bounded()` is not treated as cancellation or settlement anywhere in the
       label/resize/Delete path.
 - [x] The raw-SDK identity contract is extended to label, environment, and
       resource `modify()` writes against a same-name replacement.
-- [x] Unit tests cover settled, timed-out, aborted, tombstone, label-write, and
+- [x] Unit tests cover settled, timed-out, aborted, label-write, and
       process-cleanup paths.
 - [x] The external-replacement residual window remains documented and is not
       claimed closed.
@@ -320,8 +319,8 @@ Files: `server/mutations.ts`, `server/lanes.ts`, `server/sandbox.ts`,
 
 Add the lane-serialized resize mutation using the mutation registry. It must
 refresh and compare the exact generation, enforce bounds and grow-only disk,
-handle legacy memory caps, apply with the verified policy, persist the desired
-resources, and report an honest outcome.
+preflight unreported memory caps, apply with the verified policy, persist the
+desired resources, and report an honest outcome.
 
 Acceptance:
 
@@ -339,12 +338,12 @@ Acceptance:
       table.
 - [x] `applied` is returned only when observed config confirms the target;
       unreported or still-different values cannot be reported as applied.
-- [x] A `no_restart` RAM target above the legacy/unknown `maxMemory` cap
-      returns `restart_required` before calling `modify()` and never includes
-      `maxMemory`.
-- [x] Legacy RAM growth includes `maxMemory` only on `restart: true`; the
-      restart path returns `applied` or `resize_failed` per the spike, while the
-      no-restart path returns `restart_required` as above.
+- [x] A `no_restart` RAM target above the observed `maxMemory` cap, or with an
+      unreported cap, returns `restart_required` before calling `modify()`; no
+      modify call includes `maxMemory`.
+- [x] A `restart: true` RAM change writes memory and the desired resources only;
+      it never writes `maxMemory`, and the result is `applied` or
+      `resize_failed` per the spike.
 - [x] `restart: true` is accepted only for the exact generation when it is
       `running`; created/stopped/crashed/paused VMs are rejected and never
       started.
@@ -355,8 +354,8 @@ Acceptance:
       `restart_required`.
 - [x] Raw SDK messages never cross the RPC boundary.
 - [x] Unit tests cover bounds, shrink, null baseline, no-op, clear-pending,
-      statuses, generation mismatch, legacy cap, restart states, modify failure,
-      and concurrent Delete.
+      statuses, generation mismatch, unreported cap, restart states, modify
+      failure, and concurrent Delete.
 
 Files: `server/resize.ts`, `server/index.ts`, `server/sandbox.ts`,
 `tests/server/resize.test.ts`, `tests/server/fake-runtime.ts`
@@ -612,10 +611,10 @@ Files: `client/ChildList.tsx`, `client/ChildDetail.tsx`, `client/state.ts`,
 
 ## 5. Verification and documentation
 
-### 5.1 Names, create identity, legacy, and registration integration
+### 5.1 Names, create identity, and registration integration
 
-Drive names, create identity, and legacy children through the real runtime and
-parent daemon.
+Drive names, create identity, and undecodable children through the real runtime
+and parent daemon.
 
 Acceptance:
 
@@ -629,12 +628,9 @@ Acceptance:
 - [ ] A repeated Create after readiness with a different plan, resources, or
       resources-specified flag is rejected as `invalid_request` and does not
       create a second VM; an identical shape joins the existing generation.
-- [ ] Generated names still work, and a real V1-shaped child without resource
-      markers can be listed, repaired, and deleted without being adopted. An
-      omitted-resources retry may join it; an explicit resource selection is
-      rejected.
-- [ ] The V1-shaped fixture has no explicit root disk, `maxMemory`, or metrics
-      interval, and keeps the old `<parent>/<name>` registration label.
+- [ ] Generated names still work. A child without plan or resource markers is
+      listed as undecodable, is never joined or adopted, and is removable with
+      Delete.
 - [ ] Canary credentials remain absent from RPC output, logs, raw sinks,
       pending state, labels, env, and test artifacts.
 - [ ] `npm run typecheck`, `npm run lint`, `npm test`, and
@@ -654,16 +650,17 @@ Acceptance:
 - [ ] Create-time RAM/disk are visible and match the requested values.
 - [ ] RAM growth and shrink cover applied, converging, and restart-required
       outcomes as verified by the resource spike.
-- [ ] Legacy `maxMemory` growth is covered or explicitly rejected with
-      `resize_failed`; it never creates a second VM or loses the registration.
-- [ ] Root-disk growth works; shrink and legacy-null disk changes are rejected.
+- [ ] RAM growth with an unreported cap returns `restart_required`, and no
+      resize writes `maxMemory`; it never creates a second VM or loses the
+      registration.
+- [ ] Root-disk growth works; shrink and null-baseline disk changes are
+      rejected.
 - [ ] Restart is rejected for created/stopped/crashed/paused VMs and never
       starts them.
 - [ ] A confirmed restart returns the routed host online on the same published
       port.
-- [ ] Delete waits for an unsettled native mutation, including an unsettled
-      `deleting` tombstone, and returns `mutation_pending` instead of
-      destroying.
+- [ ] Delete waits for an unsettled native mutation and returns
+      `mutation_pending` instead of destroying.
 - [ ] A mixed converging-plus-restart-required resize returns
       `restart_required`, not `converging`.
 - [ ] The identity contract covers stale-handle label, env, and resource writes.

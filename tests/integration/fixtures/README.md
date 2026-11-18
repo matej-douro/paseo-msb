@@ -7,7 +7,8 @@ and checks for the fixed credential policy.
 `vertical.test.ts` is the single plugin-driven release suite. Its closeout cases
 run in the same file as the original vertical path so they cannot race a plugin
 reload or the shared credential store: concurrent Create/Repair joining,
-registration configuration repair, reload after an injected Delete tombstone, Delete
+registration configuration repair, an injected Delete tombstone that is refused
+and removable only with Delete, Delete
 aborting an in-flight Create, stale-generation Delete rejection, a foreign
 same-name sandbox, two active matching provision jobs, and dismissing a failed
 pending attempt. `identity-contract.test.ts` checks the stale-handle

@@ -9,7 +9,7 @@ This V1.1 specification has two complementary parts:
 
 The first part describes what the user should see and be able to do. The second part is the implementation and verification contract; in particular, a simple UI must not imply weaker safety or recovery guarantees.
 
-The ASCII mockups are structural rather than pixel-perfect. They follow the current two-pane/compact layout in `client/screen.tsx`, the Create flow in `client/CreateChild.tsx`, and the detail sheet in `client/ChildDetail.tsx`. Proposed additions are labelled explicitly: live metrics render today, while resource editing and the rolling metrics chart remain proposed.
+The ASCII mockups are structural rather than pixel-perfect. They follow the current two-pane/compact layout in `client/screen.tsx`, the Create flow in `client/CreateChild.tsx`, and the detail sheet in `client/ChildDetail.tsx`. Sections marked `[V1.1]` describe the resource, resize, and live-metrics additions that this build implements alongside the original flows.
 
 ## 1. The user experience
 
@@ -148,7 +148,7 @@ Setup has four user-visible phases:
 
 An error produces a failed presentation without erasing the next actionable phase. The user can inspect bounded logs and use Retry or Repair as appropriate. Provisioning failures preserve the VM, jobs, and registration for diagnosis and retry rather than deleting the evidence.
 
-`deleting` is a cleanup phase, not a setup failure. Reloading during setup resumes reconciliation; reloading during deletion resumes cleanup, never setup.
+Reloading during setup resumes reconciliation. A leftover `deleting` tombstone from an older build is refused as an undecodable config and never resumed, replaced, or destroyed.
 
 After a child becomes ready, the plugin does not continuously monitor tool health, repair configuration drift, or re-provision it. Repair remains an explicit user action.
 
@@ -242,7 +242,7 @@ Metrics are live and display-only; the chart is a bounded rolling view of sample
 +-------------------------------------------------------------------------+
 ```
 
-The dialog shows current and target values and enforces the RAM and disk bounds listed above. Disk shrink is rejected. If a legacy VM does not report its disk size, disk resize is disabled; if it does not report effective RAM, a RAM target is rejected until Repair can establish the value. The plugin never guesses a missing baseline.
+The dialog shows current and target values and enforces the RAM and disk bounds listed above. Disk shrink is rejected. If a VM does not report its disk size, disk resize is disabled; if it does not report effective RAM, a RAM target is rejected until Repair can establish the value. The plugin never guesses a missing baseline.
 
 Some RAM changes require a restart. In that case, the user first receives a `restart_required` result and can then confirm one explicit restart-and-apply action. The confirmation warns that active sessions will disconnect. Restart is offered only for a running VM; stopped or crashed VMs show why they cannot be restarted, and resize never starts them.
 
@@ -318,7 +318,7 @@ The client polls `vm.list` and `vm.detail` only while the screen is mounted. Whi
 
 `vm.list` merges pending creates, managed sandboxes, and registrations, including registration-only children. An active pending attempt is replaced when a sandbox with its name exists; a failed attempt remains visible beside a same-name sandbox or registration-only child so its error stays actionable. API failures produce explicit errors or partial results, never an authoritative empty inventory.
 
-Public DTOs are allowlisted. Raw microsandbox config, environment, and secret values never enter them. Resource values are bounded integers or `null` for unreported legacy fields; metrics are bounded numeric samples.
+Public DTOs are allowlisted. Raw microsandbox config, environment, and secret values never enter them. Resource values are bounded integers or `null` when a field is unreported; metrics are bounded numeric samples.
 
 ### 2.3 Identity, metadata, and registration
 
@@ -336,9 +336,9 @@ The form generates `paseo-<token>` from a short 10-character lowercase alphanume
 
 Pending attempts are keyed by name, so at most one is active per name. A repeated Create must match the original canonical provider/integration plan, resources, and resources-specified flag: an identical request joins the running attempt, a failed attempt restarts, and a different shape receives synchronous `invalid_request`. A live sandbox supersedes an active pending row; a failed attempt stays visible beside it.
 
-The reconciler looks the sandbox up by name. A Create that finds an existing managed sandbox under its name joins it only when the recorded shape matches: the persisted plan (or, for a legacy child, the credential names it was created with) plus the desired resources and the resources-specified flag. A mismatch returns `invalid_request` and never rewrites the child; a failure after allocation is reported on the sandbox and is not repeated as a second pending row. A sandbox owned by another plugin or parent returns `name_conflict` and is never adopted or relabelled.
+The reconciler looks the sandbox up by name. A Create that finds an existing managed sandbox under its name joins it only when the recorded shape matches: the persisted plan plus the desired resources and the resources-specified flag. A mismatch returns `invalid_request` and never rewrites the child; a failure after allocation is reported on the sandbox and is not repeated as a second pending row. A sandbox owned by another plugin or parent returns `name_conflict` and is never adopted or relabelled.
 
-A markerless V1 sandbox has no resource variables. It can be joined under its name when the requested plan's credentials match the generation and the request omitted resources; an explicit resource selection is rejected. Once the generation no longer exists, a leftover registration-only child is not adopted: a Create under that name proceeds, and cleanup removes the stale registration.
+A sandbox without the plan or resource variables is not a child this build can decode. It is never joined or adopted: Create and Repair refuse it with `invalid_config`, it lists as a quarantined row, and only Delete removes it. Once the generation no longer exists, a leftover registration-only child is not adopted: a Create under that name proceeds, and cleanup removes the stale registration.
 
 Strict name-create prevents duplicate allocation. The name identifies the current managed generation, while `handle.id` identifies that generation exactly. Every guest operation, resize, and destroy uses the loaded handle and verifies its generation; an unverified fresh name lookup is not a valid reconnect.
 
@@ -352,21 +352,21 @@ PASEO_MSB_RESOURCES=<canonical { cpus, memoryMib, diskMib } JSON>
 PASEO_MSB_RESOURCES_SPECIFIED=0|1
 ```
 
-These values are configuration and recovery hints, not ownership proof. `PASEO_MSB_RESOURCES_SPECIFIED` records the original Create shape and is not changed by resize. V1 sandboxes may have no resource variables; they remain recoverable under their name without being adopted into a different attempt.
+These values are configuration and recovery hints, not ownership proof. `PASEO_MSB_RESOURCES_SPECIFIED` records the original Create shape and is not changed by resize. A sandbox without these variables is undecodable: section 2.3 describes how it is refused and removed.
 
 New managed sandboxes have only these labels:
 
 ```text
 paseo-msb=v1
 paseo-msb-parent=<parent serverId>
-paseo-msb-phase=creating|installing|registering|ready|deleting
+paseo-msb-phase=creating|installing|registering|ready
 paseo-msb-error=<short safe code, optional>
 paseo-msb-error-detail=<bounded redacted detail, optional>
 ```
 
-`paseo-msb=v1` is an inventory-schema marker, not a release version; it remains unchanged in V1.1 so existing children stay visible to listing and recovery. Labels communicate progress and ownership hints but never prove an external side effect. An error does not discard the next actionable phase, and `deleting` is cleanup-only.
+`paseo-msb=v1` is an inventory-schema marker, not a release version; it remains unchanged in V1.1 so existing children stay visible to listing. Labels communicate progress and ownership hints but never prove an external side effect. An error does not discard the next actionable phase.
 
-Legacy `failed` and `paseo-msb-id` labels may be read while existing children migrate. A present, mismatched legacy ID quarantines the VM instead of allowing adoption.
+The managed labels are the plugin version, parent id, phase, error code, and bounded error detail. Unknown labels are ignored and never projected; a persisted `failed` phase is projected as an undecodable config instead of a resumable failure.
 
 #### Parent registration
 
@@ -404,7 +404,7 @@ A residual race remains: an external actor can replace the generation between re
 
 The reconciler observes actual resources and advances only unambiguous steps:
 
-1. **Resolve the attempt.** Reject an unsettled native mutation with `mutation_pending`. Look the sandbox up by name and apply the shape and name-conflict rules in section 2.3. A legacy `deleting` tombstone is finished, never resumed: its generation is destroyed and its host rows are cleaned, and a Create may then allocate a fresh generation. The manifest declares the parent floor, the package pins the SDK, and the release suite verifies the supported parent/SDK/runtime combination. Only when initial creation is needed, resolve required credential values from the store and then the parent environment. Recovery of an existing sandbox needs its persisted plan, never old credential values.
+1. **Resolve the attempt.** Reject an unsettled native mutation with `mutation_pending`. Look the sandbox up by name and apply the shape and name-conflict rules in section 2.3. A `deleting` tombstone left by an older build is an undecodable phase: the attempt fails with `invalid_config`, and the generation is never resumed, replaced, or destroyed; only Delete removes it. The manifest declares the parent floor, the package pins the SDK, and the release suite verifies the supported parent/SDK/runtime combination. Only when initial creation is needed, resolve required credential values from the store and then the parent environment. Recovery of an existing sandbox needs its persisted plan, never old credential values.
 2. **Allocate if absent.** Strictly create the pinned image, detached, with requested CPU and RAM, `maxMemory` set to the allowed maximum for later live hotplug where supported, the requested managed root disk, a 2-second metrics interval, managed labels and plan/resource variables, only selected header-only secrets, and a loopback-only published port for guest 6767. The verified image requires explicit `/usr/bin/tini -- /usr/local/bin/paseo-docker-entrypoint`. Host port `0` is unsupported, so the plugin probes and retries internally. If Create fails but the named managed sandbox appeared, continue through that exact handle.
 3. **Provision once.** Materialize content-addressed `/home/paseo/.paseo-msb/provision-<planHash>.sh` and run it as one detached job. Base steps always run first and install the plugin-provided VM setup skill. The status file is the success proof. Each step probes first so retries skip completed work. Await one active matching job; never start another because inventory or inspection failed, and preserve uncertain `JobError.jobId` values when available.
 4. **Advance after proof.** After a successful status, move to `registering`.
@@ -447,7 +447,7 @@ resources = { cpus, memoryMib, diskMib }
 
 For a pending child, these are the requested values, and `resourcesSpecified` records whether Create supplied a resources object so Retry preserves an omission. Sandbox rows do not expose that flag. For a sandbox, observed values come only from microsandbox config. `PASEO_MSB_RESOURCES` records desired values and never substitutes for observation. `requestedResources` appears when desired and observed values differ, making a pending restart or convergence visible.
 
-CPU is a bounded integer from 1–16, default 2, fixed at Create. RAM and disk are bounded integers or `null` when the pinned runtime does not report a legacy field. An observed `diskMib: null` disables grow-only disk resize because there is no safe baseline. A memory target with `memoryMib: null` is rejected until Repair can report the effective value.
+CPU is a bounded integer from 1–16, default 2, fixed at Create. RAM and disk are bounded integers or `null` when the pinned runtime does not report that field. An observed `diskMib: null` disables grow-only disk resize because there is no safe baseline. A memory target with `memoryMib: null` is rejected until Repair can report the effective value.
 
 `vm.resize({ name, id, memoryMib?, diskMib?, restart? })` is the only resource mutation. At least one target is required; there is no CPU target. RAM is 1024–32768 MiB in 256 MiB steps. Root disk is 1024–262144 MiB in 1024 MiB steps and is grow-only.
 
@@ -455,8 +455,8 @@ Resize shares the per-name lifecycle lane with Create, Repair, and Delete:
 
 1. Reject an unsettled native mutation with `mutation_pending`. Re-read the exact handle and compare `handle.id` with `id`.
 2. Compare targets with observed and previously requested resources. A target equal to both is `unchanged` with no `modify()` call. A target equal to observed but different from requested clears the pending desired value without changing the resource. Disk below observed, disk with a `null` observed baseline, and memory with a `null` observed baseline are `invalid_request`.
-3. For RAM growth above a legacy VM's observed `maxMemory` cap, or when that cap is unreported, a `no_restart` request returns `restart_required` before `modify()` and never includes `maxMemory`. A `restart: true` call may include `maxMemory = MAX_MEMORY_MIB`; if the pinned runtime refuses the cap change, the result is `resize_failed`.
-4. Call the exact handle's `modify()` with resource targets, any required `maxMemory`, and canonical `PASEO_MSB_RESOURCES` desired values. Register the native promise in the per-name mutation registry and hold the lane until settlement or the settlement bound. Apply the refresh/compare guard from section 2.4.
+3. For RAM growth above the observed `maxMemory` cap, or when that cap is unreported, a `no_restart` request returns `restart_required` before `modify()`. No modify call ever writes `maxMemory`: every child boots with the maximum hotplug cap.
+4. Call the exact handle's `modify()` with resource targets and canonical `PASEO_MSB_RESOURCES` desired values. Register the native promise in the per-name mutation registry and hold the lane until settlement or the settlement bound. Apply the refresh/compare guard from section 2.4.
 5. With `restart` omitted or false, use the SDK's `no_restart` policy. With `restart: true`, use the SDK's `restart` policy only when the exact generation is currently `running`. `created`, `stopped`, `crashed`, and `paused` generations return `invalid_request` for restart and are never started. Registration and published port are expected to survive restart; the release test verifies that the routed host returns online.
 6. Re-read effective resources, aggregate per-resource outcomes, and select the result using this evaluation order:
 
@@ -524,7 +524,7 @@ Each sweep considers **all** registrations with `source.id = plugin:paseo-msb`, 
 
 The sweep runs at most one pass at a time, `vm.list` never waits for it, and a name whose lookup or removal fails is retried after a short cooldown. Confirmed removal makes the registration-only row disappear. While a lookup is unavailable, the row is retained and the client presents `VM state unknown`, not `Missing`. Completely hiding these rows would be unsafe because unresolved cleanup still needs a visible recovery path.
 
-`vm.reconcile` is the single Repair mutation and uses the reconciler from section 2.5. It resumes unambiguous provisioning or registration work, restores missing registrations, repairs display drift, and cleans stale plugin-owned rows for the names it handles. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It never initiates deletion; finishing a legacy `deleting` tombstone is cleanup, not a new Repair deletion. A ready child’s Paseo tools and orchestration-skill selection is user-owned and is not reapplied.
+`vm.reconcile` is the single Repair mutation and uses the reconciler from section 2.5. It resumes unambiguous provisioning or registration work, restores missing registrations, repairs display drift, and cleans stale plugin-owned rows for the names it handles. It does not create sandboxes, start stopped VMs, adopt unlabelled sandboxes, or guess through ambiguous, foreign, duplicate, or confirmed provisioning-failure state. It never initiates deletion; a `deleting` tombstone left by an older build is refused as `invalid_config` and never resumed or destroyed. A ready child’s Paseo tools and orchestration-skill selection is user-owned and is not reapplied.
 
 Lookup errors for the named child block destructive cleanup, and the row is retried later. A live different generation proves the older generation is stale, so the older row is removed and the live row is kept.
 
@@ -558,15 +558,15 @@ The desktop app is a separate observer, not a second host registry this plugin o
 
 ### 2.11 Required verification and release bar
 
-The release test must drive all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and after a legacy deletion tombstone, Repair, Dismiss, and Delete. It must also cover:
+The release test must drive all lifecycle RPCs through Create, background progress, selected-provider readiness, reload during provisioning and after an injected `deleting` tombstone, Repair, Dismiss, and Delete. It must also cover:
 
-- generated and custom names, duplicate-name rejection, repeat-create joining and shape rejection, and legacy name-based recovery without adoption;
-- repeated Creates after readiness, including rejection of a different plan, resources, or resources-specified flag instead of creating a second VM, plus legacy rejection of explicit resources;
+- generated and custom names, duplicate-name rejection, repeat-create joining and shape rejection, and undecodable children listed without adoption;
+- repeated Creates after readiness, including rejection of a different plan, resources, or resources-specified flag instead of creating a second VM;
 - registration label and metadata presenting the chosen name in the parent host directory;
 - background stale-registration convergence without UI polling, including every stale row for a child name, older registrations hidden behind same-name live VMs, retry after removal failure, `VM state unknown` rather than `Missing` when the lookup is unavailable, and candidate reconstruction after plugin restart;
-- create-time RAM and root-disk values and resource decoding for new and legacy V1 sandboxes, including nullable legacy fields;
-- RAM growth and shrink, legacy `maxMemory` growth, live or restart-required convergence, mixed converging-plus-restart-required severity, root-disk growth, root-disk-shrink rejection, legacy-null disk rejection, stopped/created/crashed/paused restart rejection, exact-generation resize, and Delete waiting on an unsettled native mutation;
-- a Create over a legacy `deleting` tombstone: a shape-matched request completes that exact cleanup and reaches ready with a new generation;
+- create-time RAM and root-disk values and resource decoding, including nullable unreported fields;
+- RAM growth and shrink, unreported-cap growth returning `restart_required`, live or restart-required convergence, mixed converging-plus-restart-required severity, root-disk growth, root-disk-shrink rejection, null-baseline rejection, stopped/created/crashed/paused restart rejection, exact-generation resize, and Delete waiting on an unsettled native mutation;
+- a Create over a `deleting` tombstone: the attempt fails with `invalid_config`, the generation is never resumed or destroyed, and Delete removes it;
 - the routed host returning online after a confirmed restart; and
 - live metrics values through `vm.metrics`, server-side coalescing of unresolved native reads, the 3-second single-flight poll, stale/future/duplicate handling, and unavailable reasons for stopped, disabled, and failed metrics reads.
 

@@ -25,9 +25,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   selected providers are ready. It needs no credential and is unchecked by
   default.
 - Failed pending Create attempts can be dismissed without a plugin reload.
-- The release suite covers concurrent Create/Repair, registration drift,
-  legacy deletion-tombstone recovery, stale generations, foreign-name conflicts,
-  provision-job conflicts, and the raw-SDK stale-handle identity contract.
+- The release suite covers concurrent Create/Repair, registration drift, an
+  injected Delete tombstone that is refused and removable only with Delete,
+  stale generations, foreign-name conflicts, provision-job conflicts, and the
+  raw-SDK stale-handle identity contract.
 
 ### Changed
 
@@ -46,8 +47,10 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   only while an exact lookup of its child name returns that row's generation id.
   Delete no longer writes a durable `deleting` tombstone; it destroys the
   confirmed generation and removes every plugin-owned host row for the name, and
-  the sweep converges any row left by an interrupted Delete. Legacy `deleting`
-  tombstones are still finished, never resumed.
+  the sweep converges any row left by an interrupted Delete. A leftover
+  `deleting` tombstone from an earlier version is never resumed, replaced, or
+  destroyed automatically: it lists as an undecodable child and only Delete
+  removes it.
 - Registration-only children are presented as transient cleanup states: while
   absence is unproven they show `VM state unknown`, not `Missing`, and Repair
   and Delete remain available.
@@ -63,8 +66,6 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Fixed
 
-- A Create that meets a legacy Delete tombstone completes that cleanup and
-  allocates a fresh generation instead of reporting success for cleanup alone.
 - A Create blocked by an existing attempt for the same name now suggests
   retrying, dismissing, or choosing another name instead of only saying the
   request is invalid.
@@ -93,6 +94,16 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Removed
 
+- Backwards compatibility with children created by paseo-msb 1.0.x. A sandbox
+  without `PASEO_MSB_PLAN`/`PASEO_MSB_RESOURCES`, with a persisted `failed`
+  phase, or with a leftover `deleting` tombstone is no longer adopted, joined,
+  repaired, or cleaned up automatically: it lists as an undecodable
+  (`Quarantined`) child and only Delete removes it. The legacy Pi-only install
+  job and its recovery path, the legacy `paseo-msb-id`/`paseo-msb-job` identity
+  labels and their quarantine rule, and the legacy `install_failed`,
+  `install_pending`, `install_conflict`, and `path_unverified` error codes are
+  gone. A resize never writes `maxMemory`; every new child boots with the
+  maximum hotplug cap.
 - Superseded spike harnesses and their fixtures; the durable identity contract
   now lives in the integration suite.
 - Unused client helpers, test-only server helpers, dead constants, the unused

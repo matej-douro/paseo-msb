@@ -68,7 +68,9 @@ The canonical plan contains identifiers only:
   Changing a pin changes the hash and therefore the provision job identity.
 - The plan is persisted in pending state and in the sandbox env as
   `PASEO_MSB_PLAN`. Values never appear there.
-- VMs without `PASEO_MSB_PLAN` are treated as Pi-only.
+- VMs without `PASEO_MSB_PLAN` and the resource markers are not managed
+  children: they list as undecodable (`Quarantined`) rows and only Delete
+  removes them.
 - Repair only re-provisions when phase is not `ready`.
 
 ## Provisioning

@@ -76,7 +76,7 @@ registers the exact generation, waits for routed online, confirms selected
 providers, applies the **Paseo tools** integration when selected, then marks it
 `ready`.
 
-Phase (`creating`, `installing`, `registering`, `ready`, `deleting`) is a hint,
+Phase (`creating`, `installing`, `registering`, `ready`) is a hint,
 not proof of a side effect. A repeated Create under the same name joins the same
 reconciliation and must use the original plan and resource shape. Provisioning
 or **Paseo tools** setup failures are fatal; Retry or Repair re-runs the
@@ -177,8 +177,10 @@ does not monitor tool health, repair drift, or re-provision; stopped VMs are not
 started automatically.
 
 Detached sandboxes, jobs, and registrations survive restarts; recovery
-reconciles them without creating, starting, or adopting a VM and only completes
-an explicit legacy `deleting` tombstone. The pinned SDK's `modify()` is not
+reconciles them without creating, starting, or adopting a VM. A sandbox this
+build cannot decode — for example one created by an older plugin version — is
+never resumed or repaired: it lists as a quarantined child and only Delete
+removes it. The pinned SDK's `modify()` is not
 generation-bound, so label writes are best-effort hints; [DESIGN.md](./DESIGN.md)
 documents the residual window.
 
