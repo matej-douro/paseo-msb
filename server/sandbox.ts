@@ -38,6 +38,7 @@ import {
 } from "../shared/contracts";
 import { isSafeErrorCode, safeError, type SafeErrorCode } from "../shared/errors";
 import { parseProvisionPlan, type CanonicalPlan } from "../shared/provisioning";
+import { asRecord, EnvEntrySchema } from "./decode";
 import { failureDetail, persistedCredentialValues } from "./diagnostics";
 import { bounded } from "./lanes";
 import type { MutationRegistry } from "./mutations";
@@ -567,30 +568,29 @@ export function ownershipOf(handle: SandboxHandleLike, parentId: string): Sandbo
  * Normalizes the SDK's array-shaped env and the CLI's record-shaped env.
  * Values are only used for the non-secret plan variable and credential names.
  */
-function readEnvRecord(env: unknown): Readonly<Record<string, string>> {
-  if (Array.isArray(env)) {
+const EnvSchema = z.union([
+  z.array(z.unknown()).transform((entries) => {
     const record: Record<string, string> = {};
-    for (const entry of env) {
-      const item = asRecord(entry);
-      const name =
-        typeof item?.name === "string"
-          ? item.name
-          : typeof item?.key === "string"
-            ? item.key
-            : undefined;
-      const value = item?.value;
-      if (typeof name === "string" && typeof value === "string") record[name] = value;
+    for (const entry of entries) {
+      const parsed = EnvEntrySchema.safeParse(entry);
+      if (!parsed.success) continue;
+      const name = parsed.data.name ?? parsed.data.key;
+      if (name !== undefined) record[name] = parsed.data.value;
     }
     return record;
-  }
+  }),
+  z.looseObject({}).transform((entries) => {
+    const record: Record<string, string> = {};
+    for (const [name, value] of Object.entries(entries)) {
+      if (typeof value === "string") record[name] = value;
+    }
+    return record;
+  }),
+]);
 
-  const record = asRecord(env);
-  if (!record) return {};
-  const result: Record<string, string> = {};
-  for (const [name, value] of Object.entries(record)) {
-    if (typeof value === "string") result[name] = value;
-  }
-  return result;
+function readEnvRecord(env: unknown): Readonly<Record<string, string>> {
+  const parsed = EnvSchema.safeParse(env);
+  return parsed.success ? parsed.data : {};
 }
 
 function readPlanFromEnv(env: unknown): CanonicalPlan {
@@ -622,10 +622,15 @@ function firstValue(
   return undefined;
 }
 
-function readBoundedInteger(value: unknown, min: number, max: number): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max
-    ? value
-    : null;
+/** Bounded integers for the resources a sandbox reports about itself. */
+const CpusValueSchema = z.number().int().min(CPUS_MIN).max(CPUS_MAX);
+const MemoryValueSchema = z.number().int().min(MEMORY_MIB_MIN).max(MEMORY_MIB_MAX);
+const DiskValueSchema = z.number().int().min(ROOT_DISK_MIB_MIN).max(ROOT_DISK_MIB_MAX);
+
+/** The bounded value, or null when the field is absent or outside the bounds. */
+function boundedOrNull(value: unknown, schema: z.ZodType<number>): number | null {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -637,7 +642,7 @@ function decodeObservedResources(
 ): VmObservedResources {
   const resources = asRecord(firstValue(config, ["resources"]));
   const rawCpus = firstValue(resources, ["cpus"]);
-  const reportedCpus = readBoundedInteger(rawCpus, CPUS_MIN, CPUS_MAX);
+  const reportedCpus = boundedOrNull(rawCpus, CpusValueSchema);
   // A present but out-of-range CPU count is malformed, not unreported. An
   // absent value keeps the fixed default shape.
   if (rawCpus !== undefined && reportedCpus === null) {
@@ -650,47 +655,45 @@ function decodeObservedResources(
 
   return {
     cpus: reportedCpus ?? CPUS,
-    memoryMib: readBoundedInteger(
+    memoryMib: boundedOrNull(
       firstValue(resources, ["memoryMib", "memory_mib"]),
-      MEMORY_MIB_MIN,
-      MEMORY_MIB_MAX,
+      MemoryValueSchema,
     ),
-    diskMib: readBoundedInteger(
-      firstValue(rootDisk, ["sizeMib", "size_mib"]),
-      ROOT_DISK_MIB_MIN,
-      ROOT_DISK_MIB_MAX,
-    ),
+    diskMib: boundedOrNull(firstValue(rootDisk, ["sizeMib", "size_mib"]), DiskValueSchema),
   };
 }
+
+/**
+ * The resources variables are written together; either alone is a partial write.
+ * The JSON payload is decoded and shape-checked in the same schema, so a
+ * malformed write reports `invalid_config` instead of throwing `SyntaxError`.
+ */
+const ResourcesEnvSchema = z.object({
+  [RESOURCES_ENV_VAR]: z
+    .string()
+    .transform((value, ctx) => {
+      try {
+        return JSON.parse(value) as unknown;
+      } catch {
+        ctx.addIssue({ code: "custom", message: "invalid resources JSON" });
+        return z.NEVER;
+      }
+    })
+    .pipe(VmResourcesSchema),
+  [RESOURCES_SPECIFIED_ENV_VAR]: z.enum(["0", "1"]),
+});
 
 /** Desired resources and the internal resources-specified flag from the environment. */
 function readResourcesEnv(env: unknown): {
   readonly requestedResources: VmResources;
   readonly resourcesSpecified: boolean;
 } {
-  const record = readEnvRecord(env);
-  const rawResources = record[RESOURCES_ENV_VAR];
-  const rawSpecified = record[RESOURCES_SPECIFIED_ENV_VAR];
-
-  if (rawResources === undefined || rawSpecified === undefined) {
-    throw new SandboxDecodeError("invalid_config");
-  }
-  if (rawSpecified !== "0" && rawSpecified !== "1") {
-    throw new SandboxDecodeError("invalid_config");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawResources);
-  } catch {
-    throw new SandboxDecodeError("invalid_config");
-  }
-  const resources = VmResourcesSchema.safeParse(parsed);
-  if (!resources.success) throw new SandboxDecodeError("invalid_config");
+  const parsed = ResourcesEnvSchema.safeParse(readEnvRecord(env));
+  if (!parsed.success) throw new SandboxDecodeError("invalid_config");
 
   return {
-    requestedResources: resources.data,
-    resourcesSpecified: rawSpecified === "1",
+    requestedResources: parsed.data[RESOURCES_ENV_VAR],
+    resourcesSpecified: parsed.data[RESOURCES_SPECIFIED_ENV_VAR] === "1",
   };
 }
 
@@ -749,11 +752,7 @@ export function readSandboxMaxMemoryMib(handle: SandboxHandleLike): number | nul
   }
 
   const resources = asRecord(firstValue(asRecord(raw), ["resources"]));
-  return readBoundedInteger(
-    firstValue(resources, ["maxMemoryMib", "max_memory_mib"]),
-    MEMORY_MIB_MIN,
-    MEMORY_MIB_MAX,
-  );
+  return boundedOrNull(firstValue(resources, ["maxMemoryMib", "max_memory_mib"]), MemoryValueSchema);
 }
 
 export function isSandboxReplacedError(error: unknown): boolean {
@@ -826,10 +825,6 @@ export async function markSandboxError(
     detail,
     tracking,
   });
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 function readPortNumber(...values: unknown[]): number | null {

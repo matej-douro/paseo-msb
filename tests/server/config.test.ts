@@ -12,6 +12,7 @@ import {
 import {
   decodeManagedSandbox,
   loadManagedSandboxes,
+  readSandboxMaxMemoryMib,
   SandboxDecodeError,
 } from "../../server/sandbox";
 import {
@@ -122,6 +123,89 @@ describe("decodeManagedSandbox", () => {
     expect(decoded!.resourcesSpecified).toBe(false);
   });
 
+  it("decodes a record-shaped CLI env and ignores non-string values", () => {
+    const handle = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: {
+        env: {
+          [PLAN_ENV_VAR]: JSON.stringify(DEFAULT_PLAN),
+          [RESOURCES_ENV_VAR]: JSON.stringify({ cpus: 4, memoryMib: 8192, diskMib: 20480 }),
+          [RESOURCES_SPECIFIED_ENV_VAR]: "1",
+          IGNORED: 7,
+        },
+      },
+    });
+
+    const decoded = decodeManagedSandbox(handle, PARENT_ID);
+
+    expect(decoded!.plan).toEqual(DEFAULT_PLAN);
+    expect(decoded!.requestedResources.cpus).toBe(4);
+    expect(decoded!.resourcesSpecified).toBe(true);
+  });
+
+  it("keeps an out-of-range memory or disk report unreported rather than failing the VM", () => {
+    const withMemory = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: { env: managedEnv(), resources: { cpus: 2, memoryMib: 512 } },
+    });
+    expect(decodeManagedSandbox(withMemory, PARENT_ID)!.resources).toEqual({
+      cpus: 2,
+      memoryMib: null,
+      diskMib: null,
+    });
+
+    const withDisk = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: { env: managedEnv(), image: { Oci: { rootDisk: { sizeMib: 1 } } } },
+    });
+    expect(decodeManagedSandbox(withDisk, PARENT_ID)!.resources.diskMib).toBeNull();
+  });
+
+  it("reads the reported boot-time memory cap and ignores invalid values", () => {
+    const capped = fakeSandbox({
+      id: "sbx_1",
+      name: "paseo-1",
+      rawConfig: { env: managedEnv(), resources: { cpus: 2, maxMemoryMib: 8_192 } },
+    });
+    expect(readSandboxMaxMemoryMib(capped)).toBe(8_192);
+
+    for (const maxMemoryMib of [0, 2.5, 40_000]) {
+      const invalid = fakeSandbox({
+        id: "sbx_1",
+        name: "paseo-1",
+        rawConfig: { env: managedEnv(), resources: { cpus: 2, maxMemoryMib } },
+      });
+      expect(readSandboxMaxMemoryMib(invalid)).toBeNull();
+    }
+  });
+
+  it("decodes object-shaped env bags the record branch accepts", () => {
+    const fields = {
+      [PLAN_ENV_VAR]: JSON.stringify(DEFAULT_PLAN),
+      [RESOURCES_ENV_VAR]: JSON.stringify({ cpus: 4, memoryMib: 8192, diskMib: 20480 }),
+      [RESOURCES_SPECIFIED_ENV_VAR]: "1",
+    };
+    // A class instance is what separates `z.looseObject` from `z.record`; the
+    // null-prototype bag covers the other non-plain object shape.
+    class EnvBag {}
+
+    for (const env of [
+      Object.assign(new EnvBag(), fields),
+      Object.assign(Object.create(null), fields),
+    ]) {
+      const handle = fakeSandbox({ id: "sbx_1", name: "paseo-1", rawConfig: { env } });
+
+      const decoded = decodeManagedSandbox(handle, PARENT_ID);
+
+      expect(decoded!.plan).toEqual(DEFAULT_PLAN);
+      expect(decoded!.requestedResources.cpus).toBe(4);
+      expect(decoded!.resourcesSpecified).toBe(true);
+    }
+  });
+
   it("requires the plan and both resource variables", () => {
     for (const env of [
       [],
@@ -203,7 +287,11 @@ describe("decodeManagedSandbox", () => {
       ),
     ).toThrow(SandboxDecodeError);
 
-    for (const badResources of ["{not json", JSON.stringify({ cpus: 2, memoryMib: 1000 })]) {
+    // A single-cause failure: the payload is complete but memory is below the bound.
+    for (const badResources of [
+      "{not json",
+      JSON.stringify({ cpus: 2, memoryMib: 1000, diskMib: 10240 }),
+    ]) {
       expect(() =>
         decodeManagedSandbox(
           handleWith([
