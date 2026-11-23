@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CREDENTIAL_NAMES, MAX_ERROR_DETAIL_CHARS } from "../shared/constants";
+import { asRecord, EnvEntrySchema } from "./decode";
 import { redact } from "./logs";
 
 /**
@@ -18,13 +19,59 @@ export function failureDetail(
   return bounded.length > 0 ? bounded : null;
 }
 
+/** One persisted network secret entry; only the redacted fields are read. */
+const SecretEntrySchema = z.looseObject({
+  envVar: z.string(),
+  value: z.string().min(1),
+});
+
+/**
+ * The native config has carried network secrets both as a flat array and wrapped
+ * in a `{ secrets: [...] }` object. Accept either, so a creation-time credential
+ * is never left out of the redaction set.
+ */
+const NetworkSecretsSchema = z
+  .union([z.array(z.unknown()), z.looseObject({ secrets: z.array(z.unknown()) })])
+  .transform((value) => (Array.isArray(value) ? value : value.secrets));
+
+const NetworkSchema = z.looseObject({ secrets: z.unknown().optional() });
+
 const RawCredentialConfigSchema = z.looseObject({
   env: z.unknown().optional(),
   network: z.unknown().optional(),
 });
 
-function record(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+/** Persisted env entries from either the SDK array or the CLI record shape. */
+function envEntries(env: unknown): { readonly name: string; readonly value: string }[] {
+  if (Array.isArray(env)) {
+    return env.flatMap((entry) => {
+      const parsed = EnvEntrySchema.safeParse(entry);
+      const name = parsed.success ? (parsed.data.name ?? parsed.data.key) : undefined;
+      return parsed.success && name !== undefined && parsed.data.value.length > 0
+        ? [{ name, value: parsed.data.value }]
+        : [];
+    });
+  }
+
+  const record = asRecord(env);
+  if (!record) return [];
+  return Object.entries(record).flatMap(([name, value]) =>
+    typeof value === "string" && value.length > 0 ? [{ name, value }] : [],
+  );
+}
+
+/** Persisted network secret entries in either shape the native config uses. */
+function networkSecretEntries(network: unknown): { readonly envVar: string; readonly value: string }[] {
+  const parsedNetwork = NetworkSchema.safeParse(network);
+  if (!parsedNetwork.success) return [];
+
+  const parsedSecrets = NetworkSecretsSchema.safeParse(parsedNetwork.data.secrets);
+  if (!parsedSecrets.success) return [];
+
+  return parsedSecrets.data.flatMap((entry) => {
+    const parsed = SecretEntrySchema.safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 /**
@@ -40,32 +87,11 @@ export function persistedCredentialValues(rawConfig: unknown): string[] {
   const known = new Set<string>(CREDENTIAL_NAMES);
   const values = new Set<string>();
 
-  const env = parsed.data.env;
-  if (Array.isArray(env)) {
-    for (const entry of env) {
-      const item = record(entry);
-      if (!item) continue;
-      if (typeof item.name !== "string" || !known.has(item.name)) continue;
-      if (typeof item.value === "string" && item.value.length > 0) values.add(item.value);
-    }
-  } else {
-    const recordEnv = record(env);
-    if (recordEnv) {
-      for (const [name, value] of Object.entries(recordEnv)) {
-        if (!known.has(name) || typeof value !== "string" || value.length === 0) continue;
-        values.add(value);
-      }
-    }
+  for (const entry of envEntries(parsed.data.env)) {
+    if (known.has(entry.name)) values.add(entry.value);
   }
-
-  const secretEntries = record(record(parsed.data.network)?.secrets)?.secrets;
-  if (Array.isArray(secretEntries)) {
-    for (const entry of secretEntries) {
-      const item = record(entry);
-      if (!item) continue;
-      if (typeof item.envVar !== "string" || !known.has(item.envVar)) continue;
-      if (typeof item.value === "string" && item.value.length > 0) values.add(item.value);
-    }
+  for (const entry of networkSecretEntries(parsed.data.network)) {
+    if (known.has(entry.envVar)) values.add(entry.value);
   }
 
   return [...values].sort((left, right) => right.length - left.length);

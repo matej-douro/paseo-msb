@@ -62,4 +62,36 @@ describe("failureDetail", () => {
 
     expect(values.sort()).toEqual(["anthropic-old", "gh-old"]);
   });
+
+  it("reads network secret values from a flat secret array", () => {
+    // The SDK type declares `network.secrets` as a flat array; the nested shape
+    // above is what the native config also emits. Redaction must cover both.
+    const values = persistedCredentialValues({
+      network: {
+        secrets: [{ envVar: "GH_TOKEN", value: "gh-flat" }, { envVar: "CUSTOM", value: "skip" }],
+      },
+    });
+
+    expect(values).toEqual(["gh-flat"]);
+  });
+
+  it("reads a CLI-shaped env entry that names its field `key`", () => {
+    // The persisted native config carries entries as either `name` or `key`;
+    // both must reach the redaction set.
+    const values = persistedCredentialValues({
+      env: [{ key: "GH_TOKEN", value: "gh-keyed" }],
+    });
+    expect(values).toEqual(["gh-keyed"]);
+  });
+
+  it("ignores malformed persisted config without throwing", () => {
+    expect(persistedCredentialValues(null)).toEqual([]);
+    expect(persistedCredentialValues({ network: "broken", env: 7 })).toEqual([]);
+    expect(persistedCredentialValues({ env: [{ name: "GH_TOKEN", value: "" }] })).toEqual([]);
+    expect(
+      persistedCredentialValues({
+        env: { GH_TOKEN: "gh-record", ANTHROPIC_API_KEY: 42 },
+      }),
+    ).toEqual(["gh-record"]);
+  });
 });
