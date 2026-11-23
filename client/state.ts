@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   CPUS_MAX,
   CPUS_MIN,
@@ -94,6 +95,19 @@ export const DISK_FIELD_BOUNDS: ResourceFieldBounds = {
   unit: "MiB",
 };
 
+/** Digit-only text: a resource field accepts a whole number and nothing else. */
+const WHOLE_NUMBER = z.string().regex(/^\d+$/, "not a whole number");
+
+/** The shared bounds and step rule for one resource field. */
+function resourceValueSchema(bounds: ResourceFieldBounds) {
+  return z
+    .number()
+    .int()
+    .min(bounds.min)
+    .max(bounds.max)
+    .refine((value) => (value - bounds.min) % bounds.step === 0);
+}
+
 /**
  * Validates one whole-number field against the shared bounds. A value outside
  * the range or off the step gets a message that names the actual rule.
@@ -101,17 +115,13 @@ export const DISK_FIELD_BOUNDS: ResourceFieldBounds = {
 export function resourceFieldIssue(raw: string, bounds: ResourceFieldBounds): string | null {
   const text = raw.trim();
   if (text.length === 0) return `Enter a value in ${bounds.unit}.`;
-  if (!/^\d+$/.test(text)) return `Enter a whole number of ${bounds.unit}.`;
 
-  const value = Number(text);
-  if (
-    value < bounds.min ||
-    value > bounds.max ||
-    (value - bounds.min) % bounds.step !== 0
-  ) {
-    return `Use ${bounds.min}-${bounds.max} ${bounds.unit}, in steps of ${bounds.step}.`;
-  }
-  return null;
+  const whole = WHOLE_NUMBER.safeParse(text);
+  if (!whole.success) return `Enter a whole number of ${bounds.unit}.`;
+
+  const value = resourceValueSchema(bounds).safeParse(Number(whole.data));
+  if (value.success) return null;
+  return `Use ${bounds.min}-${bounds.max} ${bounds.unit}, in steps of ${bounds.step}.`;
 }
 
 /** Validated resource values from the create form. */

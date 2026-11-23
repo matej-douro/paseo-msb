@@ -155,9 +155,11 @@ describe("create form", () => {
     expect(resourceFieldIssue("2", CPU_FIELD_BOUNDS)).toBeNull();
     expect(resourceFieldIssue("1", CPU_FIELD_BOUNDS)).toBeNull();
     expect(resourceFieldIssue("16", CPU_FIELD_BOUNDS)).toBeNull();
-    expect(resourceFieldIssue("0", CPU_FIELD_BOUNDS)).not.toBeNull();
-    expect(resourceFieldIssue("17", CPU_FIELD_BOUNDS)).not.toBeNull();
-    expect(resourceFieldIssue("2.5", CPU_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("0", CPU_FIELD_BOUNDS)).toBe("Use 1-16 CPUs, in steps of 1.");
+    expect(resourceFieldIssue("17", CPU_FIELD_BOUNDS)).toBe("Use 1-16 CPUs, in steps of 1.");
+    expect(resourceFieldIssue("2.5", CPU_FIELD_BOUNDS)).toBe("Enter a whole number of CPUs.");
+    // Digit-only text, never numeric coercion: `1e3` is not a whole number.
+    expect(resourceFieldIssue("1e3", CPU_FIELD_BOUNDS)).toBe("Enter a whole number of CPUs.");
 
     expect(resourceFieldIssue("4096", MEMORY_FIELD_BOUNDS)).toBeNull();
     expect(resourceFieldIssue("1024", MEMORY_FIELD_BOUNDS)).toBeNull();
@@ -165,15 +167,23 @@ describe("create form", () => {
     expect(resourceFieldIssue("1280", MEMORY_FIELD_BOUNDS)).toBeNull();
 
     expect(resourceFieldIssue("", MEMORY_FIELD_BOUNDS)).toBe("Enter a value in MiB.");
-    expect(resourceFieldIssue("4.5", MEMORY_FIELD_BOUNDS)).not.toBeNull();
-    expect(resourceFieldIssue("1023", MEMORY_FIELD_BOUNDS)).not.toBeNull();
-    expect(resourceFieldIssue("33024", MEMORY_FIELD_BOUNDS)).not.toBeNull();
-    expect(resourceFieldIssue("1100", MEMORY_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("4.5", MEMORY_FIELD_BOUNDS)).toBe("Enter a whole number of MiB.");
+    expect(resourceFieldIssue("1023", MEMORY_FIELD_BOUNDS)).toBe(
+      "Use 1024-32768 MiB, in steps of 256.",
+    );
+    expect(resourceFieldIssue("33024", MEMORY_FIELD_BOUNDS)).toBe(
+      "Use 1024-32768 MiB, in steps of 256.",
+    );
+    expect(resourceFieldIssue("1100", MEMORY_FIELD_BOUNDS)).toBe(
+      "Use 1024-32768 MiB, in steps of 256.",
+    );
 
     expect(resourceFieldIssue("10240", DISK_FIELD_BOUNDS)).toBeNull();
     expect(resourceFieldIssue("1024", DISK_FIELD_BOUNDS)).toBeNull();
     expect(resourceFieldIssue("262144", DISK_FIELD_BOUNDS)).toBeNull();
-    expect(resourceFieldIssue("1500", DISK_FIELD_BOUNDS)).not.toBeNull();
+    expect(resourceFieldIssue("1500", DISK_FIELD_BOUNDS)).toBe(
+      "Use 1024-262144 MiB, in steps of 1024.",
+    );
   });
 
   it("sends the generated name for an empty field and the typed name otherwise", () => {
