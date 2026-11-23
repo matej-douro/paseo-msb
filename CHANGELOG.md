@@ -1,9 +1,10 @@
 # Changelog
 
-Notable user-visible changes to paseo-msb, grouped by release date. The
+Notable user-visible changes to paseo-msb, grouped by the date they were
+recorded. Releases are commits; the project does not use version numbers. The
 authoritative architecture is [DESIGN.md](./DESIGN.md).
 
-## Unreleased
+## 2026-11-23
 
 ### Added
 
@@ -36,6 +37,13 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 
 ### Changed
 
+- The plugin is presented as **Microsandbox VMs**; the screen and sidebar
+  label the children as **VMs** instead of VM hosts.
+- Registration state reads `Online` or `Unknown` instead of repeating the
+  `Registration` prefix in front of the status.
+- Sandbox config, environment, resource, and credential parsing is validated
+  with Zod schemas shared by the plugin server and client, replacing
+  hand-rolled type, bounds, and step checks.
 - The Create screen’s provision-job identity ignores runtime-only integrations
   such as **Paseo tools**, so existing plans keep their content-addressed job
   hash.
@@ -80,6 +88,9 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
   `npm ci --omit=dev --ignore-scripts` before the compiler resolves imports.
   `zod` moved to `dependencies` because the bundled server and client code
   import it at runtime, so a production-only install must include it.
+- An existing child keeps its provisioning job log after a catalog change
+  moves the plan hash: jobs are matched by script family instead of the exact
+  hash.
 - A Create blocked by an existing attempt for the same name now suggests
   retrying, dismissing, or choosing another name instead of only saying the
   request is invalid.
@@ -105,6 +116,15 @@ authoritative architecture is [DESIGN.md](./DESIGN.md).
 - The missing-status probe on a fresh VM no longer adds a `cat` error line to
   the creation logs.
 - Secret-store overrides no longer chmod an unrelated existing parent directory.
+
+### Security
+
+- A creation-time credential persisted in the sandbox’s `network.secrets` is
+  redacted from error details, labels, and logs for both the SDK’s flat secret
+  array and the nested `{ secrets: [...] }` shape; only the nested shape was
+  read before, so a flat-shape config could surface the value unredacted.
+  Persisted env entries that name their field `key` now also contribute to
+  redaction, matching the sandbox env reader.
 
 ### Removed
 
