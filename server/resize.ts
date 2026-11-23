@@ -6,6 +6,7 @@ import type {
   VmResources,
 } from "../shared/contracts";
 import { safeError } from "../shared/errors";
+import { asRecord } from "./decode";
 import { bounded, LifecycleAbortedError, type LaneToken } from "./lanes";
 import { runMutation, type MutationRegistry } from "./mutations";
 import type { RegistrationContext } from "./registration";
@@ -392,10 +393,6 @@ async function refreshExact(
 
 function tracking(context: ResizeContext, name: string) {
   return { mutations: context.mutations, name };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 function asArray(value: unknown): readonly unknown[] {

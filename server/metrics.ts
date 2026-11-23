@@ -5,6 +5,7 @@ import {
   type VmMetricsResult,
 } from "../shared/contracts";
 import { safeError } from "../shared/errors";
+import { asRecord } from "./decode";
 import { bounded, LifecycleAbortedError, LifecycleTimeoutError } from "./lanes";
 import {
   ownershipOf,
@@ -200,10 +201,6 @@ function metricsDisabled(handle: SandboxHandleLike): boolean {
   } catch {
     return false;
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 function timeoutMs(deps: MetricsDeps): number {
